@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -33,24 +34,24 @@ const mainBranch = "main"
 func stubBaseRelease(t *testing.T, r github.BaseRelease, err error) *int {
 	t.Helper()
 	asked := new(int)
-	wasPull, wasBranch := pullBase, releaseAt
-	t.Cleanup(func() { pullBase, releaseAt = wasPull, wasBranch })
+	wasPull, wasBranch := gate.PullBase, gate.ReleaseAt
+	t.Cleanup(func() { gate.PullBase, gate.ReleaseAt = wasPull, wasBranch })
 	p := github.PullBase{Base: r.Base, Head: testFixWord, Title: "fix: a thing"}
 	if r.Version != "" {
 		p.Head, p.Title = r.Base+"#release#patch", "chore(release): "+r.Version
 	}
-	pullBase = func(context.Context, string, int) (github.PullBase, error) {
+	gate.PullBase = func(context.Context, string, int) (github.PullBase, error) {
 		*asked++
 		return p, err
 	}
-	releaseAt = func(context.Context, string, string, string) (github.BaseRelease, error) {
+	gate.ReleaseAt = func(context.Context, string, string, string) (github.BaseRelease, error) {
 		return r, nil
 	}
 	return asked
 }
 
 // startMerge makes runningMerge's merge wait for its turn and starts it.
-func startMerge(t *testing.T, g *gateRun) error {
+func startMerge(t *testing.T, g *gate.GateRun) error {
 	t.Helper()
 	why, err := turnCame(t, g)
 	if why != "" {
@@ -61,17 +62,17 @@ func startMerge(t *testing.T, g *gateRun) error {
 
 // turnCame makes runningMerge's merge wait for its turn, under a devctl cap
 // of 10, and starts it: the reason it still waits, if any.
-func turnCame(t *testing.T, g *gateRun) (string, error) {
+func turnCame(t *testing.T, g *gate.GateRun) (string, error) {
 	t.Helper()
-	g.cfg.Merge.Cap = 10
-	_ = g.store.Update(func(st *state.State) ([]state.Event, error) {
+	gateApp(g.Host).cfg.Merge.Cap = 10
+	_ = gateApp(g.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Merges[0].Phase, st.Merges[0].Started = state.Waiting, time.Time{}
 		return nil, nil
 	})
-	if why, err := g.readRelease(); err != nil || why != "" {
+	if why, err := g.ReadRelease(); err != nil || why != "" {
 		return why, err
 	}
-	return g.start("", nil)
+	return g.Start("", nil)
 }
 
 // The devctl cap counts the machine's devctl merges from its process
@@ -93,6 +94,9 @@ func TestAMergeWhoseTurnCameWaitsAtTheMachinesDevctlCap(t *testing.T) {
 // branch, its tags cut by hand) ends at the merge and frees its lane at
 // once, though the lane has an installation to roll; a merge into a branch
 // with auto-release still settles its lane until the release rolled.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAMergeIntoAHandCutBranchFreesItsLaneAtTheMerge(t *testing.T) {
 	lane := config.Lane{Name: serving, Installation: gazelle, Repositories: []string{scratchRepo}}
 	t.Run("no auto-release", func(t *testing.T) {
@@ -114,7 +118,7 @@ func TestAMergeIntoAHandCutBranchFreesItsLaneAtTheMerge(t *testing.T) {
 		if d := lastEvent(t, g, verbMerged); !strings.Contains(d, "o/r#7 exit 0, release none awaited (release-1.3 has no auto-release)") {
 			t.Errorf("merged event: %q", d)
 		}
-		if _, err := g.readRelease(); err != nil || *asked != 1 {
+		if _, err := g.ReadRelease(); err != nil || *asked != 1 {
 			t.Errorf("the base branch was read %d times, want once per merge", *asked)
 		}
 	})
@@ -137,17 +141,20 @@ func TestAMergeIntoAHandCutBranchFreesItsLaneAtTheMerge(t *testing.T) {
 // GitHub not answering for the base branch, its last try too, refuses the
 // merge before devctl runs; a repository on the plain squash merge, which awaits no release, is
 // not asked.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestTheBaseBranchUnreadRefusesTheMerge(t *testing.T) {
 	asked := stubBaseRelease(t, github.BaseRelease{}, errors.New("connection reset"))
 	g := runningMerge(t, scratchRepo, config.Lane{Name: scratchRepo})
-	if _, err := g.readRelease(); Code(err) != ExitGateRefused {
-		t.Fatalf("exit %d, want %d", Code(err), ExitGateRefused)
+	if _, err := g.ReadRelease(); Code(err) != gate.ExitGateRefused {
+		t.Fatalf("exit %d, want %d", Code(err), gate.ExitGateRefused)
 	}
 	if d := lastEvent(t, g, "merge.refused"); !strings.Contains(d, "connection reset") {
 		t.Errorf("merge.refused event: %q", d)
 	}
 	g = runningMerge(t, labRepo, config.Lane{Name: labRepo})
-	if _, err := g.readRelease(); err != nil || *asked != 1+len(readBackoff) {
+	if _, err := g.ReadRelease(); err != nil || *asked != 1+len(gate.ReadBackoff) {
 		t.Errorf("the squash route: %v, %d reads", err, *asked)
 	}
 }
@@ -156,6 +163,9 @@ func TestTheBaseBranchUnreadRefusesTheMerge(t *testing.T) {
 // one sent while devctl starts as well: the run ends as one ended by a
 // signal and GitHub judges it. devctl sends it once it runs, as early as
 // the gate may still be starting it.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestASIGTERMToTheGateStopsItsDevctl(t *testing.T) {
 	noSystemd(t)
 	t.Setenv("BEEKEEPER_TEST_GATE", strconv.Itoa(os.Getpid()))
@@ -163,7 +173,7 @@ func TestASIGTERMToTheGateStopsItsDevctl(t *testing.T) {
 	stubGitHub(t, github.Merged, "")
 	g := runningMerge(t, scratchRepo, config.Lane{Name: serving, Installation: gazelle, Repositories: []string{scratchRepo}})
 	done := time.Now()
-	if err := g.runMerge(); Code(err) != 128+int(syscall.SIGTERM) {
+	if err := g.RunMerge(); Code(err) != 128+int(syscall.SIGTERM) {
 		t.Fatalf("exit %d, want 143", Code(err))
 	}
 	if time.Since(done) > 10*time.Second {
@@ -178,17 +188,17 @@ func TestASIGTERMToTheGateStopsItsDevctl(t *testing.T) {
 // whether each exists yet: a tag appears at its second read.
 func stubPluginTags(t *testing.T, tags []string) {
 	t.Helper()
-	wasTags, wasExists, wasPoll := pluginTags, tagExists, pluginTagPoll
-	t.Cleanup(func() { pluginTags, tagExists, pluginTagPoll = wasTags, wasExists, wasPoll })
-	pluginTagPoll = 10 * time.Millisecond
-	pluginTags = func(_ context.Context, repo, sha string) ([]string, error) {
+	wasTags, wasExists, wasPoll := gate.PluginTags, gate.TagExists, gate.PluginTagPoll
+	t.Cleanup(func() { gate.PluginTags, gate.TagExists, gate.PluginTagPoll = wasTags, wasExists, wasPoll })
+	gate.PluginTagPoll = 10 * time.Millisecond
+	gate.PluginTags = func(_ context.Context, repo, sha string) ([]string, error) {
 		if repo != scratchRepo || sha != "abc" {
 			t.Errorf("tags of %s@%s asked, want %s@abc", repo, sha, scratchRepo)
 		}
 		return tags, nil
 	}
 	reads := map[string]int{}
-	tagExists = func(_ context.Context, _, tag string) (bool, error) {
+	gate.TagExists = func(_ context.Context, _, tag string) (bool, error) {
 		reads[tag]++
 		return reads[tag] > 1, nil
 	}
@@ -199,6 +209,9 @@ func stubPluginTags(t *testing.T, tags []string) {
 // of the plugin whose version it changed, which is its release; one that
 // changed no version warrants none. A repository-wide Auto-release is
 // devctl's to await, as before.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAMergeIntoAPerPluginRepositoryAwaitsThePluginsTag(t *testing.T) {
 	lane := config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}}
 	plugins := github.BaseRelease{Base: mainBranch, Plugins: true}
@@ -239,7 +252,7 @@ func TestAMergeIntoAPerPluginRepositoryAwaitsThePluginsTag(t *testing.T) {
 		stubGitHub(t, github.Merged, "")
 		stubBaseRelease(t, github.BaseRelease{Base: mainBranch, Auto: true}, nil)
 		stubPluginTags(t, []string{"never/v1.0.0"})
-		pluginTags = func(context.Context, string, string) ([]string, error) {
+		gate.PluginTags = func(context.Context, string, string) ([]string, error) {
 			t.Error("plugin tags asked of a repository-wide auto-release")
 			return nil, nil
 		}
@@ -263,9 +276,9 @@ const releasePRTag = "v1.4.0"
 func stubReleaseWait(t *testing.T, doc string) *[]string {
 	t.Helper()
 	asked := new([]string)
-	was := releaseWait
-	t.Cleanup(func() { releaseWait = was })
-	releaseWait = func(_ context.Context, repo string, target ...string) []byte {
+	was := gate.ReleaseWait
+	t.Cleanup(func() { gate.ReleaseWait = was })
+	gate.ReleaseWait = func(_ context.Context, repo string, target ...string) []byte {
 		*asked = append(*asked, repo+" "+strings.Join(target, " "))
 		return []byte(doc)
 	}
@@ -350,6 +363,8 @@ func TestAMergeIntoAReleasePRBranchTracksTheReleasePullRequestsTag(t *testing.T)
 	})
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestMergeRefreshesItsReleaseTree(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
@@ -365,10 +380,10 @@ func TestMergeRefreshesItsReleaseTree(t *testing.T) {
 			fakeDevctl(t, `echo '{"mergeCommitSha":"def","verdict":"merged","release":null}'`)
 			stubGitHub(t, github.Merged, "")
 			stubBaseRelease(t, github.BaseRelease{Base: mainBranch}, nil)
-			wasAt, wasWait := releaseAt, releaseWait
-			t.Cleanup(func() { releaseAt, releaseWait = wasAt, wasWait })
+			wasAt, wasWait := gate.ReleaseAt, gate.ReleaseWait
+			t.Cleanup(func() { gate.ReleaseAt, gate.ReleaseWait = wasAt, wasWait })
 			reads := 0
-			pullBase = func(context.Context, string, int) (github.PullBase, error) {
+			gate.PullBase = func(context.Context, string, int) (github.PullBase, error) {
 				reads++
 				p := github.PullBase{Base: mainBranch, HeadOID: "head-oid"}
 				if reads > 1 {
@@ -377,7 +392,7 @@ func TestMergeRefreshesItsReleaseTree(t *testing.T) {
 				return p, nil
 			}
 			var refs []string
-			releaseAt = func(_ context.Context, repo, base, ref string) (github.BaseRelease, error) {
+			gate.ReleaseAt = func(_ context.Context, repo, base, ref string) (github.BaseRelease, error) {
 				refs = append(refs, ref)
 				auto := tc.before
 				if ref == "def" {
@@ -388,7 +403,7 @@ func TestMergeRefreshesItsReleaseTree(t *testing.T) {
 			lane := config.Lane{Name: serving, Installation: gazelle, Repositories: []string{scratchRepo}}
 			g := runningMerge(t, scratchRepo, lane)
 			waits := 0
-			releaseWait = func(context.Context, string, ...string) []byte {
+			gate.ReleaseWait = func(context.Context, string, ...string) []byte {
 				waits++
 				if st := gateState(t, g); len(st.Merges) != 1 {
 					t.Error("lane freed before release settled")

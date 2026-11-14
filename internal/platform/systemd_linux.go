@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"math"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -110,7 +109,7 @@ func pidsIn(dir string) []int {
 func (systemdMachine) OOMPolicy(unit string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "systemctl", userManager, "show", unit, "-p", "OOMPolicy", "--value").Output() // #nosec G204 -- the unit is the desktop scope's cgroup name, one argument
+	out, err := proc.CommandContext(ctx, "systemctl", userManager, "show", unit, "-p", "OOMPolicy", "--value").Output() // #nosec G204 -- the unit is the desktop scope's cgroup name, one argument
 	if err != nil {
 		return "?"
 	}
@@ -118,7 +117,7 @@ func (systemdMachine) OOMPolicy(unit string) string {
 }
 
 func (systemdMachine) OOMKills(ctx context.Context, since time.Time) ([]machine.OOMKill, error) {
-	out, err := exec.CommandContext(ctx, "journalctl", "-k", "--no-pager", "-o", "short-iso", //nolint:gosec // fixed arguments and a formatted time
+	out, err := proc.CommandContext(ctx, "journalctl", "-k", "--no-pager", "-o", "short-iso", //nolint:gosec // fixed arguments and a formatted time
 		"--since", since.Local().Format("2006-01-02 15:04:05")).Output()
 	if err != nil {
 		return nil, err
@@ -127,7 +126,7 @@ func (systemdMachine) OOMKills(ctx context.Context, since time.Time) ([]machine.
 }
 
 func (systemdMachine) OomdKills(ctx context.Context, since time.Time) ([]string, error) {
-	out, err := exec.CommandContext(ctx, "journalctl", "-u", "systemd-oomd", "--no-pager", "-o", "short-iso", //nolint:gosec // fixed arguments and a formatted time
+	out, err := proc.CommandContext(ctx, "journalctl", "-u", "systemd-oomd", "--no-pager", "-o", "short-iso", //nolint:gosec // fixed arguments and a formatted time
 		"--since", since.Local().Format("2006-01-02 15:04:05")).Output()
 	if err != nil {
 		return nil, err
@@ -136,7 +135,7 @@ func (systemdMachine) OomdKills(ctx context.Context, since time.Time) ([]string,
 }
 
 func (systemdMachine) ServiceLog(ctx context.Context, unit, grep string) ([]byte, error) {
-	return exec.CommandContext(ctx, "journalctl", "-u", unit, "--no-pager", "-o", "cat", "--since", "-24h", "-g", grep).Output() //nolint:gosec // the configured unit name
+	return proc.CommandContext(ctx, "journalctl", "-u", unit, "--no-pager", "-o", "cat", "--since", "-24h", "-g", grep).Output() //nolint:gosec // the configured unit name
 }
 
 // systemdLauncher runs units as transient systemd user services: they get
@@ -147,7 +146,7 @@ type systemdLauncher struct{ quiet bool }
 func (systemdLauncher) Available() bool { return userSystemd() }
 
 func (l systemdLauncher) Start(u Unit) error {
-	out, err := exec.Command("systemd-run", runArgs(u, l.quiet)...).CombinedOutput() //nolint:gosec // starting the unit is the purpose
+	out, err := proc.CommandContext(context.Background(), "systemd-run", runArgs(u, l.quiet)...).CombinedOutput() //nolint:gosec // starting the unit is the purpose
 	if err != nil {
 		return fmt.Errorf("systemd-run: %w: %s", err, strings.TrimSpace(string(out)))
 	}
@@ -226,7 +225,7 @@ func (systemdLauncher) Resume(ctx context.Context, name string) error {
 
 // systemctlUser runs one systemctl --user verb on the units.
 func systemctlUser(ctx context.Context, verb string, units ...string) error {
-	out, err := exec.CommandContext(ctx, "systemctl", append([]string{userManager, verb}, units...)...).CombinedOutput() //nolint:gosec // the units beekeeper named
+	out, err := proc.CommandContext(ctx, "systemctl", append([]string{userManager, verb}, units...)...).CombinedOutput() //nolint:gosec // the units beekeeper named
 	if err != nil {
 		return fmt.Errorf("systemctl --user %s: %w: %s", verb, err, strings.TrimSpace(string(out)))
 	}
@@ -234,7 +233,7 @@ func systemctlUser(ctx context.Context, verb string, units ...string) error {
 }
 
 func (systemdLauncher) State(ctx context.Context, name string) string {
-	out, _ := exec.CommandContext(ctx, "systemctl", userManager, "show", "-p", "ActiveState", "--value", name).Output() //nolint:gosec // the unit beekeeper named
+	out, _ := proc.CommandContext(ctx, "systemctl", userManager, "show", "-p", "ActiveState", "--value", name).Output() //nolint:gosec // the unit beekeeper named
 	return strings.TrimSpace(string(out))
 }
 
@@ -260,7 +259,7 @@ func (systemdLauncher) ResetFailed(ctx context.Context, units ...string) error {
 // listUnits lists the units in states matching the patterns.
 func listUnits(ctx context.Context, states string, patterns []string) []string {
 	args := append([]string{userManager, "list-units", "--all", "--plain", "--no-legend", states}, patterns...)
-	out, _ := exec.CommandContext(ctx, "systemctl", args...).Output() //nolint:gosec // the units beekeeper named
+	out, _ := proc.CommandContext(ctx, "systemctl", args...).Output() //nolint:gosec // the units beekeeper named
 	var units []string
 	for line := range strings.Lines(string(out)) {
 		if f := strings.Fields(line); len(f) > 0 {
@@ -273,10 +272,10 @@ func listUnits(ctx context.Context, states string, patterns []string) []string {
 // userSystemd reports whether a user service manager can start units and
 // scopes. "degraded" (one failed unit somewhere) is a desktop's normal state.
 func userSystemd() bool {
-	if _, err := exec.LookPath("systemd-run"); err != nil {
+	if _, err := proc.LookPath("systemd-run"); err != nil {
 		return false
 	}
-	out, _ := exec.Command("systemctl", userManager, "is-system-running").Output()
+	out, _ := proc.CommandContext(context.Background(), "systemctl", userManager, "is-system-running").Output()
 	switch strings.TrimSpace(string(out)) {
 	case "running", "degraded", "starting", "maintenance":
 		return true
@@ -311,7 +310,7 @@ func (c Cap) slice() string {
 // CPU budget, which every slot shares.
 func (systemdCapper) CapSlot(c Cap) error {
 	for _, p := range sliceProperties(c) {
-		out, err := exec.Command("systemctl", append([]string{userManager, "set-property", "--runtime"}, p...)...).CombinedOutput() //nolint:gosec // our own sizes
+		out, err := proc.CommandContext(context.Background(), "systemctl", append([]string{userManager, "set-property", "--runtime"}, p...)...).CombinedOutput() //nolint:gosec // our own sizes
 		if err != nil {
 			return fmt.Errorf("capping %s: %v: %s", p[0], err, strings.TrimSpace(string(out)))
 		}
@@ -334,8 +333,8 @@ func sliceProperties(c Cap) [][]string {
 // own ${VAR} expansion is off (default-on for --scope since systemd 258):
 // the argument list reaches the command verbatim, so a wrapped `zsh -c`
 // keeps ${=files}, ${(f)x}, ${pipestatus[1]} and $$.
-func (systemdCapper) Command(name string, c Cap, argv []string) (*exec.Cmd, error) {
-	return exec.Command("systemd-run", scopeArgs(name, c, argv)...), nil //nolint:gosec // running the caller's command is the purpose
+func (systemdCapper) Command(name string, c Cap, argv []string) (*proc.Cmd, error) {
+	return proc.CommandContext(context.Background(), "systemd-run", scopeArgs(name, c, argv)...), nil //nolint:gosec // running the caller's command is the purpose
 }
 
 // scopeArgs is systemd-run's argument list for the scope name around argv:
@@ -544,9 +543,9 @@ func (o systemdOpener) Running(t *proc.Table) time.Time {
 // never counts against that unit's memory cap.
 func (o systemdOpener) Open(ctx context.Context, url string, running bool) error {
 	if running {
-		return exec.CommandContext(ctx, "systemd-run", openArgs(o.app, url, time.Now())...).Run() //nolint:gosec // a claude:// link built from the state's local_ id
+		return proc.CommandContext(ctx, "systemd-run", openArgs(o.app, url, time.Now())...).Run() //nolint:gosec // a claude:// link built from the state's local_ id
 	}
-	c := exec.Command("systemd-run", openArgs(o.app, url, time.Now())...) //nolint:gosec // as above
+	c := proc.CommandContext(context.Background(), "systemd-run", openArgs(o.app, url, time.Now())...) //nolint:gosec // as above
 	if err := c.Start(); err != nil {
 		return err
 	}
@@ -563,7 +562,7 @@ func openArgs(app, url string, now time.Time) []string {
 
 // SuspendRecords observes power management; it never takes an inhibitor lock.
 func (systemdMachine) SuspendRecords(ctx context.Context, since time.Time) ([]machine.SuspendRecord, error) {
-	out, err := exec.CommandContext(ctx, "journalctl", "-k", "-b", "--no-pager", "-o", "short-iso-precise", "--since", since.Local().Format("2006-01-02 15:04:05"), "--grep", "PM: suspend (entry|exit)").Output() //nolint:gosec // fixed query and formatted timestamp
+	out, err := proc.CommandContext(ctx, "journalctl", "-k", "-b", "--no-pager", "-o", "short-iso-precise", "--since", since.Local().Format("2006-01-02 15:04:05"), "--grep", "PM: suspend (entry|exit)").Output() //nolint:gosec // fixed query and formatted timestamp
 	if err != nil {
 		return nil, err
 	}

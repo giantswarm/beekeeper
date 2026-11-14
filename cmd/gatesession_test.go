@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -16,6 +17,9 @@ import (
 // lane free, wait in the lane without reading GitHub: no pull request read,
 // no budget probe, exit 76 with the reason; beekeeper budget shows the
 // session's two polling merges and the queued one.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestASessionsThirdMergeWaitsWithoutReadingGitHub(t *testing.T) {
 	asked := stubGitHub(t, github.Open, "")
 	_, launched := stubSelf(t)
@@ -27,8 +31,8 @@ func TestASessionsThirdMergeWaitsWithoutReadingGitHub(t *testing.T) {
 
 	var err error
 	stderr := gateStderr(t, func() { err = a.gate(context.Background(), mergeArgv(scratchRepo), 0, 0, false) })
-	if Code(err) != ExitGateQueued {
-		t.Fatalf("exit %d (%v), want %d; stderr %s", Code(err), err, ExitGateQueued, stderr)
+	if Code(err) != gate.ExitGateQueued {
+		t.Fatalf("exit %d (%v), want %d; stderr %s", Code(err), err, gate.ExitGateQueued, stderr)
 	}
 	launched()
 	if !strings.Contains(stderr, `"worker" runs 2 merges (o/a#1, o/b#1), merge.sessionCap 2: it waits without reading GitHub until one ends`) {

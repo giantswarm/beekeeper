@@ -19,7 +19,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"regexp"
 	"slices"
 	"strconv"
@@ -99,7 +98,7 @@ var appInstallPoll = 3 * time.Second
 // openBrowser opens url in the person's browser, through the desktop's
 // opener; tests replace it.
 var openBrowser = func(ctx context.Context, url string) error {
-	c := exec.CommandContext(ctx, "xdg-open", url) //nolint:gosec // the desktop's opener with this run's loopback URL
+	c := proc.CommandContext(ctx, "xdg-open", url) //nolint:gosec // the desktop's opener with this run's loopback URL
 	c.Stdout, c.Stderr = io.Discard, io.Discard
 	return c.Run()
 }

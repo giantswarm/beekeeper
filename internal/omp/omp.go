@@ -491,6 +491,7 @@ func ReadTranscript(path string, now time.Time) (claude.Work, claude.Activity) {
 			for _, b := range blocks {
 				if b.Type == blockToolCall {
 					acts.Call(b.ID, b.Name, b.Arguments, cwd)
+					a.LastTool = b.ID
 				}
 			}
 		case roleToolResult:

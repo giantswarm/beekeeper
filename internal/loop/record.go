@@ -49,10 +49,14 @@ func WriteLoopRecording(dir string, in LoopRecording) error {
 // Materialize only the callback results the planner actually asks for. Replay
 // restores these facts without consulting GitHub or the desk's current state.
 type loopRecordedFact struct {
-	Ref   string
-	Head  string
-	Kind  string
-	Value bool
+	Ref  string
+	Head string
+	// PullHead is the pull request head a base-merge or nits fact was read
+	// against: one approved head is read against several (superloop.Replaced
+	// reads the head a review came on and the current one).
+	PullHead string
+	Kind     string
+	Value    bool
 }
 
 func (r *LoopRecording) Capture(in superloop.Input) superloop.Input {
@@ -69,7 +73,7 @@ func (r *LoopRecording) Capture(in superloop.Input) superloop.Input {
 		}
 		return func(p superloop.Pull, approved string) bool {
 			value := query(p, approved)
-			r.Facts = append(r.Facts, loopRecordedFact{Ref: p.Ref, Head: approved, Kind: kind, Value: value})
+			r.Facts = append(r.Facts, loopRecordedFact{Ref: p.Ref, Head: approved, PullHead: p.Head, Kind: kind, Value: value})
 			return value
 		}
 	}
@@ -81,16 +85,22 @@ func (r *LoopRecording) Capture(in superloop.Input) superloop.Input {
 
 func (r *LoopRecording) ReplayInput() superloop.Input {
 	in := r.Planner
-	lookup := func(kind, ref, head string) bool {
+	// A fact recorded without its pull request head (an older recording)
+	// answers for any head.
+	lookup := func(kind, ref, head, pullHead string) bool {
 		for _, fact := range r.Facts {
-			if fact.Kind == kind && fact.Ref == ref && fact.Head == head {
+			if fact.Kind == kind && fact.Ref == ref && fact.Head == head && (fact.PullHead == "" || fact.PullHead == pullHead) {
 				return fact.Value
 			}
 		}
 		return false
 	}
-	in.Open = func(ref string) bool { return lookup(noteStatusOpen, ref, "") }
-	in.BaseMerged = func(p superloop.Pull, approved string) bool { return lookup(loopFactBaseMerged, p.Ref, approved) }
-	in.NitsChecked = func(p superloop.Pull, approved string) bool { return lookup(loopFactNitsChecked, p.Ref, approved) }
+	in.Open = func(ref string) bool { return lookup(noteStatusOpen, ref, "", "") }
+	in.BaseMerged = func(p superloop.Pull, approved string) bool {
+		return lookup(loopFactBaseMerged, p.Ref, approved, p.Head)
+	}
+	in.NitsChecked = func(p superloop.Pull, approved string) bool {
+		return lookup(loopFactNitsChecked, p.Ref, approved, p.Head)
+	}
 	return in
 }

@@ -37,6 +37,27 @@ preserving both the candidate and the active previous recovery target.
 | Rolled back | Previous digest | Idempotent success; failed candidate stays quarantined |
 | Any phase | Unexpected digest or modified recovery bytes | Refuse without replacing the executable |
 
+## Canary checks
+
+Before it replaces the binary, `beekeeper self-update` runs the staged candidate's
+`version`, `budget --gate`, `supervisor status` and `capacity` with the live configuration;
+probation repeats them on the installed candidate. Each check has a minute of the desk's
+clock. A loaded host slows every binary, so a check that runs out of that minute is not
+yet a failed one: the running release runs the same check, within five minutes, and the
+candidate runs it again within twice the running release's time, a minute at least and
+five at most. The update says so (`Canary supervisor status ran out of its 1m0s deadline;
+the running release's same check took 36s, so it runs again within 1m12s.`). A candidate
+that runs out of that second deadline too, or fails the check, fails it as any failure
+does. When the running release's own run does not pass either, the host is judged, not
+the candidate: the update is refused and retried later, the release is never skipped and
+probation stays pending.
+
+Before installation, the candidate also runs its isolated workflow fixture through
+`self-update --installation-probe`, without the live configuration. This proves a reviewed merge
+against a scratch origin. A candidate that fails it keeps the current binary; the update is
+retried at the next check, and the release is not skipped. Probation does not repeat this check,
+and recovery never repeats that fixture or its fixture GitHub's searches.
+
 ## Automatic recovery
 
 An update launches a recovery controller before it replaces the binary, so a
@@ -53,7 +74,7 @@ either binary starts it again after a reboot. `Elapsed` counts evaluations, not
 wall-clock time: a machine that slept proves nothing and fails nothing meanwhile.
 
 - Three consecutive same-reason merge or start failures of this candidate: Roll back at once
-- Three consecutive failed isolated workflow probes: Roll back at once
+- Three consecutive failed executable probes: Roll back at once
 - A machine whose loop ran lately, no heartbeat from the candidate's loop 10 minutes after that loop
   started (the old loop hands over only at its next quiet pass; one that never hands over is judged
   at the window's end): Roll back
@@ -68,16 +89,14 @@ existing heartbeat format. A blocked read stops reporting progress; no backgroun
 keepalive or longer probation window masks a stalled reader. Planning eligibility
 remains unknown until the planner completes its observation.
 
-The probe needs no backlog, account or network, so an idle desk is judged too. It
-drives the candidate through real `supervisor loop --once` passes against a scratch
-origin and a fixture GitHub played by the candidate's own bytes, and proves the merge
-in the origin. It repeats every five minutes after a pass, and at once after a
-failure or inconclusive run. A probe that cannot be built is inconclusive and
-clears the current pass while retaining prior pass history, so a candidate cannot
-promote on a stale probe pass. A counted probe failure retains a bounded, single-line cause in the installation
+The recovery probe runs just the installed executable's `version` command, without a fixture,
+supervisor or GitHub child process. It repeats every five minutes after a pass, and on the next
+minute after a failure. Live heartbeat and failure-streak checks still run every minute.
+The controller is bound to one candidate and installation time: a replacement ends it, and a
+rollback leaves only notification and process restart work, with no further probes.
+A counted probe failure retains a bounded, single-line cause in the installation
 journal and includes it in the rollback notification and quarantine reason. A
-passing probe clears that cause. Older journals without the field keep their
-original generic failure wording. This diagnostic is supplied by the controller,
+passing probe clears that cause. This diagnostic is supplied by the controller,
 so updating a candidate alone does not upgrade a retained controller.
 
 A failed or timed-out candidate probe is repeated on
@@ -260,17 +279,19 @@ protocol does not claim durable installation on filesystems without them.
     evidence for candidates with a pull-request parser regression and missing
     merge-worktree validation (`status: "failed"`, `merge_commit` empty).
   - `recovery-proof/recovery-proof.json`: probation rollback proof showing the
-    retained last-known-good controller detecting consecutive isolated workflow
-    probe failures on the broken candidate, restoring the verified previous
+    retained last-known-good controller detecting consecutive failed executable
+    probes of a candidate that cannot start, restoring the verified previous
     binary within the 30-minute probation window, quarantining the broken digest,
     recording `RELEASE ROLLED BACK`, and passing the post-rollback workflow merge
-    probe.
+    probe. It also records that the pre-install installation probe refuses the
+    candidate with the pull-request parser regression.
 
 ### Workflow fixture compatibility and updater contention
 
-The controller invokes the candidate’s isolated probe entrypoint. The candidate
-supplies both probe code and the GitHub adapter; the controller reads only its
-verdict. A retained control release still runs its own fixture. Raw
+The pre-install canary invokes the candidate’s isolated probe entrypoint
+(`self-update --installation-probe`). The candidate supplies both probe code and
+the GitHub adapter; the canary reads only its verdict. A controller retained from
+a release before the executable probe still runs the fixture during probation. Raw
 workflow reads in the fixture repository at its main ref return a normal GitHub
 404 when no workflow exists; they must not become unknown-command failures.
 Reads outside that repository and ref remain unrecognized. The isolated probe

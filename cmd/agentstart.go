@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -371,6 +370,9 @@ work, which takes no choice on a self-hosted provider.`,
 					return err
 				}
 			}
+			if err := a.validateProgressItem(); err != nil {
+				return err
+			}
 			kind := capacity.StartKind(review, ofSelfHosted)
 			if host == "" {
 				// supervisor.hostsFirst places a start without --host as the
@@ -465,6 +467,9 @@ work, which takes no choice on a self-hosted provider.`,
 			}
 			brief, err := readBrief(briefFile)
 			if err != nil {
+				return err
+			}
+			if err := a.validateProgressTask(brief); err != nil {
 				return err
 			}
 			visibilityCheckout := ""
@@ -688,7 +693,7 @@ work, which takes no choice on a self-hosted provider.`,
 							return err
 						}
 					}
-					sp := agentStart{name: name, role: workerRole, kind: a.selectionKind, brief: worktreeRules + baseBrief, task: task, serves: strings.Join(issues, ","), dir: dir, model: model, effort: level, desktop: desktop, mode: mode}
+					sp := agentStart{name: name, role: workerRole, kind: a.selectionKind, brief: worktreeRules + baseBrief, task: task, serves: strings.Join(issues, ","), pulls: briefServedPulls(brief, issues), dir: dir, model: model, effort: level, desktop: desktop, mode: mode}
 					if byTimer {
 						if timerLine == "" {
 							var err error
@@ -715,10 +720,11 @@ work, which takes no choice on a self-hosted provider.`,
 				if err != nil {
 					return err
 				}
-				return a.store.Record(event(by, verbStart, "%s: kind %s, harness %s, model %s; %s", name, a.selectionKind, harness, cmp.Or(model, harnessDefaultModel), cmp.Or(startDecision(v), "explicit selection or configured default")))
+				return a.store.Record(event(by, verbStart, "%s: kind %s, harness %s, model %s, effort %s; %s", name, a.selectionKind, harness, cmp.Or(model, harnessDefaultModel), cmp.Or(level, harnessDefaultModel), cmp.Or(startDecision(v), "explicit selection or configured default")))
 			}
 		},
 	}
+	c.Flags().StringVar(&a.progressItem, loop.BoardProgressFlag, "", "supervisor recovery of a stalled board item")
 	c.Flags().StringVar(&a.selectionKind, "kind", "", "task kind for model policy (default: worker, or review with --review)")
 	c.Flags().StringVar(&a.selectionAuthor, authorModelFlag, "", "model that wrote the reviewed change; exclude its configured family")
 	c.Flags().StringVar(&nameFlag, "name", "", "the session's name (alternative to the first positional argument)")
@@ -741,6 +747,8 @@ work, which takes no choice on a self-hosted provider.`,
 	c.Flags().BoolVar(&dryRun, "dry-run", false, "print how the session would start (the profile applied and its first turn's command line) and start nothing")
 	c.Flags().StringVar(&choiceLine, "choice", "", "the auto choice line forwarded to a brokered start")
 	_ = c.Flags().MarkHidden("choice")
+	c.Flags().StringVar(&a.startDefaultEffort, defaultEffortFlag[2:], "", "the effort when no --effort, rule, choice or continued session gives one: the loop's supervisor.effort")
+	_ = c.Flags().MarkHidden(defaultEffortFlag[2:])
 	addTimerFlags(c)
 	return c
 }
@@ -799,7 +807,7 @@ func (a *app) preflightStartTarget(ctx context.Context, harness, model, dir stri
 		if fi, err := os.Stat(resolvedDir); err != nil || !fi.IsDir() {
 			return usageErr("--dir %s: not a directory", resolvedDir)
 		}
-		bin, err := exec.LookPath(agy.Comm)
+		bin, err := proc.LookPath(agy.Comm)
 		if err != nil {
 			return err
 		}
@@ -835,7 +843,7 @@ func (a *app) preflightStartTarget(ctx context.Context, harness, model, dir stri
 		if _, err := a.codexModel(model); err != nil {
 			return err
 		}
-		_, err = exec.LookPath(codex.Comm)
+		_, err = proc.LookPath(codex.Comm)
 		return err
 	default:
 		resolvedDir, err := a.agentDir(dir, "")
@@ -845,7 +853,7 @@ func (a *app) preflightStartTarget(ctx context.Context, harness, model, dir stri
 		if fi, err := os.Stat(resolvedDir); err != nil || !fi.IsDir() {
 			return usageErr("--dir %s: not a directory", resolvedDir)
 		}
-		_, err = exec.LookPath(claudeComm)
+		_, err = proc.LookPath(claudeComm)
 		return err
 	}
 }
@@ -895,6 +903,9 @@ type agentStart struct {
 	// serves is the issue the task works (briefIssue), recorded as the
 	// session's serve record with the task; empty: none.
 	serves string
+	// pulls are those of serves the brief names as pull requests
+	// (briefServedPulls): their deliveries hold them as pulls.
+	pulls []string
 	// replaces is the running session a hand-over ends: its roster entry,
 	// task and session record go to the new session.
 	replaces *state.Party
@@ -1032,7 +1043,7 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 	if err != nil {
 		return startedAgent{}, err
 	}
-	bin, err := exec.LookPath("claude")
+	bin, err := proc.LookPath("claude")
 	if err != nil {
 		return startedAgent{}, err
 	}
@@ -1047,7 +1058,7 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 		prevDeliveries := slices.Clone(st.Deliveries)
 		var err error
-		reg, err = a.recordStart(st, s, sp.task, sp.serves, live)
+		reg, err = a.recordStart(st, s, sp.task, sp.serves, live, sp.pulls...)
 		if err != nil {
 			return nil, err
 		}
@@ -2305,6 +2316,34 @@ func briefPulls(brief string) []string {
 	return out
 }
 
+// briefServedPulls is those of serves, the refs a start serves (briefIssues),
+// that brief names by a pull request URL: an issue and a pull request of a
+// repository never share a number, so such a ref is a pull request.
+func briefServedPulls(brief string, serves []string) []string {
+	named := briefPulls(brief)
+	return slices.DeleteFunc(slices.Clone(serves), func(ref string) bool {
+		return !slices.ContainsFunc(named, func(p string) bool { return strings.EqualFold(p, ref) })
+	})
+}
+
+// startPullDeliveries makes the delivery of each of pulls, the served refs of
+// start s that are pull requests (briefServedPulls), hold its pull request
+// (state.PullDelivery) once s serves it: a worker's task of a pull request is
+// proven by that pull request's merge. A review start works no pull request;
+// it reviews one and opens no delivery.
+func startPullDeliveries(st *state.State, s state.Start, pulls []string) {
+	if s.Kind == capacity.TaskKindReview {
+		return
+	}
+	for _, p := range pulls {
+		if slices.ContainsFunc(st.Records, func(r state.Record) bool {
+			return r.Session.Is(s.Party) && r.Ended.IsZero() && strings.EqualFold(r.Issue, p)
+		}) {
+			st.PullDelivery(p)
+		}
+	}
+}
+
 // briefContextIntro matches a line prefix that cites a related or follow-up
 // issue for background rather than assigning it as work.
 var briefContextIntro = regexp.MustCompile(`(?i)\b(?:follow-?up\s+(?:to|from)|blocked\s+by|depends\s+on|see\s+also|related\s+to)\b`)
@@ -2518,7 +2557,7 @@ func devBuild() (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	onPath, err := exec.LookPath("beekeeper")
+	onPath, err := proc.LookPath("beekeeper")
 	if err == nil {
 		if a, err1 := os.Stat(self); err1 == nil {
 			if b, err2 := os.Stat(onPath); err2 == nil && os.SameFile(a, b) {
@@ -2613,12 +2652,13 @@ func unitEnded(ctx context.Context, unit string) bool {
 	return s == "inactive" || s == "failed"
 }
 
-func (a *app) recordStart(st *state.State, s state.Start, task, serves string, live func(state.Party) bool) (registration, error) {
+func (a *app) recordStart(st *state.State, s state.Start, task, serves string, live func(state.Party) bool, pulls ...string) (registration, error) {
 	s.Kind = cmp.Or(s.Kind, a.selectionKind)
 	reg, err := recordStart(st, s, task, serves, live)
 	if err != nil {
 		return reg, err
 	}
+	startPullDeliveries(st, s, pulls)
 	if limit := a.cfg.Delivery.WIPLimit; limit > 0 {
 		v := readDeliveryWIP(st, limit, a.cfg.Supervisor.LoopInterval.Duration, s.At, a.deliveryPolicy())
 		if v.Count > limit {

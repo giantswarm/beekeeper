@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -26,6 +25,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/omp"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -779,7 +779,7 @@ func (a *app) browseWithPersonOK(ctx context.Context, steps, dir, model string, 
 	if err := checkUploads(files, uploadRoots(cwd, dir, a.cfg.StateDir, os.Getenv("CLAUDE_CODE_SESSION_ID"))); err != nil {
 		return err
 	}
-	bin, err := exec.LookPath("claude")
+	bin, err := proc.LookPath("claude")
 	if err != nil {
 		return err
 	}
@@ -846,7 +846,7 @@ func (a *app) browseWithPersonOK(ctx context.Context, steps, dir, model string, 
 		}
 		ctx, cancel := context.WithTimeout(ctx, limit)
 		defer cancel()
-		c := exec.CommandContext(ctx, bin, argv...) //nolint:gosec // the claude CLI on PATH
+		c := proc.CommandContext(ctx, bin, argv...) //nolint:gosec // the claude CLI on PATH
 		c.Dir = dir
 		c.Env = env
 		c.Stderr = os.Stderr

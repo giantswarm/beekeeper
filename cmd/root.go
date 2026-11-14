@@ -142,8 +142,10 @@ type app struct {
 	// queueReports routes session CLI reports through the supervisor inbox.
 	// Embedded command adapters retain their synchronous transaction contract.
 	queueReports       bool
+	progressItem       string
 	selectionKind      string
 	selectionAuthor    string
+	startDefaultEffort string // agents start --default-effort (selectedEffort)
 	executionTransport func(execution.Host) execution.Transport
 	executionProbe     func(context.Context, execution.Host) (execution.Capabilities, error)
 	executionRuntime   func() (*execution.Server, error)

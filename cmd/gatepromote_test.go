@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -25,13 +26,15 @@ const (
 	candidateB = "v1.2.4-rc.2"
 )
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestPromoteCandidateKeepsKilledChildStderr(t *testing.T) {
 	const cause = "dial tcp: connect: network is unreachable"
 	fakeDevctl(t, `case " $* " in *" --progress "*) echo '`+cause+`' >&2;; esac
 exec sleep 30`)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	candidate, err := promoteCandidate(ctx, scratchRepo)
+	candidate, err := gate.PromoteCandidate(ctx, scratchRepo)
 	if candidate != "" || err == nil {
 		t.Fatalf("candidate %q, error %v; want the killed child's error", candidate, err)
 	}
@@ -49,11 +52,13 @@ exec sleep 30`)
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestPromoteCandidateRejectsFailedDryRunDocument(t *testing.T) {
 	const cause = "reading the repository: GET https://api.github.com/repos/o/r: dial tcp: lookup api.github.com: no such host"
 	fakeDevctl(t, `echo '{"exitCode":1,"verdict":"red","reason":"1 of 1 repositories not promoted: o/r (failed)","repositories":[{"repository":"o/r","candidate":"`+candidateA+`","state":"failed","message":"`+cause+`"}]}'
 exit 1`)
-	candidate, err := promoteCandidate(context.Background(), scratchRepo)
+	candidate, err := gate.PromoteCandidate(context.Background(), scratchRepo)
 	if candidate != "" || err == nil {
 		t.Fatalf("candidate %q, error %v; want failed dry-run document rejected", candidate, err)
 	}
@@ -68,6 +73,8 @@ exit 1`)
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestGateReportsKilledCandidateRead(t *testing.T) {
 	a := queueApp(t)
 	const cause = "dial tcp: connect: connection refused"
@@ -77,7 +84,7 @@ exec sleep 30`)
 	defer cancel()
 	var err error
 	stderr := gateStderr(t, func() { err = a.gate(ctx, promoteArgv(), 0, 0, false) })
-	if Code(err) != ExitGateRefused {
+	if Code(err) != gate.ExitGateRefused {
 		t.Fatalf("gate: %v, want refusal", err)
 	}
 	for _, want := range []string{cause, context.DeadlineExceeded.Error(), "nothing promoted"} {
@@ -92,13 +99,13 @@ func promoteArgv(extra ...string) []string {
 	return append([]string{merge.Tool, workerGitHubReleaseGroup, promoteArg, scratchRepo}, extra...)
 }
 
-// stubCandidate answers promoteCandidate with *newest.
+// stubCandidate answers gate.PromoteCandidate with *newest.
 func stubCandidate(t *testing.T, newest *string) *int {
 	t.Helper()
 	asked := new(int)
-	was := promoteCandidate
-	t.Cleanup(func() { promoteCandidate = was })
-	promoteCandidate = func(context.Context, string) (string, error) {
+	was := gate.PromoteCandidate
+	t.Cleanup(func() { gate.PromoteCandidate = was })
+	gate.PromoteCandidate = func(context.Context, string) (string, error) {
 		*asked++
 		return *newest, nil
 	}
@@ -107,10 +114,10 @@ func stubCandidate(t *testing.T, newest *string) *int {
 
 // promotePlace is o/r's waiting promotion in a free lane with a fresh
 // budget, queued for candidateA, and the queued run that waits for it.
-func promotePlace(t *testing.T) (*app, *gateRun) {
+func promotePlace(t *testing.T) (*app, *gate.GateRun) {
 	t.Helper()
-	me, gate := state.Party{Session: "s1", Name: ownerName}, sleeper(t)
-	a := queueApp(t, state.Merge{Repo: scratchRepo, Lane: scratchRepo, By: me, PID: gate, Phase: state.Waiting,
+	me, gatePID := state.Party{Session: "s1", Name: ownerName}, sleeper(t)
+	a := queueApp(t, state.Merge{Repo: scratchRepo, Lane: scratchRepo, By: me, PID: gatePID, Phase: state.Waiting,
 		Joined: time.Now(), Seen: time.Now(), Candidate: candidateA})
 	// The machine's own devctl processes count against the cap.
 	a.cfg.Merge.BudgetFresh, a.cfg.Merge.Cap = config.Duration{Duration: time.Hour}, 1000
@@ -120,13 +127,16 @@ func promotePlace(t *testing.T) (*app, *gateRun) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	return a, &gateRun{app: a, ctx: context.Background(), argv: promoteArgv(), repo: scratchRepo, lane: a.cfg.LaneOf(scratchRepo),
-		me: me, pid: os.Getpid(), queued: true, placed: true, from: gate}
+	return a, &gate.GateRun{Host: a, Ctx: context.Background(), Argv: promoteArgv(), Repo: scratchRepo, Lane: a.cfg.LaneOf(scratchRepo),
+		Me: me, Pid: os.Getpid(), Queued: true, Placed: true, From: gatePID}
 }
 
 // A pinned promotion behind a busy lane waits on in a run of its own (exit
 // 76), its place recording the candidate it pins, not the newest; the run
 // carries the pin.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAQueuedPromotionRecordsItsPinnedCandidate(t *testing.T) {
 	stubGitHub(t, github.Open, "")
 	_, launched := stubSelf(t)
@@ -134,8 +144,8 @@ func TestAQueuedPromotionRecordsItsPinnedCandidate(t *testing.T) {
 	asked := stubCandidate(t, &newest)
 	a := busyLaneApp(t)
 
-	if err := a.gate(context.Background(), promoteArgv("--version", candidateA), 0, 0, false); Code(err) != ExitGateQueued {
-		t.Fatalf("exit %d (%v), want %d", Code(err), err, ExitGateQueued)
+	if err := a.gate(context.Background(), promoteArgv("--version", candidateA), 0, 0, false); Code(err) != gate.ExitGateQueued {
+		t.Fatalf("exit %d (%v), want %d", Code(err), err, gate.ExitGateQueued)
 	}
 	if spec := launched(); !slices.Contains(spec.Argv, "--version") || !slices.Contains(spec.Argv, candidateA) {
 		t.Errorf("the queued run drops the pin: %q", spec.Argv)
@@ -157,6 +167,9 @@ func TestAQueuedPromotionRecordsItsPinnedCandidate(t *testing.T) {
 // An unpinned promotion is never queued: where it would wait on outside the
 // call it is refused (77), its place dropped, and the refusal names the
 // newest candidate to pin.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAnUnpinnedPromotionIsNeverQueued(t *testing.T) {
 	stubGitHub(t, github.Open, "")
 	stubSelf(t)
@@ -165,8 +178,8 @@ func TestAnUnpinnedPromotionIsNeverQueued(t *testing.T) {
 	a := busyLaneApp(t)
 
 	err := a.gate(context.Background(), promoteArgv(), 0, 0, false)
-	if Code(err) != ExitGateRefused {
-		t.Fatalf("exit %d (%v), want %d", Code(err), err, ExitGateRefused)
+	if Code(err) != gate.ExitGateRefused {
+		t.Fatalf("exit %d (%v), want %d", Code(err), err, gate.ExitGateRefused)
 	}
 	if d, want := lastEventOf(t, a, "merge.refused"), "release promote o/r --version <the candidate you proved> (the newest is "+candidateA+" now)"; !strings.Contains(d, want) {
 		t.Errorf("refusal %q, want %q", d, want)
@@ -182,6 +195,9 @@ func TestAnUnpinnedPromotionIsNeverQueued(t *testing.T) {
 // A newer candidate cut while a pinned promotion is queued refuses it at its
 // turn, so a stable release is never cut at an older release candidate; with
 // its pinned candidate still newest, devctl runs with the pin.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAPinnedPromotionRefusesWhenANewerCandidateAppears(t *testing.T) {
 	noSystemd(t)
 	stubGitHub(t, github.Open, "")
@@ -191,9 +207,9 @@ func TestAPinnedPromotionRefusesWhenANewerCandidateAppears(t *testing.T) {
 	asked := stubCandidate(t, &newest)
 
 	a, g := promotePlace(t)
-	g.argv, g.pinned = promoteArgv("--version", candidateA), true
-	why, err := g.step()
-	if Code(err) != ExitGateRefused || why != "" {
+	g.Argv, g.Pinned = promoteArgv("--version", candidateA), true
+	why, err := g.Step()
+	if Code(err) != gate.ExitGateRefused || why != "" {
 		t.Fatalf("step: %q, exit %d (%v), want a refusal", why, Code(err), err)
 	}
 	if *asked == 0 {
@@ -211,9 +227,9 @@ func TestAPinnedPromotionRefusesWhenANewerCandidateAppears(t *testing.T) {
 	}
 
 	a, g = promotePlace(t)
-	g.argv, g.pinned = promoteArgv("--version", candidateA), true
+	g.Argv, g.Pinned = promoteArgv("--version", candidateA), true
 	newest = candidateA
-	if why, err := g.step(); err != nil || why != "" {
+	if why, err := g.Step(); err != nil || why != "" {
 		t.Fatalf("step with current candidate: %q, %v", why, err)
 	}
 	if raw, _ := os.ReadFile(args); !strings.Contains(string(raw), "--version "+candidateA) { //nolint:gosec // the test's file
@@ -228,6 +244,9 @@ func TestAPinnedPromotionRefusesWhenANewerCandidateAppears(t *testing.T) {
 // promote run, the step that cuts the release it waits on, and still
 // refuses a merge into the repository. A hold whose probe waits on
 // something else keeps the promote waiting.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAHoldWaitingOnTheReleaseLetsItsOwnPromoteThrough(t *testing.T) {
 	noSystemd(t)
 	stubGitHub(t, github.Open, "")
@@ -240,16 +259,16 @@ func TestAHoldWaitingOnTheReleaseLetsItsOwnPromoteThrough(t *testing.T) {
 
 	a, g := promotePlace(t)
 	setHold(t, a, hold("devctl pr wait "+scratchRepo+" 6"))
-	if why, err := g.step(); err != nil || !strings.HasPrefix(why, "held in lane o/r") {
+	if why, err := g.Step(); err != nil || !strings.HasPrefix(why, "held in lane o/r") {
 		t.Fatalf("under a hold waiting on no release: %q, %v, want held", why, err)
 	}
 
 	a, g = promotePlace(t)
 	setHold(t, a, hold("gh release view v1.2.4 --repo "+scratchRepo))
-	if err := a.gate(context.Background(), mergeArgv(scratchRepo), 0, 0, false); Code(err) != ExitGateRefused {
-		t.Errorf("a merge into the held repository: exit %d (%v), want %d", Code(err), err, ExitGateRefused)
+	if err := a.gate(context.Background(), mergeArgv(scratchRepo), 0, 0, false); Code(err) != gate.ExitGateRefused {
+		t.Errorf("a merge into the held repository: exit %d (%v), want %d", Code(err), err, gate.ExitGateRefused)
 	}
-	if why, err := g.step(); err != nil || why != "" {
+	if why, err := g.Step(); err != nil || why != "" {
 		t.Fatalf("its own promote: %q, %v", why, err)
 	}
 	if d := lastEventOf(t, a, verbMerged); !strings.HasPrefix(d, "o/r promote exit 0, release v1.2.4") {
@@ -260,6 +279,9 @@ func TestAHoldWaitingOnTheReleaseLetsItsOwnPromoteThrough(t *testing.T) {
 // A promotion whose turn comes when another candidate is newest promotes
 // nothing: it is refused, its place leaves the lane, and the refusal names
 // both candidates. With its own candidate still newest, it runs.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAPromotionQueuedForOneCandidateNeverPromotesAnother(t *testing.T) {
 	noSystemd(t)
 	stubGitHub(t, github.Open, "")
@@ -268,8 +290,8 @@ func TestAPromotionQueuedForOneCandidateNeverPromotesAnother(t *testing.T) {
 	a, g := promotePlace(t)
 	newest := candidateB
 	stubCandidate(t, &newest)
-	why, err := g.step()
-	if Code(err) != ExitGateRefused || why != "" {
+	why, err := g.Step()
+	if Code(err) != gate.ExitGateRefused || why != "" {
 		t.Fatalf("step: %q, exit %d (%v), want a refusal", why, Code(err), err)
 	}
 	want := "o/r promote: o/r promote was queued for candidate " + candidateA + ", the newest is candidate " + candidateB + " now: nothing promoted"
@@ -285,7 +307,7 @@ func TestAPromotionQueuedForOneCandidateNeverPromotesAnother(t *testing.T) {
 
 	a, g = promotePlace(t)
 	newest = candidateA
-	if why, err := g.step(); err != nil || why != "" {
+	if why, err := g.Step(); err != nil || why != "" {
 		t.Fatalf("its own candidate: %q, %v", why, err)
 	}
 	if d := lastEventOf(t, a, verbMerged); !strings.HasPrefix(d, "o/r promote exit 0, release v1.2.4") {
@@ -295,6 +317,9 @@ func TestAPromotionQueuedForOneCandidateNeverPromotesAnother(t *testing.T) {
 
 // lanes drop takes a waiting promotion out of its lane, and the gate that
 // waited for the place refuses instead of joining again.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestLanesDropTakesAPromotionOut(t *testing.T) {
 	stubGitHub(t, github.Open, "")
 	newest := candidateA
@@ -308,7 +333,7 @@ func TestLanesDropTakesAPromotionOut(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if why, err := g.step(); err != nil || !strings.Contains(why, "behind o/r#6") {
+	if why, err := g.Step(); err != nil || !strings.Contains(why, "behind o/r#6") {
 		t.Fatalf("step before the drop: %q, %v", why, err)
 	}
 
@@ -327,8 +352,8 @@ func TestLanesDropTakesAPromotionOut(t *testing.T) {
 		t.Fatalf("the promotion kept its place: %+v", st.Merges)
 	}
 
-	why, err := g.step()
-	if Code(err) != ExitGateRefused || why != "" {
+	why, err := g.Step()
+	if Code(err) != gate.ExitGateRefused || why != "" {
 		t.Fatalf("step after the drop: %q, exit %d (%v), want a refusal", why, Code(err), err)
 	}
 	if d := lastEventOf(t, a, "merge.refused"); !strings.Contains(d, "o/r promote was taken out of lane o/r (beekeeper lanes drop): nothing ran") {
@@ -355,6 +380,9 @@ func TestDropArg(t *testing.T) {
 // The gate names the command whose turn came: a promotion is "promoting
 // o/r" and a refused one says "nothing promoted" with devctl's state, never
 // "merging"; a merge stays "merging o/r#7".
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestTheGateNamesTheCommandWhoseTurnCame(t *testing.T) {
 	noSystemd(t)
 	stubGitHub(t, github.Open, "")
@@ -364,54 +392,54 @@ func TestTheGateNamesTheCommandWhoseTurnCame(t *testing.T) {
 	fakeDevctl(t, `echo '{"repositories":[{"candidate":"`+candidateA+`","state":"not_built"}]}'; exit 1`)
 	a, g := promotePlace(t)
 	var err error
-	stderr := gateStderr(t, func() { _, err = g.step() })
+	stderr := gateStderr(t, func() { _, err = g.Step() })
 	if Code(err) != 1 {
 		t.Fatalf("refused promotion: exit %d (%v), want 1", Code(err), err)
 	}
-	if d := lastEventOf(t, a, verbPromoting); d != "o/r in lane o/r" {
+	if d := lastEventOf(t, a, gate.VerbPromoting); d != "o/r in lane o/r" {
 		t.Errorf("promoting event %q", d)
 	}
-	if d := lastEventOf(t, a, verbMerging); d != "" {
+	if d := lastEventOf(t, a, gate.VerbMerging); d != "" {
 		t.Errorf("a promotion logged merging: %q", d)
 	}
 	if d := lastEventOf(t, a, "merge.failed"); !strings.Contains(d, "nothing promoted (not_built)") {
 		t.Errorf("failed event %q", d)
 	}
-	if !strings.Contains(stderr, GatePrefix+"nothing promoted (not_built) (exit 1); o/r promote left lane o/r") || strings.Contains(stderr, "merg") {
+	if !strings.Contains(stderr, gate.GatePrefix+"nothing promoted (not_built) (exit 1); o/r promote left lane o/r") || strings.Contains(stderr, "merg") {
 		t.Errorf("stderr %q, want the promotion's outcome and no merge", stderr)
 	}
 
 	fakeDevctl(t, `echo '{"repositories":[{"candidate":"`+candidateA+`","state":"dispatched"}]}'`)
 	a, g = promotePlace(t)
-	stderr = gateStderr(t, func() { _, err = g.step() })
+	stderr = gateStderr(t, func() { _, err = g.Step() })
 	if err != nil {
 		t.Fatalf("dispatched promotion: %v", err)
 	}
-	if !strings.Contains(stderr, GatePrefix+"promoted o/r: release v1.2.4 dispatched") || strings.Contains(stderr, "merg") {
+	if !strings.Contains(stderr, gate.GatePrefix+"promoted o/r: release v1.2.4 dispatched") || strings.Contains(stderr, "merg") {
 		t.Errorf("stderr %q, want the dispatched promotion", stderr)
 	}
-	if d := lastEventOf(t, a, verbMerging); d != "" {
+	if d := lastEventOf(t, a, gate.VerbMerging); d != "" {
 		t.Errorf("a promotion logged merging: %q", d)
 	}
 
 	fakeDevctl(t, `echo '`+mergedDoc+`'`)
 	stubBaseRelease(t, github.BaseRelease{Base: mainBranch, Auto: true}, nil)
 	a, g = promotePlace(t)
-	g.pr, g.argv, g.candidate = 7, mergeArgv(scratchRepo), ""
+	g.Pr, g.Argv, g.Candidate = 7, mergeArgv(scratchRepo), ""
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Merges[0].PR, st.Merges[0].Candidate = 7, ""
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	stderr = gateStderr(t, func() { _, err = g.step() })
+	stderr = gateStderr(t, func() { _, err = g.Step() })
 	if err != nil {
 		t.Fatalf("merge: exit %d (%v), stderr %q", Code(err), err, stderr)
 	}
-	if d := lastEventOf(t, a, verbMerging); d != "o/r#7 in lane o/r" {
+	if d := lastEventOf(t, a, gate.VerbMerging); d != "o/r#7 in lane o/r" {
 		t.Errorf("merging event %q", d)
 	}
-	if d := lastEventOf(t, a, verbPromoting); d != "" || strings.Contains(stderr, "promot") {
+	if d := lastEventOf(t, a, gate.VerbPromoting); d != "" || strings.Contains(stderr, "promot") {
 		t.Errorf("a merge said promoting: event %q, stderr %q", d, stderr)
 	}
 }
@@ -419,6 +447,9 @@ func TestTheGateNamesTheCommandWhoseTurnCame(t *testing.T) {
 // A lane hold that admits the line's promoter lets that promoter's own
 // promote through; every other session's promote and merge on the line is
 // refused (exit 77) with a gate line naming the session the hold admits.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAHoldAdmittingThePromoterLetsItsPromoteThrough(t *testing.T) {
 	noSystemd(t)
 	stubGitHub(t, github.Open, "")
@@ -431,21 +462,21 @@ func TestAHoldAdmittingThePromoterLetsItsPromoteThrough(t *testing.T) {
 
 	a, g := promotePlace(t)
 	setHold(t, a, hold)
-	other := &gateRun{app: a, ctx: context.Background(), argv: promoteArgv(), repo: scratchRepo, lane: g.lane,
-		me: state.Party{Session: "s2", Name: aheadName}, pid: os.Getpid()}
+	other := &gate.GateRun{Host: a, Ctx: context.Background(), Argv: promoteArgv(), Repo: scratchRepo, Lane: g.Lane,
+		Me: state.Party{Session: "s2", Name: aheadName}, Pid: os.Getpid()}
 	var err error
-	stderr := gateStderr(t, func() { _, err = other.step() })
-	if Code(err) != ExitGateRefused || !strings.Contains(stderr, GatePrefix+"refused") || !strings.Contains(stderr, admitted) {
-		t.Errorf("another session's promote: exit %d (%v), stderr %q, want %d naming %s", Code(err), err, stderr, ExitGateRefused, admitted)
+	stderr := gateStderr(t, func() { _, err = other.Step() })
+	if Code(err) != gate.ExitGateRefused || !strings.Contains(stderr, gate.GatePrefix+"refused") || !strings.Contains(stderr, admitted) {
+		t.Errorf("another session's promote: exit %d (%v), stderr %q, want %d naming %s", Code(err), err, stderr, gate.ExitGateRefused, admitted)
 	}
 	promoter := a.as
 	a.as = aheadName
 	stderr = gateStderr(t, func() { err = a.gate(context.Background(), mergeArgv(scratchRepo), 0, 0, false) })
 	a.as = promoter
-	if Code(err) != ExitGateRefused || !strings.Contains(stderr, admitted) {
-		t.Errorf("another session's merge: exit %d (%v), stderr %q, want %d naming %s", Code(err), err, stderr, ExitGateRefused, admitted)
+	if Code(err) != gate.ExitGateRefused || !strings.Contains(stderr, admitted) {
+		t.Errorf("another session's merge: exit %d (%v), stderr %q, want %d naming %s", Code(err), err, stderr, gate.ExitGateRefused, admitted)
 	}
-	if why, err := g.step(); err != nil || why != "" {
+	if why, err := g.Step(); err != nil || why != "" {
 		t.Fatalf("the admitted promoter's promote: %q, %v", why, err)
 	}
 	if d := lastEventOf(t, a, verbMerged); !strings.HasPrefix(d, "o/r promote exit 0, release v1.2.4") {
@@ -555,6 +586,8 @@ bash "$gate" "$TAG"
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestPromoteUsageExitIsARefusal(t *testing.T) {
 	noSystemd(t)
 	newest := candidateA
@@ -565,7 +598,7 @@ func TestPromoteUsageExitIsARefusal(t *testing.T) {
 			fakeDevctl(t, `echo '`+doc+`'; echo '`+message+`' >&2; exit 7`)
 			a, g := promotePlace(t)
 			var err error
-			stderr := gateStderr(t, func() { _, err = g.step() })
+			stderr := gateStderr(t, func() { _, err = g.Step() })
 			if Code(err) != 3 || !strings.Contains(stderr, message) || strings.Contains(stderr, "unknown") {
 				t.Fatalf("exit %d (%v), stderr %q", Code(err), err, stderr)
 			}
@@ -597,9 +630,11 @@ func TestPromoteRefusesBareVersionBeforeDevctl(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestPromoteUsageOutcomeNeedsNoJudging(t *testing.T) {
 	for _, rc := range []int{7, 1, 143} {
-		out, ok, got := parseRunOutcome(0, nil, rc)
+		out, ok, got := gate.ParseRunOutcome(0, nil, rc)
 		if rc == 7 {
 			if got != 3 || out.Merged || merge.NeedsJudging(ok, got) {
 				t.Fatalf("usage: %+v, %t, %d", out, ok, got)
@@ -612,6 +647,9 @@ func TestPromoteUsageOutcomeNeedsNoJudging(t *testing.T) {
 
 // The public gate entry point refuses an unnamed promoter without dispatching
 // devctl or taking the named promoter's existing place.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestGatePromoteRequiresNamedPromoter(t *testing.T) {
 	noSystemd(t)
 	a, _ := promotePlace(t)
@@ -622,7 +660,7 @@ func TestGatePromoteRequiresNamedPromoter(t *testing.T) {
 	stderr := gateStderr(t, func() {
 		err = a.gate(context.Background(), promoteArgv("--version", candidateA), 0, 0, false)
 	})
-	if Code(err) != ExitGateRefused || !strings.Contains(stderr, GatePrefix+"refused") || !strings.Contains(stderr, ownerName) {
+	if Code(err) != gate.ExitGateRefused || !strings.Contains(stderr, gate.GatePrefix+"refused") || !strings.Contains(stderr, ownerName) {
 		t.Fatalf("promote: exit %d (%v), stderr %q; want 77 naming the promoter", Code(err), err, stderr)
 	}
 	st := readState(t, a)

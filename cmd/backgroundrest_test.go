@@ -29,7 +29,7 @@ func TestWorkerRESTContextKeepsWorkerGate(t *testing.T) {
 
 func TestBackgroundRESTAllowanceProtectsWindow(t *testing.T) {
 	now := time.Now()
-	b := &state.Budget{Limit: 5000, Remaining: 4000, Reset: now.Add(time.Hour), At: now}
+	b := &state.Budget{Limit: 5000, Remaining: 4000, Reset: now.Add(time.Hour), At: now.Add(-10 * time.Minute)}
 	var spend backgroundRESTSpend
 	for range 3000 {
 		if err := spend.admit(now, b, 1000, backgroundTestCaller); err != nil {
@@ -69,22 +69,15 @@ func TestBackgroundRESTFloorAndUnknownWindow(t *testing.T) {
 	if err := spend.admit(now, b, 200, backgroundTestCaller); err == nil {
 		t.Fatal("reservation crossed floor")
 	}
-}
-
-func TestBackgroundRESTStaleReadingAndRecovery(t *testing.T) {
-	now := time.Now()
-	b := &state.Budget{Limit: 5000, Remaining: 4900, Reset: now.Add(time.Hour), At: now.Add(-2 * time.Minute)}
-	var spend backgroundRESTSpend
-	if err := spend.admit(now, b, 200, backgroundTestCaller); err == nil || !strings.Contains(err.Error(), "stale reading") {
-		t.Fatalf("stale reading not named: %v", err)
-	}
-	b.At = now
-	if err := spend.admit(now, b, 200, backgroundTestCaller); err != nil {
-		t.Fatal(err)
-	}
 	b.Reset = now
-	if err := spend.admit(now, b, 200, backgroundTestCaller); err == nil || !strings.Contains(err.Error(), "stale reading") {
-		t.Fatalf("expired window admitted: %v", err)
+	b.Remaining = 5000
+	for range 100 {
+		if err := spend.admit(now, b, 200, backgroundTestCaller); err != nil {
+			t.Fatalf("expired window did not bootstrap: %v", err)
+		}
+	}
+	if err := spend.admit(now, b, 200, backgroundTestCaller); err == nil || !strings.Contains(err.Error(), "bootstrap invocation cap 100 reached") {
+		t.Fatalf("expired window exceeded bootstrap cap: %v", err)
 	}
 }
 
@@ -102,9 +95,15 @@ func TestBackgroundRESTNewWindowAndIdentityRecover(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			now := time.Now()
 			b := &state.Budget{Identity: "rest-gh", Login: "rest-desk", Limit: 5000, Remaining: 4000, Reset: now.Add(time.Hour), At: now}
-			spend := backgroundRESTSpend{Reset: b.Reset, Calls: 4000, Limit: 2000}
-			if !tc.legacy {
-				spend.Reading, spend.Identity, spend.Login, spend.Reserved = now, b.Identity, b.Login, 3000
+			var spend backgroundRESTSpend
+			if tc.legacy {
+				spend = backgroundRESTSpend{Reset: b.Reset, Calls: 4000, Limit: 2000}
+			} else {
+				for range 3000 {
+					if err := spend.admit(now, b, 1000, backgroundTestCaller); err != nil {
+						t.Fatal(err)
+					}
+				}
 			}
 			tc.mutate(b)
 			if err := spend.admit(now, b, 1000, backgroundTestCaller); err != nil {
@@ -114,9 +113,6 @@ func TestBackgroundRESTNewWindowAndIdentityRecover(t *testing.T) {
 	}
 }
 
-// TestBackgroundRESTAllowanceSurvivesProcessRestart checks shared reservations.
-//
-// control: none: existing persistence behavior; the fixture now supplies a fresh reading
 func TestBackgroundRESTAllowanceSurvivesProcessRestart(t *testing.T) {
 	a, _ := budgetApp(t)
 	b, _ := budgetApp(t)
@@ -126,7 +122,7 @@ func TestBackgroundRESTAllowanceSurvivesProcessRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Budget = &state.Budget{Limit: 5000, Remaining: 4000, Reset: time.Now().Add(time.Hour), At: time.Now()}
+		st.Budget = &state.Budget{Limit: 5000, Remaining: 4000, Reset: time.Now().Add(time.Hour)}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)

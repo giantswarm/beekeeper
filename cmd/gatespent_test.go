@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -25,8 +26,8 @@ var errGraphQLSpent = errors.New("gh pr view 7: GraphQL: API rate limit already 
 func stubSpentRead(t *testing.T, now func() time.Time, reset time.Time, spent bool) *int {
 	t.Helper()
 	asked := stubBaseRelease(t, github.BaseRelease{Base: mainBranch, Auto: true}, nil)
-	read := pullBase
-	pullBase = func(ctx context.Context, repo string, n int) (github.PullBase, error) {
+	read := gate.PullBase
+	gate.PullBase = func(ctx context.Context, repo string, n int) (github.PullBase, error) {
 		if now().Before(reset) {
 			*asked++
 			return github.PullBase{}, errGraphQLSpent
@@ -76,6 +77,9 @@ func placesOf(t *testing.T, a *app) []string {
 // auto-release is a wait for the reset, not a refusal: the merge keeps its
 // place at the head of its lane, the place behind it stays behind, and at
 // the reset it reads again and merges in its original order.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestASpentBudgetKeepsTheMergesPlaceUntilTheReset(t *testing.T) {
 	noSystemd(t)
 	fakeDevctl(t, `echo '`+mergedDoc+`'`)
@@ -83,9 +87,9 @@ func TestASpentBudgetKeepsTheMergesPlaceUntilTheReset(t *testing.T) {
 	a := spentLane(t)
 	reset := a.now.Add(time.Second)
 	asked := stubSpentRead(t, func() time.Time { return a.now }, reset, true)
-	g := &gateRun{app: a, ctx: context.Background(), argv: mergeArgv(scratchRepo), repo: scratchRepo, pr: 7, lane: a.cfg.LaneOf(scratchRepo),
-		me: state.Party{Session: "s1", Name: ownerName}, pid: os.Getpid(), queued: true}
-	why, err := g.step()
+	g := &gate.GateRun{Host: a, Ctx: context.Background(), Argv: mergeArgv(scratchRepo), Repo: scratchRepo, Pr: 7, Lane: a.cfg.LaneOf(scratchRepo),
+		Me: state.Party{Session: "s1", Name: ownerName}, Pid: os.Getpid(), Queued: true}
+	why, err := g.Step()
 	if err != nil || !strings.Contains(why, "until the GitHub budget's reset") || !strings.Contains(why, "keeps its place in lane o/r") {
 		t.Fatalf("step: %q, %v; want a wait for the reset", why, err)
 	}
@@ -98,12 +102,12 @@ func TestASpentBudgetKeepsTheMergesPlaceUntilTheReset(t *testing.T) {
 	}
 	// Before the reset the place waits without reading GitHub again.
 	reads := *asked
-	if why, err := g.step(); err != nil || !strings.Contains(why, "until the GitHub budget's reset") || *asked != reads {
+	if why, err := g.Step(); err != nil || !strings.Contains(why, "until the GitHub budget's reset") || *asked != reads {
 		t.Errorf("a second step: %q, %v, %d reads; want the wait without a read", why, err, *asked-reads)
 	}
 
 	a.now = reset.Add(time.Millisecond)
-	if why, err := g.step(); why != "" || err != nil {
+	if why, err := g.Step(); why != "" || err != nil {
 		t.Fatalf("step after reset: %q, %v; want the merge run", why, err)
 	}
 	if d := lastEventOf(t, a, verbMerged); !strings.Contains(d, "o/r#7 exit 0") {
@@ -114,6 +118,9 @@ func TestASpentBudgetKeepsTheMergesPlaceUntilTheReset(t *testing.T) {
 // A read refused under a rate limit whose reset is unknown refuses the
 // merge (77), but keeps its place for merge.seedTTL: the same command, run
 // again, rejoins its lane ahead of the place queued behind it, and merges.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestARefusedReadKeepsThePlaceForTheSameCommand(t *testing.T) {
 	noSystemd(t)
 	fakeDevctl(t, `echo '`+mergedDoc+`'`)
@@ -121,9 +128,9 @@ func TestARefusedReadKeepsThePlaceForTheSameCommand(t *testing.T) {
 	a := spentLane(t)
 	reset := a.now.Add(time.Second)
 	stubSpentRead(t, func() time.Time { return a.now }, reset, false)
-	g := &gateRun{app: a, ctx: context.Background(), argv: mergeArgv(scratchRepo), repo: scratchRepo, pr: 7, lane: a.cfg.LaneOf(scratchRepo),
-		me: state.Party{Session: "s1", Name: ownerName}, pid: os.Getpid(), queued: true}
-	if _, err := g.step(); Code(err) != ExitGateRefused {
+	g := &gate.GateRun{Host: a, Ctx: context.Background(), Argv: mergeArgv(scratchRepo), Repo: scratchRepo, Pr: 7, Lane: a.cfg.LaneOf(scratchRepo),
+		Me: state.Party{Session: "s1", Name: ownerName}, Pid: os.Getpid(), Queued: true}
+	if _, err := g.Step(); Code(err) != gate.ExitGateRefused {
 		t.Fatalf("step: exit %d (%v), want refused", Code(err), err)
 	}
 	if d := lastEventOf(t, a, "merge.refused"); !strings.Contains(d, "its place in lane o/r is kept for 1h0m0s") {
@@ -135,9 +142,9 @@ func TestARefusedReadKeepsThePlaceForTheSameCommand(t *testing.T) {
 	}
 
 	a.now = reset.Add(time.Millisecond)
-	g = &gateRun{app: a, ctx: context.Background(), argv: mergeArgv(scratchRepo), repo: scratchRepo, pr: 7, lane: a.cfg.LaneOf(scratchRepo),
-		me: state.Party{Session: "s1", Name: ownerName}, pid: os.Getpid()}
-	if why, err := g.step(); why != "" || err != nil {
+	g = &gate.GateRun{Host: a, Ctx: context.Background(), Argv: mergeArgv(scratchRepo), Repo: scratchRepo, Pr: 7, Lane: a.cfg.LaneOf(scratchRepo),
+		Me: state.Party{Session: "s1", Name: ownerName}, Pid: os.Getpid()}
+	if why, err := g.Step(); why != "" || err != nil {
 		t.Fatalf("the same command again: %q, %v; want it to rejoin at its old position and merge", why, err)
 	}
 	if d := lastEventOf(t, a, verbMerged); !strings.Contains(d, "o/r#7 exit 0") {
@@ -146,28 +153,31 @@ func TestARefusedReadKeepsThePlaceForTheSameCommand(t *testing.T) {
 }
 
 // Each pull request reads its own release tree, even in the same lane pass.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestTheReleaseTreeIsReadForEachPullRequest(t *testing.T) {
 	stubBaseRelease(t, github.BaseRelease{Base: mainBranch, Auto: true}, nil)
 	reads := 0
-	releaseAt = func(context.Context, string, string, string) (github.BaseRelease, error) {
+	gate.ReleaseAt = func(context.Context, string, string, string) (github.BaseRelease, error) {
 		reads++
 		return github.BaseRelease{Base: mainBranch, Auto: true}, nil
 	}
 	lane := config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}}
 	g := runningMerge(t, scratchRepo, lane)
-	g.now = time.Now()
-	if err := g.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Merges[0].Joined = g.now.Add(-time.Minute)
-		st.Merges = append(st.Merges, state.Merge{Repo: scratchRepo, PR: 8, Lane: scratchRepo, Phase: state.Waiting, Joined: g.now.Add(-time.Minute)})
+	gateApp(g.Host).now = time.Now()
+	if err := gateApp(g.Host).store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Merges[0].Joined = gateApp(g.Host).now.Add(-time.Minute)
+		st.Merges = append(st.Merges, state.Merge{Repo: scratchRepo, PR: 8, Lane: scratchRepo, Phase: state.Waiting, Joined: gateApp(g.Host).now.Add(-time.Minute)})
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
 	readFor := func(pr int) {
 		t.Helper()
-		g.pr, g.release = pr, nil
-		if why, err := g.readRelease(); why != "" || err != nil || g.release == nil || !g.release.Auto {
-			t.Fatalf("o/r#%d: %q, %v, %+v", pr, why, err, g.release)
+		g.Pr, g.Release = pr, nil
+		if why, err := g.ReadRelease(); why != "" || err != nil || g.Release == nil || !g.Release.Auto {
+			t.Fatalf("o/r#%d: %q, %v, %+v", pr, why, err, g.Release)
 		}
 	}
 	readFor(7)
@@ -176,13 +186,13 @@ func TestTheReleaseTreeIsReadForEachPullRequest(t *testing.T) {
 		t.Errorf("the base branch was read %d times for two places of the pass, want twice", reads)
 	}
 
-	if err := g.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Merges = []state.Merge{{Repo: scratchRepo, PR: 9, Lane: scratchRepo, Phase: state.Waiting, Joined: g.now.Add(time.Minute)}}
+	if err := gateApp(g.Host).store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Merges = []state.Merge{{Repo: scratchRepo, PR: 9, Lane: scratchRepo, Phase: state.Waiting, Joined: gateApp(g.Host).now.Add(time.Minute)}}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	g.now = g.now.Add(2 * time.Minute)
+	gateApp(g.Host).now = gateApp(g.Host).now.Add(2 * time.Minute)
 	readFor(9)
 	if reads != 3 {
 		t.Errorf("a new pass read the base branch %d times in all, want a third read", reads)

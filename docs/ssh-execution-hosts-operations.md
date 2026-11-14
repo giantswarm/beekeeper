@@ -190,7 +190,13 @@ agents:
 ```
 
 An entry's own `policyDigest` is deprecated: it still pins a host beekeeper
-never updated, and beekeeper's recorded pin replaces it.
+never updated, and beekeeper's recorded pin replaces it. The pin also records
+the digest the entry named. When the host's policy changes without a new
+release (its configuration, such as its repository map), setting the entry's
+`policyDigest` to the digest `prepare` printed is enough: the supervisor loop
+updates the host once its turns drain, as for a new release, and pins the
+digest the host prepares. An entry still naming a stale digest is updated for
+once, and the update's line says the host did not prepare that digest.
 
 ### Host updates follow the coordinator
 
@@ -221,8 +227,9 @@ records the release and digest in its state (`hostPins`): every start on the
 host is pinned to it. No configuration change and no person is involved.
 
 The supervisor loop runs the update for every `agents.hosts` entry whose pin
-is not the coordinator's release, so a coordinator self-update carries the
-hosts with it. During coordinator probation only updates wait, and starts continue
+is not the coordinator's release, or whose `policyDigest` changed since the
+pin, so a coordinator self-update carries the hosts with it. During
+coordinator probation only updates wait, and starts continue
 on older releases that pass the live protocol, capability, identity and pinned
 policy checks; release equality is not the compatibility boundary. Once the
 coordinator's probation passed, a host pinned to an older release drains:
@@ -683,6 +690,32 @@ the workspace, its execution-owned Git repository and source bundle. Recover
 unpublished commits and local edits at the workspace path printed by `inspect`;
 stopping and repeating a stop do not authorize deletion.
 
+#### Tasks that need the coordinator
+
+A task whose remaining work needs data, devices or commands only the coordinator has, such as a
+proof on production data that lives there, is marked to stay on the coordinator with `beekeeper
+agents move`. No start of a marked task is placed on a host again: the loop's board start, fresh
+continuation, fixer and quota restart run here, with a `SUPERVISOR NEXT STAYS HERE`, `SUPERVISOR
+CONTINUATION STAYS HERE`, `SUPERVISOR FIXER STAYS HERE` or `SUPERVISOR QUOTA … STAYS HERE` line
+naming the task and the reason, once the coordinator's capacity has room; a hand start without
+`--host` whose brief names it stays here too. Reviewers are placed as before.
+
+```sh
+beekeeper agents move "the timing proof needs the production projects on the coordinator"
+beekeeper agents move --ref example/app#12 "the 300-clip proof needs the production projects"
+beekeeper agents move --ref example/app#12 --clear
+```
+
+A worker on a host that finds itself on the wrong machine runs the first form from its workspace
+instead of parking. The coordinator marks its task (the issue it serves and the pull requests it
+waits on, asked a desk review of or published, those of the execution's repository only; a host's
+worker never marks another repository's), records `agents.move`, and queues the task for a fresh
+worker, which the loop's next pass starts on the coordinator. That worker continues from what is
+published, never from the host's workspace, so the worker publishes first (`agents publish`),
+then moves and ends its turn; the fresh worker's brief names the branch, head and pull request
+it published. A worker on the coordinator marks its task the same way and keeps working. `--ref`
+marks a task before any start, the desk's own word; `--clear` lifts the mark.
+
 ### Retirement
 
 The coordinator ends what an execution left through one resumable retirement.
@@ -695,6 +728,15 @@ Only the newest publication transfer can hold retirement; earlier pushes are
 superseded. A successful publication marks its transfer recovered. When host
 reconciliation confirms that the worker ended and collects its transcript,
 the watch advances retirement again in that same pass.
+
+A message cannot reach an execution that ended for good: one that is retired, stopped or
+released, whose host holds no journal of it, that never accepted its task, takes no messages, or
+runs a harness with no way back into its conversation. When the loop has work for such a worker on
+the roster (a review's findings, a red check, a conflict, a post-merge step), it does not wake it.
+It takes the entry off the roster, with an `agents.remove` line that names why, and starts a fresh
+fixer under the same name on the pull request's branch, as it does for a worker off the roster. A
+fixer that took the name since the loop's pass read the roster, such as one started for another
+pull request of the same worker, is woken and keeps its entry.
 
 The execution's inventory is in its host journal under `resources`, recorded
 before the resources exist: the worktree, its repository and branch, scratch,

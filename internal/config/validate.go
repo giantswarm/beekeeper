@@ -57,6 +57,7 @@ func (c *Config) validateEach(report func(error)) {
 		{"alerts.every", c.Alerts.Every.Duration},
 		{"alerts.pagerduty.every", c.Alerts.PagerDuty.Every.Duration},
 		{"supervisor.loopInterval", c.Supervisor.LoopInterval.Duration},
+		{"supervisor.restartWait", c.Supervisor.RestartWait.Duration},
 		{"supervisor.unmergedWindow", c.Supervisor.UnmergedWindow.Duration},
 	} {
 		if interval.value < 0 {

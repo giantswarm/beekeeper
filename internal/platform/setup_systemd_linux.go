@@ -5,13 +5,13 @@ package platform
 import (
 	"context"
 	"fmt"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/giantswarm/beekeeper/contrib/systemd"
+	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
 // The units install writes: the standby service and the Teleport keeper.
@@ -182,7 +182,7 @@ func unitStateOf(ctx context.Context, unit string) unitState {
 
 // systemctl1 is systemctl --user verb's one-word answer for unit.
 func systemctl1(ctx context.Context, verb, unit string) string {
-	out, _ := exec.CommandContext(ctx, systemctl, userManager, verb, unit).Output() //nolint:gosec // a fixed verb and the unit install writes
+	out, _ := proc.CommandContext(ctx, systemctl, userManager, verb, unit).Output() //nolint:gosec // a fixed verb and the unit install writes
 	return strings.TrimSpace(string(out))
 }
 

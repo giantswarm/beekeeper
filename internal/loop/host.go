@@ -54,6 +54,10 @@ type Host interface {
 	NextMonitoredIssue(ctx context.Context, skip ...string) (*LoopBoardItem, error)
 	Now() time.Time
 	OperationOutcome(operation string, reason string, rawURL string, success bool) error
+	// OtherDeskClaim is another desk's live claim on issue (owner/repo#n)
+	// in a line ("desk <name> (session …) since …"), "" when none holds it
+	// or the desk reads no claims (board.claims.off).
+	OtherDeskClaim(ctx context.Context, issue string) (string, error)
 	Out() io.Writer
 	ParkIsPull(ctx context.Context, st *state.State, ref string) bool
 	PrepareEventSegmentation() error
@@ -82,6 +86,7 @@ type Host interface {
 // there until their own packages exist; a field goes when its function has
 // moved to a package the loop can import.
 type Command struct {
+	LoopBoardProgress          func(l *Loop, ctx context.Context, st *state.State, in superloop.Input, unread map[string]bool) (bool, error)
 	About                      func(e state.Event, ref string) state.Event
 	AgyAgentStartID            func(ag state.Agent) string
 	AgyQuotaError              func(cfg *config.Config, ag state.Agent) *agy.QuotaError
@@ -100,7 +105,6 @@ type Command struct {
 	DeliveryExempt             func(st *state.State, now time.Time, ref string, exempt bool) bool
 	DeliveryURL                func(ref string, pull bool) string
 	DevctlCommandEnv           func(configPath string) []string
-	EffortFlags                func(level string) []string
 	EndNotes                   func(st *state.State, worker state.Party, now time.Time)
 	EndedParkCandidate         func(ag state.Agent) bool
 	EpicChildStatus            func(st *state.State, child board.Item, now time.Time, policy any) string
@@ -108,13 +112,13 @@ type Command struct {
 	ErrGone                    func() error
 	EscapedLine                func(s string) string
 	Event                      func(by state.Party, verb string, format string, a ...any) state.Event
+	ExecutionCannotContinue    func(r *state.ExecutionRecord) string
 	ExecutionRecord            func(st *state.State, ref execution.Ref) (*state.ExecutionRecord, int)
 	FreshPark                  func(st *state.State, ag state.Agent) bool
 	FreshSessions              func(p0 Host) ([]*claude.Session, *proc.Table, error)
 	HeldBy                     func(notes []state.Note, ref string, except int) (*state.Note, *state.ItemHold)
 	HostExecutions             func(st *state.State, selector string) int
 	IncidentExempt             func(st *state.State, now time.Time, refs ...string) bool
-	InheritReviewParkOnAgent   func(st *state.State, ag *state.Agent, rp state.ReviewPark, now time.Time)
 	IsDeskReviewWait           func(waits string) bool
 	IssueURL                   func(ref string) string
 	LoopBroker                 func(ctx context.Context) (string, error)
@@ -155,12 +159,12 @@ type Command struct {
 	RemoveAgent                func(st *state.State, i int)
 	ReportIdle                 func(ag *state.Agent, now time.Time)
 	RepositoryStartReason      func(st *state.State, now time.Time, ref string) string
-	ReviewContext              func(ctx context.Context, p superloop.Pull, previous string, threshold int) (string, error)
+	ReviewContext              func(ctx context.Context, p superloop.Pull, threshold int) (string, error)
 	RoleRun                    func(st *state.State, p state.Party) bool
 	RunGit                     func(ctx context.Context, dir string, args ...string) ([]byte, error)
 	ShortDur                   func(d time.Duration) string
-	ShortSHA                   func(sha string) string
 	StopMerges                 func(store state.Store, by state.Party, pick func(state.Merge) bool, keepSeeded bool, how func(state.Merge) string) ([]string, error)
+	TakeOverReviewPark         func(a Host, st *state.State, rp state.ReviewPark, name string) ([]state.Event, error)
 	Truncate                   func(s string, n int) string
 	Unactivated                func(r *state.ExecutionRecord) bool
 	UnmergedHoldReason         func(repo string, recent []UnmergedPull, limit int, window time.Duration) string

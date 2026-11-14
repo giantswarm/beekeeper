@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -201,7 +200,7 @@ func (r dockerRun) notable() bool {
 // dockerCLI runs the docker CLI; nil without one. Tests replace it
 // (TestMain), so no test reads or prunes the machine's Docker.
 var dockerCLI = func() dockerprune.Docker {
-	if _, err := exec.LookPath("docker"); err != nil {
+	if _, err := proc.LookPath("docker"); err != nil {
 		return nil
 	}
 	return runDocker

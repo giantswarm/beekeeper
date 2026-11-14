@@ -331,7 +331,7 @@ func (a *app) checkExecutionCommand(cmd *cobra.Command) error {
 	}
 	path := strings.TrimPrefix(cmd.CommandPath(), cmd.Root().Name()+" ")
 	switch path {
-	case "agents github-cli", "agents github-git", fatalBudgetCommand, "agents publish", "agents review", "agents rerun", "agents merge", "agents mcp-proxy", workerGitHubRunGroup, "run stats", "run tail", "agents idle", "agents park", "agents note", "agents problem", "note add", "log add", "transcripts", "transcripts list", "transcripts search", "transcripts read", "transcripts request":
+	case "agents github-cli", "agents github-git", fatalBudgetCommand, "agents publish", "agents review", "agents rerun", "agents merge", "agents mcp-proxy", workerGitHubRunGroup, "run stats", "run tail", "agents idle", "agents park", "agents move", "agents note", "agents problem", "note add", "log add", "transcripts", "transcripts list", "transcripts search", "transcripts read", "transcripts request":
 		return nil
 	case logName:
 		cmd.RunE = a.remoteExecutionLog

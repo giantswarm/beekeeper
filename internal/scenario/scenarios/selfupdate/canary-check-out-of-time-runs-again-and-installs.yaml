@@ -1,0 +1,75 @@
+name: canary-check-out-of-time-runs-again-and-installs
+description: >
+  The desk runs release candidate 1 and installs candidate 2 by hand, as the
+  person did on a loaded host. One of the canary's checks of the staged
+  candidate outlasts its minute although the candidate is healthy: here it
+  is capacity, whose Codex usage request does not answer, so its reader
+  waits for its timeout of 90 seconds (the default). Live, it was
+  supervisor status at a load of 40 on 8 cores, slower than a minute. The
+  running release then runs the same check, which passes, and the candidate
+  runs it again within twice the running release's time, a minute at least,
+  and passes too: the update says so and installs candidate 2. The release
+  is not skipped. A fixed minute killed the check and refused every
+  healthy candidate on such a host, the loop's own self-update as well.
+issue: https://github.com/giantswarm/beekeeper/issues/3852
+flow: selfupdate
+tags: [selfupdate, release, canary, capacity]
+timeout: 240s
+
+given:
+  desk:
+    config:
+      github: {probeRepo: example/app}
+      capacity:
+        ceiling: 2
+        providers:
+          codex: {ceiling: 2, timeout: 90s}
+  releases:
+    installed: v1.0.0-rc.1
+    published: [v1.0.0-rc.2]
+  github:
+    repositories:
+      - name: example/app
+  harness:
+    usage:
+      codex:
+        session: 10
+        week: 23
+        # The first usage request, the staged candidate's capacity check,
+        # never answers; the requests after it are answered.
+        fail: {after: 0, times: 1, hang: true}
+  calls:
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    - program: journalctl
+      respond: {stdout: ""}
+
+when:
+  - name: running
+    run: {args: [version]}
+    expect:
+      - output: {matches: '^beekeeper v1\.0\.0-rc\.1\b'}
+  # As the person ran it: no dry-run comparison, the canary checks still
+  # apply.
+  - name: install
+    run: {args: [self-update, --version, v1.0.0-rc.2, --allow-loop-regression]}
+    expect:
+      - exit: 0
+      - output:
+          contains:
+            - "Canary capacity ran out of its 1m0s deadline; the running release's same check took "
+            - "so it runs again within 1m0s."
+            - "Verified the signature and updated /work/bin/beekeeper from v1.0.0-rc.1 to v1.0.0-rc.2."
+          not_contains: ["Skipping v1.0.0-rc.2"]
+      # The candidate's request that never answered, then the running
+      # release's, which was answered.
+      - calls: {program: codex, args: [app-server], min: 2}
+  - name: installed
+    run: {args: [version]}
+    expect:
+      - output: {matches: '^beekeeper v1\.0\.0-rc\.2\b'}
+
+then:
+  - {step: installed, exit: 0}
+  - events: {not_contains: [self-update.canary]}

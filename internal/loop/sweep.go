@@ -1,6 +1,7 @@
 package loop
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -186,6 +188,35 @@ func (l *Loop) SweepPulls(ctx context.Context, in superloop.Input, tracked []str
 	// Least recently read first: with a read bound per pass, every pull
 	// request gets its turn.
 	slices.SortStableFunc(out, func(a, b string) int { return l.Pulls[a].At.Compare(l.Pulls[b].At) })
+	return out
+}
+
+// markElsewhere says which pull requests of in.Ownerless another desk's
+// worker opened (superloop.Input.Elsewhere): another desk's live claim on an
+// issue one serves. Only those whose green head awaits its first review are
+// read, each issue's comments with their ETag, so an unchanged thread costs
+// nothing; one that cannot be read leaves its pull request to the sweep's
+// wait.
+func (l *Loop) markElsewhere(ctx context.Context, in superloop.Input) map[string]string {
+	out := map[string]string{}
+	for _, ref := range superloop.AwaitingFirstReview(in) {
+		p := in.Pulls[ref]
+		for _, issue := range superloop.PullIssues(ref, p) {
+			says, err := l.Host.OtherDeskClaim(ctx, issue)
+			if err != nil {
+				l.SayOnce("claims "+issue, "SUPERVISOR SWEEP cannot read the claims of %s (%v): %s waits for the sweep", issue, err, ref)
+				continue
+			}
+			l.ClearSaid("claims " + issue)
+			if says == "" {
+				continue
+			}
+			out[ref] = says + " on " + issue
+			l.SayOnce("elsewhere "+ref+"@"+p.Head, "SUPERVISOR SWEEP %s is the pull request of another desk's worker (%s on %s), which parks on its own desk: the loop reviews its green head %s now",
+				cmp.Or(p.URL, ref), says, issue, gate.ShortSHA(p.Head))
+			break
+		}
+	}
 	return out
 }
 

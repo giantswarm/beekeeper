@@ -52,7 +52,7 @@ func LookupVersion(ctx context.Context, version string) (Release, error) {
 	if err != nil {
 		return Release{}, err
 	}
-	client, err := github.NewClient(github.WithAuthToken(token))
+	client, err := apiClient(token)
 	if err != nil {
 		return Release{}, err
 	}

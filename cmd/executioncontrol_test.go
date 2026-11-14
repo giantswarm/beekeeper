@@ -186,6 +186,7 @@ func TestExecutionCoordinatorRefusesWrongIdentityAndLiveStop(t *testing.T) {
 func TestExecutionParkKeepsReviewEvidence(t *testing.T) {
 	a, r := executionTestApp(t)
 	const pushed = "2222222222222222222222222222222222222222"
+	const invalidHead = "not-a-commit"
 	pr := sshTestRepository + "#7"
 	branch, repo, prHead := executionBranch(r.Ref), sshTestRepository, loopHead
 	draft := false
@@ -199,7 +200,7 @@ func TestExecutionParkKeepsReviewEvidence(t *testing.T) {
 		}
 		return fmt.Appendf(nil, `{"draft":%t,"head":{"ref":%q,"sha":%q,"repo":{"full_name":%q}}}`, draft, branch, prHead, repo), nil
 	}
-	park := func(p executionPark) string {
+	park := func(p executionPark, reasons ...string) string {
 		t.Helper()
 		var line string
 		if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
@@ -221,6 +222,14 @@ func TestExecutionParkKeepsReviewEvidence(t *testing.T) {
 		if !strings.Contains(line, parkReviewMode(got)) {
 			t.Fatalf("park %+v: %s", st.Agents[0].Park, line)
 		}
+		for _, reason := range reasons {
+			if !strings.Contains(line, "verification reason: "+reason) {
+				t.Fatalf("park missing reason %q: %s", reason, line)
+			}
+		}
+		if got != "" && strings.Contains(line, "verification reason:") {
+			t.Fatalf("verified park reported a failure: %s", line)
+		}
 		return got
 	}
 	n := reads
@@ -228,7 +237,7 @@ func TestExecutionParkKeepsReviewEvidence(t *testing.T) {
 		t.Fatalf("plain park recorded %q after %d reads", got, reads-n)
 	}
 	draft = true
-	if got := park(executionPark{On: pr, Waits: deskReviewWait, Head: loopHead}); got != "" {
+	if got := park(executionPark{On: pr, Waits: deskReviewWait, Head: loopHead}, parkDraftReason); got != "" {
 		t.Fatalf("draft park recorded %q", got)
 	}
 	draft = false
@@ -242,7 +251,7 @@ func TestExecutionParkKeepsReviewEvidence(t *testing.T) {
 		t.Fatalf("older host's park recorded %q", got)
 	}
 	// Unpublished commits on the workspace: a plain wait.
-	if got := park(executionPark{On: pr, Waits: deskReviewWait, Head: pushed}); got != "" {
+	if got := park(executionPark{On: pr, Waits: deskReviewWait, Head: pushed}, "published HEAD does not match the workspace HEAD"); got != "" {
 		t.Fatalf("park ahead of the published head recorded %q", got)
 	}
 	// A new push, then a re-park at it: the new head's review request.
@@ -253,23 +262,34 @@ func TestExecutionParkKeepsReviewEvidence(t *testing.T) {
 	// A host's own claim is no proof: another branch's pull request, a fork's
 	// or one in another repository is a plain wait.
 	branch = "feature"
-	if got := park(executionPark{On: pr, Waits: deskReviewWait, Head: pushed, ReviewHead: pushed}); got != "" {
+	if got := park(executionPark{On: pr, Waits: deskReviewWait, Head: pushed, ReviewHead: pushed}, "pull request head branch is not owned by this execution"); got != "" {
 		t.Fatalf("another branch's pull request recorded %q", got)
 	}
 	branch, repo = executionBranch(r.Ref), "fork/beekeeper"
-	if got := park(executionPark{On: pr, Waits: deskReviewWait, Head: pushed}); got != "" {
+	if got := park(executionPark{On: pr, Waits: deskReviewWait, Head: pushed}, "pull request head repository does not match the target repository"); got != "" {
 		t.Fatalf("a fork's pull request recorded %q", got)
 	}
 	repo = sshTestRepository
 	n = reads
-	if got := park(executionPark{On: "o/other#7", Waits: deskReviewWait, Head: pushed}); got != "" || reads != n {
+	if got := park(executionPark{On: "o/other#7", Waits: deskReviewWait, Head: pushed}, "target repository does not match the execution repository"); got != "" || reads != n {
 		t.Fatalf("another repository's pull request recorded %q after %d reads", got, reads-n)
 	}
 	if got := park(executionPark{Waits: "no target"}); got != "" || reads != n {
 		t.Fatalf("a park without a target recorded %q", got)
 	}
+	if got := park(executionPark{On: pr, Waits: deskReviewWait, Head: invalidHead}, "workspace HEAD is not a full commit ID"); got != "" || reads != n {
+		t.Fatalf("an invalid workspace head recorded %q after %d reads", got, reads-n)
+	}
+	prHead = invalidHead
+	if got := park(executionPark{On: pr, Waits: deskReviewWait, Head: pushed}, "GitHub pull request response has no valid head commit"); got != "" {
+		t.Fatalf("an invalid published head recorded %q", got)
+	}
+	executionReviewGH = func(context.Context, ...string) ([]byte, error) { return []byte("invalid JSON"), nil }
+	if got := park(executionPark{On: pr, Waits: deskReviewWait, Head: pushed}, "GitHub pull request response could not be decoded"); got != "" {
+		t.Fatalf("an invalid pull response recorded %q", got)
+	}
 	executionReviewGH = func(context.Context, ...string) ([]byte, error) { return nil, errors.New("unreachable") }
-	if got := park(executionPark{On: pr, Waits: deskReviewWait, Head: pushed}); got != "" {
+	if got := park(executionPark{On: pr, Waits: deskReviewWait, Head: pushed}, "GitHub pull request lookup failed"); got != "" {
 		t.Fatalf("an unread pull request recorded %q", got)
 	}
 }
@@ -325,8 +345,62 @@ func TestExecutionResumeEndsTheWorkersOwnPark(t *testing.T) {
 	}
 }
 
-func TestExecutionRefusesMismatchedParkTarget(t *testing.T) {
-	for _, waits := range []string{"merge hold lifting", "gate run completion"} {
+// TestExecutionMoveHandsOnItsPublication: a host worker that published its
+// work and then asks for the coordinator (agents move) hands the fresh
+// worker there the branch, head and pull request it published, and that
+// pull request stays on the coordinator beside the issue it serves, also
+// when no park or desk review named it
+// (https://github.com/giantswarm/beekeeper/issues/3900).
+//
+// control: none: agents move and its execution control are new, so the
+// merge base cannot build this test; the scenario
+// regression/host-worker-moves-its-task-to-the-coordinator fails on the base
+func TestExecutionMoveHandsOnItsPublication(t *testing.T) {
+	a, r := executionTestApp(t)
+	pull := "https://github.com/" + sshTestRepository + "/pull/7"
+	branch := executionBranch(r.Ref)
+	var line string
+	err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Starts[0].Execution.Published = &state.ExecutionPublication{At: a.now, Branch: branch, Head: loopHead, URL: pull}
+		var evs []state.Event
+		var err error
+		line, evs, err = a.applyExecutionControl(context.Background(), st, st.Agents[0].Party, execution.ControlRequest{Operation: execution.ControlMove, Data: mustExecutionJSON(t, executionMove{Why: "the proof needs the coordinator's data"})})
+		return evs, err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(line, "on the coordinator") {
+		t.Fatalf("move reply %q", line)
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := st.Agents[0].Park
+	if p == nil || len(p.Continuation) != 1 {
+		t.Fatalf("park %+v, want one queued continuation", p)
+	}
+	for _, want := range []string{branch, loopHead, pull} {
+		if !strings.Contains(p.Continuation[0], want) {
+			t.Fatalf("continuation %q does not name %s", p.Continuation[0], want)
+		}
+	}
+	for _, ref := range []string{sshTestRepository + "#1711", sshTestRepository + "#7"} {
+		if _, ok := st.LocalTaskFor(ref); !ok {
+			t.Fatalf("%s carries no mark to stay on the coordinator: %+v", ref, st.LocalTasks)
+		}
+	}
+	if rec, _ := executionRecord(st, r.Ref); rec == nil || !rec.Completed {
+		t.Fatalf("execution record %+v, want it completed", rec)
+	}
+}
+
+// TestExecutionParkReasonMaySayAnything: an SSH execution's park on a pull
+// request is recorded on it whatever its reason says; --on alone says what
+// a park waits on.
+func TestExecutionParkReasonMaySayAnything(t *testing.T) {
+	for _, waits := range []string{"the editor's held-still source", "merge hold lifting", "gate run completion"} {
 		t.Run(waits, func(t *testing.T) {
 			a, _ := executionTestApp(t)
 			err := a.store.Update(func(st *state.State) ([]state.Event, error) {
@@ -336,8 +410,15 @@ func TestExecutionRefusesMismatchedParkTarget(t *testing.T) {
 				})
 				return evs, err
 			})
-			if err == nil || !strings.Contains(err.Error(), "does not settle") {
-				t.Fatalf("mismatched park: %v", err)
+			if err != nil {
+				t.Fatalf("park refused: %v", err)
+			}
+			st, err := a.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if p := st.Agents[0].Park; p == nil || p.On != refOne || p.Waits != waits {
+				t.Fatalf("park %+v, want on %s waiting for %q", p, refOne, waits)
 			}
 		})
 	}

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
@@ -370,7 +369,7 @@ func (a *app) worktreeIdentity(ctx context.Context) (repo, head string) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	git := func(args ...string) string {
-		out, err := exec.CommandContext(ctx, "git", args...).Output() //nolint:gosec // fixed executable and typed arguments
+		out, err := proc.CommandContext(ctx, "git", args...).Output() //nolint:gosec // fixed executable and typed arguments
 		if err != nil {
 			return ""
 		}
@@ -773,7 +772,6 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 				h.Labs = a.heldLabs
 				h.LiveDirs = a.hookLiveDirs
 				h.WorktreeOwner = a.hookWorktreeOwner
-				h.ReviewWrite = a.hookReviewWrite
 				if !inSandbox() {
 					h.FreshLabs = a.freshLabKubeconfigs
 				}

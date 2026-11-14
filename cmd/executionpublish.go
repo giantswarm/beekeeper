@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"net/url"
 	"os"
-	"os/exec"
 	"path"
 	"path/filepath"
 	"slices"
@@ -21,8 +20,10 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/execution"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/loop"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -120,7 +121,7 @@ func runPublicationGit(ctx context.Context, dir string, identity []string, args 
 	// No detached maintenance either: it outlives the command and races the
 	// removal of the transfer directory.
 	prefix := []string{"-c", "core.hooksPath=" + os.DevNull, "-c", "core.fsmonitor=false", "-c", "maintenance.auto=false", "-c", "gc.auto=0", "-c", "protocol.allow=never", "-c", "protocol.https.allow=always", "-c", "protocol.file.allow=always", "-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential"}
-	c := exec.CommandContext(ctx, "git", append(prefix, args...)...) //nolint:gosec // fixed Git subcommands, validated commit/repository identities and component-owned paths; no shell
+	c := proc.CommandContext(ctx, "git", append(prefix, args...)...) //nolint:gosec // fixed Git subcommands, validated commit/repository identities and component-owned paths; no shell
 	c.Dir = dir
 	for _, kv := range os.Environ() {
 		if !strings.HasPrefix(kv, "GIT_") {
@@ -212,7 +213,7 @@ var publicationGHReasons = []struct{ match, reason string }{
 	{"HTTP 5", "GitHub answered with a server error"},
 	{"could not connect", publicationUnreachable},
 	{"connection", publicationUnreachable},
-	{timeoutComm, "GitHub did not answer in time"},
+	{gate.TimeoutComm, "GitHub did not answer in time"},
 }
 
 // publicationGHReason names why a gh call failed, never its raw output.

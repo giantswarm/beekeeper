@@ -18,6 +18,12 @@ data. One `DISK PRUNE` line says what it freed and kept and why. Under disk pres
 also prunes unused Docker images and reclaimable Docker build cache below their normal size caps,
 preserving running builds, containers, lab leases and recently tagged images.
 
+A cleanup scan lists remote branches once per shared Git repository and checks a worktree's
+publication with one graph query across those tips. Successful query results (including unpublished
+heads) are cached by HEAD, remote tips, shallow boundary and object-store metadata; a fetch or moved
+tip invalidates them. Trees without an ended task need no publication query. Status, locks and live
+references are still read again before removal. The cache is bounded and shared by cleanup runs.
+
 Negative Docker caps still disable that cleanup. If space remains below the start floor after
 pruning, the supervisor sends a `GUIDE PROBLEM` with free space, the floor and what remains; starts
 recover when disk recovers. `beekeeper disk prune` previews this step; `--apply` runs it. `beekeeper

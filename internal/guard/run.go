@@ -18,7 +18,6 @@ import (
 	"hash/fnv"
 	"io"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"regexp"
@@ -1055,7 +1054,7 @@ wait:
 			return 1, drain
 		}
 	}
-	var ee *exec.ExitError
+	var ee *proc.ExitError
 	if err != nil && !errors.As(err, &ee) {
 		logf("%v", err)
 		return 1, drain
@@ -1203,7 +1202,7 @@ func victims(unit string, since time.Time, rc int) []machine.OOMKill {
 
 // execve replaces this process with argv, as the shell's exec does.
 func execve(argv []string, logf func(string, ...any)) int {
-	path, err := exec.LookPath(argv[0])
+	path, err := proc.LookPath(argv[0])
 	if err != nil {
 		logf("%v", err)
 		return ExitNotFound

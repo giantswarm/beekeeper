@@ -11,8 +11,13 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/giantswarm/beekeeper/internal/gate"
+	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestGatedChildSignalExit(t *testing.T) {
 	for _, route := range []string{litDirect, "owned", litWatchStop} {
 		for _, signal := range []syscall.Signal{syscall.SIGTERM, syscall.SIGINT} {
@@ -31,14 +36,14 @@ func TestGatedChildSignalExit(t *testing.T) {
 					defer func() { os.Stderr = original }()
 					rc = runChild(argv, io.Discard)
 				} else {
-					var current atomic.Pointer[os.Process]
+					var current atomic.Pointer[proc.Child]
 					var stop atomic.Value
 					var gone atomic.Bool
 					if route == "watch stop" {
 						stop.Store(signal)
 						argv = []string{sleepComm, "30"}
 					}
-					rc = runSpec("", childSpec{Argv: argv, Env: os.Environ()}, stderr, stderr, &current, &stop, &gone)
+					rc = runSpec("", gate.ChildSpec{Argv: argv, Env: os.Environ()}, stderr, stderr, &current, &stop, &gone)
 				}
 				if want := 128 + int(signal); rc != want {
 					t.Fatalf("exit %d, want %d", rc, want)
@@ -47,7 +52,7 @@ func TestGatedChildSignalExit(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				prefix := GatePrefix + "ended by " + signalName(signal) + " after "
+				prefix := gate.GatePrefix + "ended by " + signalName(signal) + " after "
 				if !strings.HasPrefix(string(raw), prefix) {
 					t.Fatalf("missing signal diagnostic: %q", raw)
 				}

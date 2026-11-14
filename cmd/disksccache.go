@@ -193,7 +193,7 @@ func stopSccacheServers(pids []int) error {
 	for _, pid := range pids {
 		exe, err := os.Readlink(filepath.Join("/proc", strconv.Itoa(pid), "exe"))
 		if err != nil || strings.HasSuffix(exe, " (deleted)") {
-			if exe, err = proc.LookPath("sccache"); err != nil {
+			if exe, err = proc.LookTool("sccache"); err != nil {
 				errs = append(errs, err)
 				continue
 			}

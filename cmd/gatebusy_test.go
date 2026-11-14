@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 )
 
@@ -29,26 +30,29 @@ echo '`+mergedDoc+`'`)
 
 // busyGate is a running merge of o/r#7 with --update-branch under budget,
 // devctl's next run after a busy base pause later.
-func busyGate(t *testing.T, budget, pause time.Duration) *gateRun {
+func busyGate(t *testing.T, budget, pause time.Duration) *gate.GateRun {
 	t.Helper()
 	noSystemd(t)
-	was := busyPauses
-	busyPauses = []time.Duration{pause}
-	t.Cleanup(func() { busyPauses = was })
+	was := gate.BusyPauses
+	gate.BusyPauses = []time.Duration{pause}
+	t.Cleanup(func() { gate.BusyPauses = was })
 	stubGitHub(t, github.Open, "")
 	g := runningMerge(t, scratchRepo, config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}})
-	g.argv = mergeArgv(scratchRepo, "--update-branch")
-	g.cfg.Merge.BusyBudget = config.Duration{Duration: budget}
+	g.Argv = mergeArgv(scratchRepo, "--update-branch")
+	gateApp(g.Host).cfg.Merge.BusyBudget = config.Duration{Duration: budget}
 	return g
 }
 
 // Without --update-branch devctl's exit 3 is the caller's: devctl runs once.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestABehindMergeWithoutUpdateBranchRunsOnce(t *testing.T) {
 	count := busyDevctl(t, 99)
 	g := busyGate(t, time.Hour, 0)
-	g.argv = mergeArgv(scratchRepo)
+	g.Argv = mergeArgv(scratchRepo)
 	gateStdout(t)
-	if err := g.runMerge(); Code(err) != 3 {
+	if err := g.RunMerge(); Code(err) != 3 {
 		t.Fatalf("exit %d, want devctl's 3", Code(err))
 	}
 	if n := runs(t, count); n != 1 {

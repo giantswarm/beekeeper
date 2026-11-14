@@ -81,10 +81,14 @@ type FileStore struct {
 	stopRequested bool
 	eventsMu      sync.Mutex
 	events        []*cachedEventFile
+	// snapshot is the state.json snapshotFile names, decoded from
+	// snapshotRaw; snapshotElems are its arrays' elements, which the decode
+	// of the next replacement reuses where their bytes are unchanged.
 	snapshotMu    sync.Mutex
 	snapshotFile  os.FileInfo
 	snapshot      *State
-	snapshotSum   [32]byte
+	snapshotRaw   []byte
+	snapshotElems *snapshotElements
 
 	// outboxFile is the state file whose outbox outboxPendingSeen answers.
 	outboxMu          sync.Mutex

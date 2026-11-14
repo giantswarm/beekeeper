@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -33,7 +34,7 @@ func hungChild(t *testing.T, dir, repo string, pr int) int {
 	}
 	t.Cleanup(func() { _ = c.Process.Kill() })
 	go func() { _ = c.Wait() }()
-	base := mergeBase(dir, repo, pr)
+	base := gate.MergeBase(dir, repo, pr)
 	if err := os.MkdirAll(filepath.Dir(base), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -46,10 +47,10 @@ func hungChild(t *testing.T, dir, repo string, pr int) int {
 // stubPulls answers GitHub with each pull request's state by number.
 func stubPulls(t *testing.T, pulls map[int]github.Pull) {
 	t.Helper()
-	was, wait := pullState, judgeWait
-	t.Cleanup(func() { pullState, judgeWait = was, wait })
-	judgeWait = 0
-	pullState = func(_ context.Context, _ string, n int) (github.Pull, error) {
+	was, wait := gate.PullState, gate.JudgeWait
+	t.Cleanup(func() { gate.PullState, gate.JudgeWait = was, wait })
+	gate.JudgeWait = 0
+	gate.PullState = func(_ context.Context, _ string, n int) (github.Pull, error) {
 		if p, ok := pulls[n]; ok {
 			return p, nil
 		}
@@ -218,6 +219,9 @@ func TestLanesDropEndsAHungRun(t *testing.T) {
 
 // A long post-merge CircleCI wait stays alive while devctl reports progress,
 // even after the watch's historical hung threshold has elapsed.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestWatchKeepsActiveReleasePipeline(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
 	now := relayNow
@@ -228,7 +232,7 @@ func TestWatchKeepsActiveReleasePipeline(t *testing.T) {
 	w.lastHungCheck = now.Add(-time.Second)
 	stubPulls(t, map[int]github.Pull{1: {State: github.Merged, MergedAt: started}})
 	child := hungChild(t, w.store.Dir(), hungRepo, 1)
-	base := mergeBase(w.store.Dir(), hungRepo, 1)
+	base := gate.MergeBase(w.store.Dir(), hungRepo, 1)
 	p := newMergeProgress(base, []string{"--release-timeout=30m"}, started)
 	p.observe("release: waiting for the release of abc\n", started.Add(time.Minute))
 	p.observe("pipeline 123: workflow build running\n", now.Add(-time.Minute))

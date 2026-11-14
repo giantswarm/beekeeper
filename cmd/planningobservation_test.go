@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -97,6 +98,8 @@ func TestBacklogPlanningBoundsAdmissionAndRotates(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestDeliveryIssueReadsLeaveReleasePlanningTime(t *testing.T) {
 	a, _ := supervisorApp(t)
 	now := a.timeNow()
@@ -122,7 +125,7 @@ func TestDeliveryIssueReadsLeaveReleasePlanningTime(t *testing.T) {
 			t.Fatal("issue reads left no release observation allowance")
 		}
 		releaseRead = true
-		return verdictAvailable, deliveryAvailableTag, nil
+		return gate.VerdictAvailable, deliveryAvailableTag, nil
 	}
 	l := &loop.Loop{Host: a, Said: map[string]bool{}}
 	in := superloop.Input{Now: now, Pulls: map[string]superloop.Pull{planningPull: {Ref: planningPull, State: superloop.Merged, MergeCommit: loopHead}}}

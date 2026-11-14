@@ -7,15 +7,17 @@ package loopworkflow
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
 const (
@@ -108,16 +110,17 @@ func traceGit() int {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if os.Getenv("FIXTURE_CANDIDATE") != "" && slices.Contains(os.Args[1:], "get-url") && slices.Contains(os.Args[1:], originRemote) {
-		check := exec.CommandContext(ctx, os.Getenv("FIXTURE_GIT"), os.Args[1:]...) //nolint:gosec // scratch fixture git check
+		check := proc.CommandContext(ctx, os.Getenv("FIXTURE_GIT"), os.Args[1:]...) //nolint:gosec // scratch fixture git check
 		if check.Run() == nil {
 			fmt.Println("https://github.com/fixture/project.git")
 			return 0
 		}
 	}
-	c := exec.CommandContext(ctx, os.Getenv("FIXTURE_GIT"), os.Args[1:]...) //nolint:gosec // scratch fixture git wrapper
+	c := proc.CommandContext(ctx, os.Getenv("FIXTURE_GIT"), os.Args[1:]...) //nolint:gosec // scratch fixture git wrapper
 	c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
 	if err := c.Run(); err != nil {
-		if e, ok := err.(*exec.ExitError); ok {
+		var e *proc.ExitError
+		if errors.As(err, &e) {
 			return e.ExitCode()
 		}
 		return 1
@@ -297,7 +300,7 @@ func serveGitHub() int {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		git := func(a ...string) string {
-			c := exec.CommandContext(ctx, os.Getenv("FIXTURE_GIT"), a...) //nolint:gosec // scratch fixture git
+			c := proc.CommandContext(ctx, os.Getenv("FIXTURE_GIT"), a...) //nolint:gosec // scratch fixture git
 			c.Dir = filepath.Join(root, serverDir)
 			out, err := c.CombinedOutput()
 			if err != nil {
@@ -434,7 +437,7 @@ func serveClaude() int {
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
 			body := "Desk review (opus): approved\nHead reviewed: `" + head + "`"
-			c := exec.CommandContext(ctx, filepath.Join(root, "bin", ghCmd), ghPR, "review", "1", "--repo", fixtureRepo, "--comment", "--body", body) //nolint:gosec // scratch fixture reviewer command
+			c := proc.CommandContext(ctx, filepath.Join(root, "bin", ghCmd), ghPR, "review", "1", "--repo", fixtureRepo, "--comment", "--body", body) //nolint:gosec // scratch fixture reviewer command
 			c.Env = append(os.Environ(), "FIXTURE_DIR="+root)
 			if out, err := c.CombinedOutput(); err != nil {
 				panic(fmt.Sprintf("fixture reviewer gh pr review: %v: %s", err, out))

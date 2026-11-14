@@ -80,26 +80,6 @@ func validateOverlapPark(on, waits string) error {
 	return nil
 }
 
-// validateParkWait rejects a GitHub target when the stated condition is
-// independent of that reference's lifecycle. Keep this shared by local and
-// remote parks and by the watch, which also reads parks from older releases.
-func validateParkWait(on, waits string) error {
-	if _, ok := parseRef(on); !ok {
-		return nil
-	}
-	words := strings.FieldsFunc(strings.ToLower(waits), func(r rune) bool {
-		return r < 'a' || r > 'z'
-	})
-	text := " " + strings.Join(words, " ") + " "
-	if strings.Contains(text, " hold ") || strings.Contains(text, " held ") || strings.Contains(text, " release window ") {
-		return refused("%s does not settle a hold wait; park on --on hold:<target>, using the target named by the gate refusal or beekeeper hold", on)
-	}
-	if strings.Contains(text, " gate run ") || strings.Contains(text, " gate runs ") || strings.Contains(text, " gated run ") {
-		return refused("%s does not settle a gate run wait; the target is the run listed by beekeeper gate runs; park without --on and arrange an explicit wake for that run's outcome", on)
-	}
-	return nil
-}
-
 func (a *app) agentParkCmd() *cobra.Command {
 	var on, postMerge string
 	var checks, external bool
@@ -125,10 +105,11 @@ alert:<name> waits for a firing alert (a bare alertname or installation/alertnam
 lease claim --park parks on a lease. The supervisor loop settles alert waits
 and continues parked tasks with fresh workers.
 
-A GitHub target is refused when the wait names a hold or a gate run. Use
-hold:<target> for a hold. Gate runs have no automatic park target: identify
-the run with gate runs, park without --on and arrange an explicit wake on
-its outcome.
+--on alone says what a park waits on; the reason is free text and may say
+anything. A park on owner/repo#n is settled by that issue or pull request,
+whatever its reason says. A hold is hold:<target>. Gate runs have no
+automatic park target: identify the run with gate runs, park without --on
+and arrange an explicit wake on its outcome.
 
 GitHub targets are resolved before the park is recorded; a confirmed unknown,
 closed or merged target is refused. If GitHub cannot be read, the park is
@@ -168,7 +149,8 @@ a new publication asks for that head's review. A local roster worker's explicit
 "desk review" request whose publication cannot be verified is saved with its
 worktree and retried by the supervisor loop after GitHub access recovers. Until
 verification succeeds it grants no review or merge authority. Other unverified
-parks record a plain wait. The command says which it recorded. A bot's pull request the desk
+parks record a plain wait. The command says which it recorded and why verification
+failed, including for SSH workers and in --json's message. A bot's pull request the desk
 did not open gets the same review once its login is in supervisor.ownership.bots. Request review in one shell call:
 cd "<worktree>" && beekeeper agents park --on <owner/repo#n> "desk review". A new task or agents idle ends the
 park. --as <name> parks the registered agent of that name, whatever
@@ -222,9 +204,6 @@ agents wake: its task is that message's first line.`,
 					}
 					on = refName(r)
 				}
-			}
-			if err := validateParkWait(on, waits); err != nil {
-				return err
 			}
 			if err := validateOverlapPark(on, waits); err != nil {
 				return err
@@ -297,9 +276,6 @@ func (a *app) park(me state.Party, on, waits string, postMerge ...string) (strin
 }
 
 func (a *app) parkWithWait(me state.Party, on, waits string, external bool, postMerge ...string) (string, error) {
-	if err := validateParkWait(on, waits); err != nil {
-		return "", err
-	}
 	if err := validateOverlapPark(on, waits); err != nil {
 		return "", err
 	}
@@ -834,9 +810,6 @@ func (w *watcher) settledParks(ctx context.Context, st *state.State) []settledPa
 		p := ag.Park
 		if p == nil || p.Checks || p.On == "" || !p.Resumable.IsZero() {
 			continue
-		}
-		if validateParkWait(p.On, p.Waits) != nil {
-			continue // A PR event cannot settle this condition.
 		}
 		if p.ReviewHead != "" && p.PostMerge != nil && slices.ContainsFunc(st.Agents, func(registered state.Agent) bool { return registered.Is(ag.Party) }) {
 			continue

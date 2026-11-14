@@ -129,7 +129,7 @@ func Decide(o Observed, s Signals) (verdict, reason string) {
 	case s.Failure != "":
 		return RollBack, s.Failure
 	case o.ProbeFailures >= ProbeFailures:
-		reason := fmt.Sprintf("isolated workflow probe failed %d times", o.ProbeFailures)
+		reason := fmt.Sprintf("candidate executable probe failed %d times", o.ProbeFailures)
 		if o.ProbeFailure != "" {
 			reason += ": " + o.ProbeFailure
 		}

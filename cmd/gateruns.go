@@ -14,50 +14,25 @@ import (
 	"github.com/spf13/cobra"
 
 	clk "github.com/giantswarm/beekeeper/internal/clock"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
-const (
-	// runInfoExt is the extension of what gate runs shows of a detached run
-	// (runInfo), which its merge-child writes before it starts the command.
-	runInfoExt = ".run"
-	// stoppedExt marks a run gate stop stopped, with who did.
-	stoppedExt = ".stopped"
-)
-
-// runInfo is what gate runs shows of a detached run: the command (never its
-// environment, which carries tokens), its owner, its gate and its start.
-type runInfo struct {
-	Command        string      `json:"command"`
-	Owner          state.Party `json:"owner,omitzero"`
-	Gate           int         `json:"gate,omitempty"`
-	Started        time.Time   `json:"started"`
-	ProcessStarted time.Time   `json:"processStarted,omitzero"`
-}
-
 // writeRunInfo leaves i for gate runs in base.run, written whole.
-func writeRunInfo(base string, i runInfo) {
+func writeRunInfo(base string, i gate.RunInfo) {
 	raw, _ := json.Marshal(i)
-	if os.WriteFile(base+runInfoExt+".tmp", raw, 0o600) == nil { //nolint:gosec // the gate's own file
-		_ = os.Rename(base+runInfoExt+".tmp", base+runInfoExt) //nolint:gosec // as above
+	if os.WriteFile(base+gate.RunInfoExt+".tmp", raw, 0o600) == nil { //nolint:gosec // the gate's own file
+		_ = os.Rename(base+gate.RunInfoExt+".tmp", base+gate.RunInfoExt) //nolint:gosec // as above
 	}
-}
-
-// readRunInfo reads what the run at base left for gate runs, false when it
-// left nothing (a run started by an older release).
-func readRunInfo(base string) (runInfo, bool) {
-	var i runInfo
-	raw, err := os.ReadFile(base + runInfoExt) //nolint:gosec // the gate's own file
-	return i, err == nil && json.Unmarshal(raw, &i) == nil
 }
 
 // readStopped is who stopped the run at base with gate stop, zero for
 // nobody.
 func readStopped(base string) state.Party {
 	var p state.Party
-	if raw, err := os.ReadFile(base + stoppedExt); err == nil { //nolint:gosec // the gate's own file
+	if raw, err := os.ReadFile(base + gate.StoppedExt); err == nil { //nolint:gosec // the gate's own file
 		_ = json.Unmarshal(raw, &p)
 	}
 	return p
@@ -91,7 +66,7 @@ type detachedRun struct {
 
 // Phases of a detached run besides the merge phases.
 const (
-	// runLeft is a wait its call left to run on outside it (leftExt).
+	// runLeft is a wait its call left to run on outside it (gate.LeftExt).
 	runLeft = "left"
 	runDead = "dead"
 )
@@ -108,7 +83,7 @@ func detachedRuns(dir string, st *state.State, t *proc.Table) []detachedRun {
 		if m.Run != "" {
 			covered[m.Run] = true
 		}
-		base := mergeBase(dir, m.Repo, m.PR)
+		base := gate.MergeBase(dir, m.Repo, m.PR)
 		r := detachedRun{ID: filepath.Base(base), Kind: runMerge, Phase: m.Phase, Repo: m.Repo, PR: m.PR,
 			Owner: m.By.Name, Session: m.By.Session, base: base}
 		switch {
@@ -124,7 +99,7 @@ func detachedRuns(dir string, st *state.State, t *proc.Table) []detachedRun {
 		if m.Phase == state.Waiting {
 			info = m.Run
 		}
-		if i, ok := readRunInfo(info); ok {
+		if i, ok := gate.ReadRunInfo(info); ok {
 			r.Command = i.Command
 		}
 		r.Devctl = devctlUnder(t, r.PID)
@@ -144,7 +119,7 @@ func detachedRuns(dir string, st *state.State, t *proc.Table) []detachedRun {
 		if leftToRunOn(base) {
 			r.Phase = runLeft
 		}
-		if i, ok := readRunInfo(base); ok {
+		if i, ok := gate.ReadRunInfo(base); ok {
 			r.Command, r.Owner, r.Session, r.Since = i.Command, i.Owner.Name, i.Owner.Session, i.Started
 		} else if info, err := os.Stat(f); err == nil {
 			r.Since = info.ModTime().UTC()
@@ -296,9 +271,9 @@ func (a *app) gateStop(by state.Party, id string) (string, error) {
 	return "stopped " + id + ": " + strings.Join(said, "; "), nil
 }
 
-// stopWait ends the wait r as by: its merge-child, which passes the SIGTERM
+// gate.StopWait ends the wait r as by: its merge-child, which passes the SIGTERM
 // on to devctl, then devctl by SIGKILL when the merge-child still runs
-// stopWait later. It signals only the pid the run recorded, and the devctl
+// gate.StopWait later. It signals only the pid the run recorded, and the devctl
 // processes under it.
 func (a *app) stopWait(by state.Party, r detachedRun) (string, error) {
 	t, err := plat.Machine.Processes()
@@ -309,26 +284,26 @@ func (a *app) stopWait(by state.Party, r detachedRun) (string, error) {
 		return "", refused("%s ended before the stop: beekeeper gate runs lists what runs", r.ID)
 	}
 	raw, _ := json.Marshal(by)
-	if err := os.WriteFile(r.base+stoppedExt, raw, 0o600); err != nil { //nolint:gosec // the gate's own file
+	if err := os.WriteFile(r.base+gate.StoppedExt, raw, 0o600); err != nil { //nolint:gosec // the gate's own file
 		return "", err
 	}
 	if err := endChild(r.PID); err != nil {
 		return "", err
 	}
 	how := "is ended"
-	if !waitGone(r.PID, stopWait) {
+	if !gate.WaitGone(r.PID, gate.StopWait) {
 		killed := 0
 		if t, err := plat.Machine.Processes(); err == nil {
 			for _, p := range t.Descendants(r.PID) {
 				if p.Comm == merge.Tool {
-					signalPID(p.PID, syscall.SIGKILL)
+					gate.SignalPID(p.PID, syscall.SIGKILL)
 					killed++
 				}
 			}
 		}
-		how = fmt.Sprintf("did not end within %s, its devctl was killed", stopWait)
-		if killed == 0 || !waitGone(r.PID, stopWait) {
-			how = fmt.Sprintf("still runs %s after SIGTERM", 2*stopWait)
+		how = fmt.Sprintf("did not end within %s, its devctl was killed", gate.StopWait)
+		if killed == 0 || !gate.WaitGone(r.PID, gate.StopWait) {
+			how = fmt.Sprintf("still runs %s after SIGTERM", 2*gate.StopWait)
 		}
 	}
 	owner := cmp.Or(r.Owner, "nobody")
@@ -351,7 +326,7 @@ func runProcessAlive(base string, pid int, t *proc.Table) bool {
 	if p == nil {
 		return false
 	}
-	i, _ := readRunInfo(base)
+	i, _ := gate.ReadRunInfo(base)
 	if !i.ProcessStarted.IsZero() {
 		return p.Start.Equal(i.ProcessStarted)
 	}
@@ -365,7 +340,7 @@ func runProcessAlive(base string, pid int, t *proc.Table) bool {
 		return false
 	}
 	for n, arg := range p.Args {
-		if arg == mergeChildCmd && n+1 < len(p.Args) && p.Args[n+1] == base {
+		if arg == gate.MergeChildCmd && n+1 < len(p.Args) && p.Args[n+1] == base {
 			return true
 		}
 	}
@@ -386,11 +361,11 @@ func cleanupDeadRuns(dir string, st *state.State, now time.Time) {
 		if runProcessAlive(r.base, r.PID, nil) {
 			continue
 		}
-		target := filepath.Join(dir, keptOutputs, r.ID+"-dead-"+now.UTC().Format("20060102T150405Z"))
+		target := filepath.Join(dir, gate.KeptOutputs, r.ID+"-dead-"+now.UTC().Format("20060102T150405Z"))
 		if os.MkdirAll(target, 0o700) != nil {
 			continue
 		}
-		for _, ext := range mergeExts {
+		for _, ext := range gate.MergeExts {
 			_ = os.Rename(r.base+ext, filepath.Join(target, r.ID+ext))
 		}
 	}

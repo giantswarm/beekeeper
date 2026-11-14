@@ -168,7 +168,7 @@ proof remain separate work.
 `beekeeper sim` holds the model of how an issue is meant to flow and compares it with the
 event log. The model: a worker starts when a busy slot is free (`capacity.ceiling`, reviewers
 up to `capacity.reviewHeadroom` more) and pushes a pull request; CI runs; once it is green the
-loop starts a reviewer, which posts findings for the implementing worker; the
+loop starts a reviewer, which fixes its own findings on the branch or asks for changes; the
 repository's lane merges one pull request at a time (`devctl pr merge` with the merge-result
 check); the release rolls out. The loop drives every step but the worker's and the reviewer's
 turns, so while it is down nothing starts, is reviewed or merges. Each stage has a median

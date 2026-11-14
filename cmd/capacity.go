@@ -19,6 +19,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/guard"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/machine"
 	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/platform"
@@ -186,6 +187,8 @@ func (a *app) resolveProvidersCapacityForModel(ctx context.Context, st *state.St
 		// follow the serving mode of the model it serves.
 		readings[name] = a.serveModeReadings(ctx, name, p)
 	}
+	withPaceOffs(readings, st, now)
+	a.withProgressPace(readings)
 	h := a.readHeadroom(ctx, k, a.watchSwap())
 	choicesCap := capacity.FilterChoiceModel(k, wantModel)
 	v := capacity.BuildProvidersCapacity(c, pa, choicesCap, readings, h, builds, exclude, kind, now)
@@ -311,7 +314,8 @@ behind pace (with remaining
 breaking ties), with self-hosted choices as fallbacks. Each
 provider must have room, its 5-hour window below its threshold and its 7-day use
 within the weekly cap and, for a worker start, at or under the even pace of its
-7-day window.
+7-day window, unless the person's pace override of the provider (capacity pace
+off, shown on its line) lets it run ahead until a time.
 If built-in Codex usage is unreadable, its last good windows still bound starts;
 without valid saved windows, its configured ceiling applies. The watch reports
 the failure to the guide. Explicit account, spend and rate-limit stops remain
@@ -399,6 +403,9 @@ capacity reads the roster, the sessions and the machine and changes
 nothing; it makes no GitHub call.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if err := a.validateProgressItem(); err != nil {
+				return err
+			}
 			if host != "" && host != executionLocal {
 				h, err := a.executionHost(host)
 				if err != nil {
@@ -502,6 +509,7 @@ nothing; it makes no GitHub call.`,
 			return nil
 		},
 	}
+	c.Flags().StringVar(&a.progressItem, loop.BoardProgressFlag, "", "supervisor recovery of a stalled board item")
 	c.Flags().BoolVar(&builds, buildsFlag, false, "the verdict for a start that builds, which waits for a free build slot")
 	c.Flags().StringVar(&host, "host", "", "execution host selector; default local")
 	c.Flags().StringVar(&model, "model", "", "filter capacity.choices to a model")
@@ -510,7 +518,7 @@ nothing; it makes no GitHub call.`,
 	c.Flags().BoolVar(&review, reviewFlag, false, "the verdict for a review start, using reserved review headroom")
 	c.Flags().BoolVar(&ofSelfHosted, reviewOfSelfHostedFlag, false, "the verdict for the review of a self-hosted model's work: no self-hosted provider")
 	c.Flags().StringSliceVar(&exclude, excludeFlag, nil, "exclude a choice by model, harness/model, provider or harness (repeatable or comma-separated)")
-	c.AddCommand(a.capacityPickCmd())
+	c.AddCommand(a.capacityPickCmd(), a.capacityPaceCmd())
 	return c
 }
 

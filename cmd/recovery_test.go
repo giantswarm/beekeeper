@@ -176,7 +176,7 @@ func TestRecoveryRollsBackAFailedProbeOnAnIdleDesk(t *testing.T) {
 		t.Fatalf("installed %q", got)
 	}
 	j := journal(t, c)
-	want := "isolated workflow probe failed 3 times: the origin does not show the reviewed merge"
+	want := "candidate executable probe failed 3 times: the origin does not show the reviewed merge"
 	if j.Observed.Reason != want || j.Quarantine[j.Candidate.Digest] != want {
 		t.Fatalf("rollback lost probe cause: %+v", j)
 	}

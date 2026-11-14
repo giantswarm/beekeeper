@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -21,7 +22,7 @@ import (
 // document, when it printed one, and its exit code.
 func endDevctl(t *testing.T, a *app, repo string, pr int, doc, rc string) {
 	t.Helper()
-	base := mergeBase(a.store.Dir(), repo, pr)
+	base := gate.MergeBase(a.store.Dir(), repo, pr)
 	if err := os.MkdirAll(filepath.Dir(base), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -59,6 +60,9 @@ func indexOf(lines []string, prefix string) int {
 // and its devctl on, and starts only once the merge merged, its release
 // candidate cut and the lane settled (a candidate the installation does
 // not follow settles it without a roll); the second waits behind the first.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAPromotionWaitsForTheRunningMergeAheadToSettle(t *testing.T) {
 	noSystemd(t)
 	stubGitHub(t, github.Open, "")
@@ -77,9 +81,9 @@ func TestAPromotionWaitsForTheRunningMergeAheadToSettle(t *testing.T) {
 		{Key: "flux-giantswarm/giantswarm-repo-manager", Chart: "giantswarm-repo-manager", Version: "0.33.4", Ready: true, Range: ">=0.17.0 <1.0.0"},
 		{Key: "flux-giantswarm/giantswarm-platform-manager", Chart: "giantswarm-platform-manager", Version: "0.70.0", Ready: true, Range: ">=0.17.0 <1.0.0"},
 	}
-	read := readHelmReleases
-	t.Cleanup(func() { readHelmReleases = read })
-	readHelmReleases = func(context.Context, config.Lane) ([]merge.HelmRelease, error) { return hrs, nil }
+	read := gate.ReadHelmReleases
+	t.Cleanup(func() { gate.ReadHelmReleases = read })
+	gate.ReadHelmReleases = func(context.Context, config.Lane) ([]merge.HelmRelease, error) { return hrs, nil }
 
 	now := time.Now()
 	me := state.Party{Session: "s1", Name: ownerName}
@@ -100,37 +104,37 @@ func TestAPromotionWaitsForTheRunningMergeAheadToSettle(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	gateOf := func(repo string) *gateRun {
+	gateOf := func(repo string) *gate.GateRun {
 		st, _ := a.store.Read()
 		i := slices.IndexFunc(st.Merges, func(m state.Merge) bool { return m.Repo == repo })
 		argv := promoteArgv()
 		argv[len(argv)-1] = repo
-		return &gateRun{app: a, ctx: context.Background(), argv: argv, repo: repo,
-			lane: a.cfg.LaneOf(repo), me: st.Merges[i].By, pid: os.Getpid(), queued: true, placed: true, from: st.Merges[i].PID}
+		return &gate.GateRun{Host: a, Ctx: context.Background(), Argv: argv, Repo: repo,
+			Lane: a.cfg.LaneOf(repo), Me: st.Merges[i].By, Pid: os.Getpid(), Queued: true, Placed: true, From: st.Merges[i].PID}
 	}
 
 	second := gateOf(platMgr)
-	if why, err := second.step(); err != nil || !strings.HasPrefix(why, "position 2 in lane portal-tools behind "+backstage+"#2885") {
+	if why, err := second.Step(); err != nil || !strings.HasPrefix(why, "position 2 in lane portal-tools behind "+backstage+"#2885") {
 		t.Fatalf("the second promotion: %q, %v", why, err)
 	}
 	first := gateOf(repoMgr)
 	for range 2 {
-		why, err := first.step()
+		why, err := first.Step()
 		if err != nil || why != "next in lane portal-tools behind the running "+backstage+"#2885 (\"ahead\", since "+clock(a.now, now.Add(-15*time.Minute))+")" {
 			t.Fatalf("while the merge ahead runs: %q, %v", why, err)
 		}
 	}
-	if i := indexOf(verbsOf(t, a), verbPromoting); i >= 0 {
+	if i := indexOf(verbsOf(t, a), gate.VerbPromoting); i >= 0 {
 		t.Fatalf("promoted while the merge ahead runs: %v", verbsOf(t, a))
 	}
 
 	// The merge's devctl ends: merged, its candidate cut.
 	endDevctl(t, a, backstage, 2885, `{"mergeCommitSha":"abc","release":{"verdict":"available","tag":"v2.95.1-rc.1"}}`, "0")
-	if why, err := first.step(); err != nil || why != "" {
+	if why, err := first.Step(); err != nil || why != "" {
 		t.Fatalf("after the merge ahead settled: %q, %v", why, err)
 	}
 	lines := verbsOf(t, a)
-	merged, promoting := indexOf(lines, verbMerged+" "+backstage+"#2885 exit 0, release v2.95.1-rc.1"), indexOf(lines, verbPromoting+" "+repoMgr)
+	merged, promoting := indexOf(lines, verbMerged+" "+backstage+"#2885 exit 0, release v2.95.1-rc.1"), indexOf(lines, gate.VerbPromoting+" "+repoMgr)
 	if merged < 0 || promoting < merged {
 		t.Fatalf("the promotion did not start after the merge ahead was recorded merged (%d, %d):\n%s", merged, promoting, strings.Join(lines, "\n"))
 	}
@@ -143,6 +147,9 @@ func TestAPromotionWaitsForTheRunningMergeAheadToSettle(t *testing.T) {
 // after its gate left, without a document, is judged before the promotion
 // behind it starts: merged, its release unknown, the lane settles by the
 // settle rule first; not merged, the promotion starts at once.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAPromotionBehindAMergeWithoutItsOutcomeWaitsForItsJudgement(t *testing.T) {
 	for _, c := range []struct {
 		name, pull, held string
@@ -168,7 +175,7 @@ func TestAPromotionBehindAMergeWithoutItsOutcomeWaitsForItsJudgement(t *testing.
 			// devctl exit 7 without its document: GitHub did not answer it.
 			endDevctl(t, a, scratchRepo, 889, "", "7")
 
-			why, err := g.step()
+			why, err := g.Step()
 			if err != nil || !strings.HasPrefix(why, c.held) || (c.held == "") != (why == "") {
 				t.Fatalf("step: %q, %v, want %q…", why, err, c.held)
 			}
@@ -195,8 +202,8 @@ func TestAPromotionBehindAMergeWithoutItsOutcomeWaitsForItsJudgement(t *testing.
 				t.Fatal("the watch settled a release unknown before the settle rule")
 			}
 
-			g.now = a.now.Add(6 * time.Minute)
-			if why, err := g.step(); err != nil || why != "" {
+			gateApp(g.Host).now = a.now.Add(6 * time.Minute)
+			if why, err := g.Step(); err != nil || why != "" {
 				t.Fatalf("after the settle: %q, %v", why, err)
 			}
 			if d := lastEventOf(t, a, verbMerged); !strings.HasPrefix(d, "o/r promote exit 0") {
@@ -210,6 +217,9 @@ func TestAPromotionBehindAMergeWithoutItsOutcomeWaitsForItsJudgement(t *testing.
 // recorded late) settles its installation-less lane from GitHub's mergedAt:
 // a promotion behind it starts at mergedAt plus merge.settle, not at the
 // record time plus merge.settle.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestALateRecordedMergeSettlesItsLaneFromMergedAt(t *testing.T) {
 	noSystemd(t)
 	stubGitHub(t, github.Merged, "")
@@ -220,7 +230,7 @@ func TestALateRecordedMergeSettlesItsLaneFromMergedAt(t *testing.T) {
 	settle := 5 * time.Minute
 	a.cfg.Merge.Settle = config.Duration{Duration: settle}
 	mergedAt := time.Now().Add(-3 * time.Minute).UTC().Truncate(time.Second)
-	pullState = func(context.Context, string, int) (github.Pull, error) {
+	gate.PullState = func(context.Context, string, int) (github.Pull, error) {
 		return github.Pull{State: github.Merged, MergedAt: mergedAt}, nil
 	}
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
@@ -234,8 +244,8 @@ func TestALateRecordedMergeSettlesItsLaneFromMergedAt(t *testing.T) {
 	endDevctl(t, a, scratchRepo, 889, "", "143")
 
 	until := mergedAt.Add(settle)
-	g.now = until.Add(-time.Second)
-	why, err := g.step()
+	gateApp(g.Host).now = until.Add(-time.Second)
+	why, err := g.Step()
 	if err != nil || why != "next in lane o/r, o/r#889's release is unknown: the lane settles until "+until.Local().Format("15:04") {
 		t.Fatalf("before mergedAt plus settle: %q, %v", why, err)
 	}
@@ -246,8 +256,8 @@ func TestALateRecordedMergeSettlesItsLaneFromMergedAt(t *testing.T) {
 	}
 
 	// Past mergedAt plus settle, still well before the record time plus settle.
-	g.now = until.Add(time.Second)
-	if why, err := g.step(); err != nil || why != "" {
+	gateApp(g.Host).now = until.Add(time.Second)
+	if why, err := g.Step(); err != nil || why != "" {
 		t.Fatalf("after mergedAt plus settle: %q, %v", why, err)
 	}
 	if d := lastEventOf(t, a, verbMerged); !strings.HasPrefix(d, "o/r promote exit 0") {

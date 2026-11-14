@@ -453,6 +453,57 @@ func TestFatalMainPinsHeadAndDistinguishesRedPendingUnknown(t *testing.T) {
 	}
 }
 
+// TestFatalMainJudgesEveryRunOfARedStatus checks that a red status context is
+// judged by all of its runs on HEAD: CircleCI's branch and tag pipelines
+// report the same job under one context, and the combined status shows only
+// the newest report.
+func TestFatalMainJudgesEveryRunOfARedStatus(t *testing.T) {
+	const (
+		perf     = "ci/circleci: test-performance"
+		release  = "ci/circleci: push-to-registries-release"
+		mainRun  = "https://app.circleci.com/workflow/main/job/1"
+		tagRun   = "https://app.circleci.com/workflow/tag/job/2"
+		redPerf  = `{"sha":"abc","state":"failure","total_count":1,"statuses":[{"context":"` + perf + `","state":"failure","target_url":"` + tagRun + `"}]}`
+		tagRed   = `{"context":"` + perf + `","state":"failure","target_url":"` + tagRun + `"}`
+		tagStart = `{"context":"` + perf + `","state":"pending","target_url":"` + tagRun + `"}`
+	)
+	mainState := func(state string) string {
+		return `{"context":"` + perf + `","state":"` + state + `","target_url":"` + mainRun + `"}`
+	}
+	for _, tc := range []struct {
+		name, status, history string
+		red, unknown          bool
+	}{
+		{"tag run red after the branch run passed", redPerf, "[" + tagRed + "," + mainState("success") + "," + tagStart + "," + mainState("pending") + "]", false, false},
+		{"tag run red while the branch run runs", redPerf, "[" + tagRed + "," + tagStart + "," + mainState("pending") + "]", false, true},
+		{"every run red", redPerf, "[" + tagRed + "," + mainState("failure") + "," + tagStart + "," + mainState("pending") + "]", true, false},
+		{"only run red", `{"sha":"abc","state":"failure","total_count":1,"statuses":[{"context":"` + release + `","state":"failure","target_url":"` + tagRun + `"}]}`, `[{"context":"` + release + `","state":"failure","target_url":"` + tagRun + `"},` + mainState("success") + `]`, true, false},
+		{"history unreadable", redPerf, "malformed status history", true, false},
+		{"another context pending", `{"sha":"abc","state":"failure","total_count":2,"statuses":[{"context":"` + perf + `","state":"failure","target_url":"` + tagRun + `"},{"context":"ci/circleci: go-build","state":"pending"}]}`, "[" + tagRed + "," + mainState("success") + "]", false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fakeFatalRun(t, func(args []string) (string, int) {
+				switch {
+				case args[0] != "gh":
+					return "", 0
+				case strings.Contains(args[2], "/commits/HEAD/status?"):
+					return tc.status, 0
+				case strings.Contains(args[2], "/commits/abc/statuses?"):
+					return tc.history, 0
+				case strings.Contains(args[2], "/commits/abc/check-runs?"):
+					return `{"total_count":0,"check_runs":[]}`, 0
+				}
+				t.Fatal("unexpected call", args)
+				return "", 1
+			})
+			o := fatalMain(t.Context(), "example/tool", "/config.yaml")
+			if o.Failed != tc.red || o.Unknown != tc.unknown {
+				t.Fatalf("%+v", o)
+			}
+		})
+	}
+}
+
 func TestFatalAdmissionRefusalDoesNotExhaustRepairBudget(t *testing.T) {
 	a, _ := stubApp(t)
 	dir := a.store.Dir()
@@ -482,6 +533,78 @@ func TestFatalAdmissionRefusalDoesNotExhaustRepairBudget(t *testing.T) {
 	}
 	if len(q.Incidents) != 1 || q.Incidents[0].Attempts != 0 || q.Incidents[0].Owner != "" {
 		t.Fatalf("%+v", q)
+	}
+}
+
+// TestFatalFailedRepairStartRetriesAtTheNextPass: a repair start that exits
+// with an error runs no repair, so no probe can verify one. The next pass
+// starts the next attempt instead of waiting out the cooldown, the incident
+// and the journal keep the start's error, and the last failed start is a
+// GUIDE PROBLEM that carries it.
+func TestFatalFailedRepairStartRetriesAtTheNextPass(t *testing.T) {
+	a, _ := stubApp(t)
+	dir := a.store.Dir()
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(fmt.Sprintf("stateDir: %q\nfatal:\n  repositories: []\n  checks:\n    - name: startup\n      probe: [critical-probe]\n", dir)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	a.cfgPath = path
+	fakeFatalRun(t, func(args []string) (string, int) {
+		if slices.Contains(args, "is-enabled") {
+			return fatalDisabledState, 1
+		}
+		if args[0] == fatalCriticalProbe {
+			return "", 1
+		}
+		return "", 0
+	})
+	const why = "Error: worktree destination already exists or cannot be inspected: /state/worktrees/beekeeper/fatal/1-1"
+	var owners []string
+	old := loop.BeekeeperRun
+	loop.BeekeeperRun = func(_ context.Context, args ...string) (string, int, error) {
+		owners = append(owners, args[slices.Index(args, fatalNameOption)+1])
+		return "choice: claude/sonnet\n" + why + "\n", ExitUsage, nil
+	}
+	t.Cleanup(func() { loop.BeekeeperRun = old })
+	for pass := 1; pass <= 4; pass++ {
+		var out bytes.Buffer
+		a.out = &out
+		if err := a.fatalScan(t.Context(), dir); err != nil {
+			t.Fatal(err)
+		}
+		q, err := fatal.Read(dir)
+		if err != nil || len(q.Incidents) != 1 {
+			t.Fatal(q, err)
+		}
+		x := q.Incidents[0]
+		attempts := min(pass, 3)
+		if len(owners) != attempts || x.Attempts != attempts {
+			t.Fatalf("pass %d: %d starts, attempt %d: a failed start must be retried at the next pass: %q", pass, len(owners), x.Attempts, x.Outcome)
+		}
+		if !strings.Contains(x.Outcome, "exit 2: choice: claude/sonnet | "+why) {
+			t.Fatalf("pass %d: the start's error is not on the incident: %q", pass, x.Outcome)
+		}
+		if pass <= 3 && (!strings.Contains(out.String(), fmt.Sprintf("attempt %d/3; ", pass)) || !strings.Contains(out.String(), "repair start failed: exit 2: ")) {
+			t.Fatalf("pass %d: the journal lacks the failed start: %q", pass, out.String())
+		}
+		if pass == 3 && !strings.Contains(x.Outcome, "repair budget exhausted") {
+			t.Fatalf("the last failed start does not end the budget: %q", x.Outcome)
+		}
+	}
+	if !slices.Equal(owners, []string{owners[0], strings.TrimSuffix(owners[0], " 1") + " 2", strings.TrimSuffix(owners[0], " 1") + " 3"}) {
+		t.Fatalf("owners %q", owners)
+	}
+	repairs, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == "fatal.repair" })
+	if err != nil || len(repairs) != 3 || !strings.Contains(repairs[0].Detail, why) {
+		t.Fatalf("journal: %+v %v", repairs, err)
+	}
+	problems, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == loop.LoopFileVerb })
+	if err != nil || len(problems) != 1 {
+		t.Fatalf("the exhausted repair is not one report: %+v %v", problems, err)
+	}
+	lines, _ := guideProblemLines(&state.State{}, problems)
+	if len(lines) != 1 || !strings.HasPrefix(lines[0], "GUIDE PROBLEM: ") || !strings.Contains(lines[0], "check:startup") || !strings.Contains(lines[0], why) {
+		t.Fatalf("guide: %q", lines)
 	}
 }
 

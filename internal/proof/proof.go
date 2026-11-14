@@ -18,10 +18,11 @@ import (
 	_ "image/gif"  // a GIF proof decodes
 	_ "image/jpeg" // a Chrome screenshot is a JPEG
 	"image/png"
-	"os/exec"
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
 // Branch holds the proof images of a repository: an orphan branch with
@@ -224,7 +225,7 @@ func (u Upload) api(ctx context.Context, input []byte, args ...string) ([]byte, 
 // gh carries the App's token, which beekeeper never reads.
 func RunGH(ctx context.Context, input []byte, args ...string) ([]byte, error) {
 	var stderr bytes.Buffer
-	c := exec.CommandContext(ctx, "gh", args...) //nolint:gosec // gh api with a validated owner/repo
+	c := proc.CommandContext(ctx, "gh", args...) //nolint:gosec // gh api with a validated owner/repo
 	c.Stdin = bytes.NewReader(input)
 	c.Stderr = &stderr
 	out, err := c.Output()

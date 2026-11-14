@@ -16,14 +16,19 @@ import (
 // the desk there, under the Job's environment, as a pod of the image would.
 type Builder struct {
 	// Tools are the toolchain programs the Go image carries beside its
-	// shell and coreutils: go and golangci-lint, each a fake. An image
-	// without golangci-lint is one the desk's merge validation has to
-	// install the linter into.
+	// shell and coreutils: go, golangci-lint and jq, each a fake. An image
+	// without golangci-lint or jq is one the desk's merge validation has
+	// to install them into.
 	Tools []string `yaml:"tools"`
+	// TestsCall are the programs the repository's tests run, such as jq:
+	// the pod's go test fails, as such a test does, while one of them is
+	// not on the pod's PATH.
+	TestsCall []string `yaml:"testsCall"`
 }
 
-// BuilderTools are the toolchain programs a builder image may carry.
-var BuilderTools = []string{"go", "golangci-lint"}
+// BuilderTools are the toolchain programs a builder image may carry, and
+// what the pod's go install installs: gojq is the jq a checker installs.
+var BuilderTools = []string{"go", "golangci-lint", "jq", "gojq"}
 
 // The builder's place in the sandbox, and what the desk's run.remote names.
 const (
@@ -39,8 +44,12 @@ const (
 )
 
 // builderEnv marks a process as running in the builder's pod: the image's
-// fake go and golangci-lint answer there.
-const builderEnv = "BEEKEEPER_SCENARIO_BUILDER"
+// fake go, golangci-lint and jq answer there. builderTestsCallEnv names the
+// pod's TestsCall to its go test.
+const (
+	builderEnv          = "BEEKEEPER_SCENARIO_BUILDER"
+	builderTestsCallEnv = "BEEKEEPER_SCENARIO_BUILDER_TESTS_CALL"
+)
 
 // Validate checks the block.
 func (b *Builder) Validate() error {
@@ -57,6 +66,16 @@ func (b *Builder) Validate() error {
 			errs = append(errs, fmt.Errorf("builder.tools: %q twice", tool))
 		}
 		seen[tool] = true
+	}
+	called := map[string]bool{}
+	for _, program := range b.TestsCall {
+		if program == "" || strings.ContainsAny(program, "/ \t\n") {
+			errs = append(errs, fmt.Errorf("builder.testsCall: %q is no program name", program))
+		}
+		if called[program] {
+			errs = append(errs, fmt.Errorf("builder.testsCall: %q twice", program))
+		}
+		called[program] = true
 	}
 	return errors.Join(errs...)
 }

@@ -1,0 +1,171 @@
+name: review-park-continuation-finishes-with-the-merged-pull
+description: >
+  A worker's pull request says it is "Part of" its board item, and the worker
+  parks on it with work for after the merge. The loop takes the worker off the
+  roster for the desk review and keeps its review park. The loop reviews and
+  merges the pull request, and the merge ends the item's delivery. The loop
+  then starts a fresh session for the review park's post-merge work. That
+  session continues the same delivery: the delivery keeps the merged pull
+  request, and the session's agents idle --done, with the merge as its proof,
+  is accepted.
+issue: https://github.com/giantswarm/beekeeper/issues/3905
+flow: delivery
+tags: [delivery, loop, merge, continuation, post-merge, review-park]
+timeout: 180s
+
+given:
+  desk:
+    config:
+      # The budget probe reads a repository the scenario's GitHub has.
+      github: {probeRepo: example/app}
+      # Headless workers: the loop takes a worker parked for the desk review
+      # off the roster and keeps its review park, and the session it starts
+      # for that park is the worker's next turn.
+      capacity:
+        providers: {codex: {ceiling: 2}}
+        choices: [{harness: codex, model: gpt-5.2-codex}]
+      # One delivery at a time: the saved review park keeps no claim on the
+      # board item, so without the limit the refill would start the item
+      # again once its worker left the roster. Once the merge ends the
+      # delivery, the review park's session serves the item.
+      delivery: {wipLimit: 1}
+  github:
+    repositories:
+      - name: example/app
+        issues:
+          - {number: 1, title: First item, board: Ready}
+  harness:
+    # Usage on pace: neither ahead of it nor far behind.
+    usage:
+      claude: {session: 10, week: 40}
+      codex: {session: 10, week: 40}
+    workers:
+      - name: app 1
+        turns:
+          - steps:
+              - git: [clone, --quiet, https://github.com/example/app.git, app]
+              - git: [checkout, --quiet, -b, app-1]
+                dir: app
+              - write: {path: app/change.txt, content: "the worker's change\n"}
+              - git: [add, change.txt]
+                dir: app
+              - git: [commit, --quiet, -m, "feat: the worker's change"]
+                dir: app
+              - git: [push, --quiet, origin, app-1]
+                dir: app
+              # Part of: the merge closes no issue, so only the park links the
+              # pull request to the item.
+              - gh: [pr, create, --repo, example/app, --base, main, --head, app-1, --title, "feat: the worker's change", --body, "Part of https://github.com/example/app/issues/1"]
+                dir: app
+              - beekeeper: [agents, park, --on, 'example/app#2', --post-merge, 'prove the change on main', desk review]
+                dir: app
+          # The session the loop starts for the review park's post-merge work:
+          # it proves the merge and ends the task, without a park of its own.
+          - steps:
+              - beekeeper: [agents, idle, --done, --report, "https://github.com/example/app/pull/2 merged; the change is on main; open items: none", --problem, none]
+      - name: 'Review app 2 r\d+'
+        turns:
+          - steps:
+              - gh: [pr, view, '2', --repo, example/app, --json, headRefOid, --jq, .headRefOid]
+                save: head
+              - gh: [pr, review, '2', --repo, example/app, --comment, --body, "Desk review (opus): approved\nHead reviewed: `${head}`"]
+              - beekeeper: [agents, idle, --done, --report, "Desk review (opus): approved https://github.com/example/app/pull/2", --problem, none]
+  calls:
+    # What the watch reads beside GitHub: no GitHub App login beside the gh
+    # login, and empty journals of the kernel and of systemd-oomd.
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    - program: journalctl
+      args: ['-k']
+      respond: {stdout: ""}
+    - program: journalctl
+      args: ['-u', systemd-oomd]
+      respond: {stdout: ""}
+
+when:
+  # The watch's reading admits starts: the budget and the machine are fine.
+  - name: watch
+    run: {args: [watch, --once]}
+    expect:
+      - exit: 0
+  - name: start
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - events: {contains: [agents.start]}
+  - wait_for:
+      timeout: 15s
+      expect:
+        - worker: {name: app 1, outcome: finish}
+        - github: {pull: {repo: example/app, number: 2, state: open}}
+  - advance: 2s
+  - name: ci-green
+    github: {check: {repo: example/app, pull: 2, name: build, state: green}}
+  # The worker leaves the roster for the review; its review park stays, and
+  # the refill does not start the item again.
+  - name: review
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - events: {contains: [agents.park, agents.remove, supervisor.review]}
+      - output: {not_contains: ['"app 1" started on']}
+  - name: removed
+    run: {args: [log, --verb, agents.remove, --json]}
+    expect:
+      - exit: 0
+      - output: {contains: ["app 1"]}
+  - wait_for:
+      timeout: 15s
+      expect:
+        - worker: {name: 'Review app 2 r1', outcome: finish}
+  - advance: 2s
+  - name: go
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - output: {not_contains: ['"app 1" started on']}
+  - wait_for:
+      timeout: 15s
+      expect:
+        - github: {pull: {repo: example/app, number: 2, state: merged, merged_into: main}}
+  - advance: 2s
+  # The merge ends the item's delivery, then the review park's post-merge
+  # work goes to a fresh session of the worker.
+  - name: end
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - events: {contains: [supervisor.end]}
+  - name: ended
+    run: {args: [log, --verb, supervisor.end, --json]}
+    expect:
+      - exit: 0
+      - output: {contains: ["post-merge work requested"]}
+  # Its agents idle --done ran with exit 0: the command checks the outcome
+  # before it queues the report, and a refused one fails its turn.
+  - wait_for:
+      timeout: 15s
+      expect:
+        - worker: {name: app 1, turns: 2, outcome: finish}
+  # The fresh session's delivery is the item's: it still carries the merged
+  # pull request and its outcome.
+  - name: continued
+    run: {args: [delivery, --json]}
+    expect:
+      - exit: 0
+      - json_path: {path: 'deliveries[0].ref', equals: example/app#1}
+      - json_path: {path: 'deliveries[0].pulls[0]', equals: example/app#2}
+      - json_path: {path: 'deliveries[0].outcome', equals: merged}
+      - json_path: {path: 'deliveries[0].step', equals: done}
+
+then:
+  - github: {pull: {repo: example/app, number: 2, state: merged, merged_into: main}}
+  - calls: {program: gh, args: [pr, create], min: 1, max: 1}
+  - calls: {program: gh, args: [pr, merge], min: 1, max: 1}
+  - worker: {name: 'Review app 2 r\d+', turns: 1}
+  # The first session and the one the loop started for the review park.
+  - worker: {name: app 1, turns: 2, outcome: finish}
+  - events:
+      contains: [agents.remove, supervisor.merge, supervisor.end]
+      not_contains: [session.report-rejected]

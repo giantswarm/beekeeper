@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -18,10 +19,13 @@ import (
 // A gated release wait whose caller's timeout kills the call runs on: the
 // call ends at once with exit 76 and the line that the timeout cut the
 // connection, not the wait; devctl's verdict wakes the owner once it ends.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestACallersTimeoutCutsTheCallNotTheWait(t *testing.T) {
 	// coreutils' timeout runs the command as its child; busybox's execs it
 	// and times it from a child of its own, no ancestor the gate can see.
-	timeout, err := exec.LookPath(timeoutComm)
+	timeout, err := exec.LookPath(gate.TimeoutComm)
 	if err != nil {
 		t.Skip("no timeout")
 	}
@@ -75,7 +79,7 @@ echo '` + doc + `'
 	self := filepath.Join(dir, "beekeeper")
 	copyTestBinary(t, self)
 	wakes := filepath.Join(dir, "wakes")
-	call := exec.Command(timeout, "2", self, gateCmdName, "--", "devctl", "release", "wait", "o/r", "v1.2.3") //nolint:gosec // this test binary's copy
+	call := exec.Command(timeout, "2", self, gate.GateCmdName, "--", "devctl", "release", "wait", "o/r", "v1.2.3") //nolint:gosec // this test binary's copy
 	call.Env = append(os.Environ(), "BEEKEEPER_TEST_MAIN=1", testWakesEnv+"="+wakes, "PATH="+bin,
 		"BEEKEEPER_CONFIG="+emptyTestConfig(t, filepath.Join(dir, "config.yaml")), "XDG_STATE_HOME="+stateHome,
 		"CLAUDE_CODE_SESSION_ID=s1", "CLAUDE_CODE_HOST_SESSION_ID=", "CLAUDE_CODE_SESSION_NAME="+ownerName)
@@ -124,10 +128,13 @@ echo '` + doc + `'
 
 // A timeout counts as the caller's below the Claude Code CLI only: one the
 // CLI itself runs under is no caller of the gate.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestUnderTimeout(t *testing.T) {
 	// table is the gate, pid 1, below its ancestors' comms, nearest first.
 	table := func(comms ...string) *proc.Table {
-		tb := &proc.Table{ByPID: map[int]*proc.Process{1: {PID: 1, PPID: 2, Comm: gateCmdName}}}
+		tb := &proc.Table{ByPID: map[int]*proc.Process{1: {PID: 1, PPID: 2, Comm: gate.GateCmdName}}}
 		for i, c := range comms {
 			tb.ByPID[i+2] = &proc.Process{PID: i + 2, PPID: i + 3, Comm: c}
 		}
@@ -137,12 +144,12 @@ func TestUnderTimeout(t *testing.T) {
 		comms []string
 		want  bool
 	}{
-		{[]string{timeoutComm, "sh", claudeComm}, true},
-		{[]string{"sh", timeoutComm, claudeComm}, true},
-		{[]string{"sh", claudeComm, timeoutComm}, false},
+		{[]string{gate.TimeoutComm, "sh", claudeComm}, true},
+		{[]string{"sh", gate.TimeoutComm, claudeComm}, true},
+		{[]string{"sh", claudeComm, gate.TimeoutComm}, false},
 		{[]string{"sh"}, false},
 	} {
-		if got := underTimeout(table(c.comms...), 1); got != c.want {
+		if got := gate.UnderTimeout(table(c.comms...), 1); got != c.want {
 			t.Errorf("%v: %t, want %t", c.comms, got, c.want)
 		}
 	}

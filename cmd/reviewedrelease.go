@@ -4,10 +4,11 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/merge"
+	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
 const reviewedMergeRoute = "reviewed merge"
@@ -25,7 +26,7 @@ type reviewedRelease struct {
 }
 
 var waitReviewedRelease = func(ctx context.Context, repo string, number int) ([]byte, error) {
-	c := exec.CommandContext(ctx, merge.Tool, "release", "wait", repo, "--pr", fmt.Sprint(number)) //nolint:gosec // validated repository and PR, no shell
+	c := proc.CommandContext(ctx, merge.Tool, "release", "wait", repo, "--pr", fmt.Sprint(number)) //nolint:gosec // validated repository and PR, no shell
 	c.Env = devctlCommandEnv("")
 	c.Stderr = os.Stderr
 	return c.Output()
@@ -38,11 +39,15 @@ func completeReviewedRelease(ctx context.Context, doc github.SquashDoc, wait boo
 	if !wait || doc.MergeCommitSha == "" {
 		return result
 	}
-	ctx, cancel := context.WithTimeout(ctx, releasePRWait)
+	// The line marks the merge's release wait (mergeProgress), which a
+	// gate called --until-merged leaves to this child.
+	_, _ = fmt.Fprintf(os.Stderr, "release: waiting for the release of %s#%d, merged as %s (%s release wait %s --pr %d)\n",
+		doc.Repo, doc.Number, gate.ShortSHA(doc.MergeCommitSha), merge.Tool, doc.Repo, doc.Number)
+	ctx, cancel := context.WithTimeout(ctx, gate.ReleasePRWait)
 	defer cancel()
 	raw, err := waitReviewedRelease(ctx, doc.Repo, doc.Number)
 	out, reason, ok := merge.ParseReleaseWait(raw)
-	result.Release = &reviewedRelease{Verdict: verdictUnconfirmed}
+	result.Release = &reviewedRelease{Verdict: gate.VerdictUnconfirmed}
 	switch {
 	case !ok:
 		result.ExitCode = 9
@@ -60,7 +65,7 @@ func completeReviewedRelease(ctx context.Context, doc github.SquashDoc, wait boo
 	case out.Unconfirmed || out.Release == "":
 		result.ExitCode = 9
 	default:
-		result.Release.Verdict = verdictAvailable
+		result.Release.Verdict = gate.VerdictAvailable
 		result.Release.Tag = out.Release
 		result.ExitCode = 0
 	}

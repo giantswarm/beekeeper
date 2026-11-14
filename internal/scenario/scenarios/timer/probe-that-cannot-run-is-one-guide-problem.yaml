@@ -1,0 +1,120 @@
+name: probe-that-cannot-run-is-one-guide-problem
+description: >
+  A timer waits on a probe that asks a host over ssh whether a link is up,
+  checked every ten minutes. The desk's VPN login has expired, so ssh cannot
+  resolve the host and exits 255: the probe could not run, which says
+  nothing of the link. The dispatcher's first check says so and files one
+  report for the guide, whose feed says it as a GUIDE PROBLEM naming ssh's
+  error; the second failed check in a row files none, and the timer list
+  shows the error and since when. The next check reaches the host and finds
+  the link down, a clean false: "not yet", and the report recovered. The
+  check after finds it up and fires the timer. A probe that failed so was
+  read as "not yet" for a whole day while the link was up.
+issue: https://github.com/giantswarm/beekeeper/issues/3732
+flow: timer
+tags: [timer, probe, guide, ssh]
+timeout: 60s
+
+given:
+  calls:
+    # The probe's ssh: twice it cannot resolve the host, then the host
+    # answers the link is down, then up.
+    - program: ssh
+      args: [jump]
+      respond:
+        stderr: "ssh: Could not resolve hostname jump.vpn.example: Name or service not known\n"
+        exit: 255
+      times: 2
+    - program: ssh
+      args: [jump]
+      respond: {exit: 1}
+      times: 1
+    - program: ssh
+      args: [jump]
+      respond: {exit: 0}
+
+when:
+  # The guide's feed is running before anything fails.
+  - name: feed
+    run: {args: [guide, watch, --once]}
+    expect:
+      - exit: 0
+  - name: add
+    run:
+      args: [--as, scenario, timer, add, now, "the link is up: resume the deploy",
+        --probe, "ssh -o BatchMode=yes -o ConnectTimeout=5 jump 'test \"$(cat /sys/class/net/enp1s0/carrier)\" = 1'",
+        --every, 10m]
+    expect:
+      - exit: 0
+  - name: unresolved
+    run: {args: [timer, dispatch, --once]}
+    expect:
+      - exit: 0
+      - calls: {program: ssh, args: [jump], min: 1, max: 1}
+      - events: {contains: [timer.unreadable, supervisor.file], not_contains: [timer.fired]}
+  - name: problem
+    run: {args: [guide, watch, --once]}
+    expect:
+      - exit: 0
+      - output:
+          contains: ["GUIDE PROBLEM: ", "TIMER PROBE FAILED: #1", "could not run",
+            "exit status 255: ssh: Could not resolve hostname jump.vpn.example: Name or service not known"]
+  - name: again
+    advance: 10m
+  - name: still-unresolved
+    run: {args: [timer, dispatch, --once]}
+    expect:
+      - exit: 0
+      - calls: {program: ssh, args: [jump], min: 2, max: 2}
+  - name: no-second-problem
+    run: {args: [guide, watch, --once]}
+    expect:
+      - exit: 0
+      - output: {not_contains: ["GUIDE PROBLEM"]}
+  - name: reports
+    run: {args: [log, --verb, supervisor.file, --json]}
+    expect:
+      - exit: 0
+      - json_path: {path: ., len: 1}
+  - name: list
+    run: {args: [timer]}
+    expect:
+      - exit: 0
+      - output:
+          contains: ["could not run since",
+            "exit status 255: ssh: Could not resolve hostname jump.vpn.example: Name or service not known"]
+  - name: link-down
+    advance: 10m
+  - name: clean-false
+    run: {args: [timer, dispatch, --once]}
+    expect:
+      - exit: 0
+      - calls: {program: ssh, args: [jump], min: 3, max: 3}
+      - events: {not_contains: [timer.fired]}
+  - name: recovered
+    run: {args: [log, --verb, supervisor.file, --json]}
+    expect:
+      - exit: 0
+      - json_path: {path: ., len: 2}
+      - output: {contains: ["RECOVERED: timer #1's probe runs again"]}
+  - name: not-yet
+    run: {args: [timer, -v]}
+    expect:
+      - exit: 0
+      - output: {contains: ["not yet: exit status 1"], not_contains: ["could not run"]}
+  - name: quiet-feed
+    run: {args: [guide, watch, --once]}
+    expect:
+      - exit: 0
+      - output: {not_contains: ["GUIDE PROBLEM"]}
+  - name: link-up
+    advance: 10m
+  - name: holds
+    run: {args: [timer, dispatch, --once]}
+    expect:
+      - exit: 0
+      - events: {contains: [timer.fired]}
+
+then:
+  - calls: {program: ssh, args: [jump], min: 4, max: 4}
+  - {step: reports, output: {contains: ["TIMER PROBE FAILED: #1"]}}

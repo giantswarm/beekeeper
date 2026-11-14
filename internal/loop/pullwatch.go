@@ -777,6 +777,7 @@ func combineLoopPull(light, detail superloop.Pull) superloop.Pull {
 	detail.Updated, detail.Draft, detail.Mergeable, detail.MergeState = light.Updated, light.Draft, light.Mergeable, light.MergeState
 	detail.ReviewDecision, detail.MergeCommit = light.ReviewDecision, light.MergeCommit
 	detail.Green, detail.Red, detail.Checks = light.Green, light.Red, light.Checks
+	detail.CheckStates = light.CheckStates
 	return detail
 }
 
