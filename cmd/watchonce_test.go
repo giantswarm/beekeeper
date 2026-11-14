@@ -10,17 +10,18 @@ import (
 	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // onceWatch is a --once watch (it writes nothing) on a note linked to refOne
 // and refTwo, with GitHub answering read.
-func onceWatch(t *testing.T, read func(context.Context, []github.PR) (map[github.PR]github.RefState, error)) (*watcher, *strings.Builder) {
+func onceWatch(t *testing.T, read func(context.Context, []github.PR) (map[github.PR]github.RefState, error)) (*watch.Watcher, *strings.Builder) {
 	t.Helper()
 	w, _ := overtakingWatch(t, nil)
-	w.chores = false
+	w.Chores = false
 	refStates = read
 	var out strings.Builder
-	w.out = &out
+	watchApp(w.Host).out = &out
 	setNotes(t, w, state.Note{ID: 1, Kind: noteDecision, For: personTimo, Text: askedQ, By: state.Party{Name: supRun3}, Refs: []string{refOne, refTwo}})
 	return w, &out
 }
@@ -34,47 +35,54 @@ func openRefs(_ context.Context, rs []github.PR) (map[github.PR]github.RefState,
 	return m, nil
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchOnceSaysAFailedNotesReadAndExitsNonZero(t *testing.T) {
 	w, out := onceWatch(t, func(context.Context, []github.PR) (map[github.PR]github.RefState, error) {
 		return nil, errors.New("gh: connection reset")
 	})
-	w.pending(context.Background(), nil)
+	w.Pending(context.Background(), nil)
 	if said := out.String(); !strings.Contains(said, "NOTE REFS UNREADABLE: cannot read the notes' issues and pull requests: gh: connection reset") {
 		t.Errorf("watch --once said %q, want the failed read on the NOTE path", said)
 	}
-	if err := w.onceErr(); err == nil {
+	if err := w.OnceErr(); err == nil {
 		t.Error("watch --once with a failed read exits 0")
 	}
 }
 
 // Under the ceiling, the watch says nothing and does not read the machine's
 // headroom.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchOnceWithoutChangeIsSilent(t *testing.T) {
 	w, out := onceWatch(t, openRefs)
 	reads := 0
-	w.readHeadroom = func(context.Context, *capacity.SwapReading) *capacity.Headroom { reads++; return tight() }
-	w.pending(context.Background(), nil)
+	w.ReadHeadroom = func(context.Context, *capacity.SwapReading) *capacity.Headroom { reads++; return tight() }
+	w.Pending(context.Background(), nil)
 	if said := out.String(); said != "" {
 		t.Errorf("watch --once without a change said %q", said)
 	}
 	if reads != 0 {
 		t.Errorf("headroom read %d times under the ceiling, want 0", reads)
 	}
-	if err := w.onceErr(); err != nil {
+	if err := w.OnceErr(); err != nil {
 		t.Errorf("watch --once without a change: %v", err)
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchOnceSaysWhatKeepsTheNotesUnread(t *testing.T) {
 	w, out := onceWatch(t, func(ctx context.Context, rs []github.PR) (map[github.PR]github.RefState, error) {
 		m, _ := openRefs(ctx, rs[:1])
 		return m, nil
 	})
-	w.pending(context.Background(), nil)
+	w.Pending(context.Background(), nil)
 	if said := out.String(); !strings.Contains(said, "NOTE REFS UNANSWERED (--once): "+refTwo+"; their notes stay open") {
 		t.Errorf("watch --once said %q, want the unanswered ref", said)
 	}
-	if err := w.onceErr(); err != nil {
+	if err := w.OnceErr(); err != nil {
 		t.Errorf("an unanswered ref is no failed read: %v", err)
 	}
 
@@ -82,13 +90,13 @@ func TestWatchOnceSaysWhatKeepsTheNotesUnread(t *testing.T) {
 		t.Error("GitHub read under the budget's floor")
 		return nil, nil
 	})
-	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+	if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Budget = &state.Budget{Remaining: 0, Limit: 5000, Reset: relayNow.Add(time.Hour), At: relayNow}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	w.pending(context.Background(), nil)
+	w.Pending(context.Background(), nil)
 	if said := out.String(); !strings.Contains(said, "NOTE REFS NOT READ (--once): the GitHub budget is under its floor until") {
 		t.Errorf("watch --once said %q, want the skipped read", said)
 	}

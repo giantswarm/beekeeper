@@ -11,8 +11,11 @@ import (
 	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestUsageRefreshSharedByCommandsAndWatch(t *testing.T) {
 	const probeProvider = "probe-provider"
 	store, err := state.OpenVersion(t.TempDir(), "dev")
@@ -60,17 +63,17 @@ func TestUsageRefreshSharedByCommandsAndWatch(t *testing.T) {
 		if i%2 == 0 {
 			r, err = caller.resolveReading(ctx, file, u)
 		} else {
-			w := &watcher{app: caller}
-			r, err = w.execUsageNow(ctx, file, u)
+			w := &watch.Watcher{Host: caller}
+			r, err = w.ExecUsageNow(ctx, file, u)
 		}
 		if err != nil || r.FiveHour == nil || r.FiveHour.UsedPercent != 99 || r.Fallback == "" {
 			t.Fatalf("contender lost existing quota limit: %+v %v", r, err)
 		}
 	}
-	w := &watcher{app: &app{store: store, now: now, readUsage: probe}, chores: true}
-	w.refreshUsage(ctx, config.Capacity{Providers: map[string]config.Provider{probeProvider: {Usage: u}}})
-	if w.providerUsageErr[probeProvider] != "" {
-		t.Fatalf("contended probe recorded as provider usage failure: %q", w.providerUsageErr[probeProvider])
+	w := &watch.Watcher{Host: &app{store: store, now: now, readUsage: probe}, Chores: true}
+	w.RefreshUsage(ctx, config.Capacity{Providers: map[string]config.Provider{probeProvider: {Usage: u}}})
+	if w.ProviderUsageErr[probeProvider] != "" {
+		t.Fatalf("contended probe recorded as provider usage failure: %q", w.ProviderUsageErr[probeProvider])
 	}
 	close(finish)
 	if err := <-done; err != nil {

@@ -11,6 +11,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 var keepNow = time.Date(2026, 10, 2, 9, 0, 0, 0, time.UTC)
@@ -60,6 +61,9 @@ func TestPlanChoresLeavesKeptEntries(t *testing.T) {
 
 // The doctor's removal checks the marker again under the lock: a keep set
 // after the plan stops a removal for staleness, never one for a done task.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestRemoveAgentsHonoursAKeepSetSincePlan(t *testing.T) {
 	dir := t.TempDir()
 	store, err := state.Open(dir)
@@ -78,7 +82,7 @@ func TestRemoveAgentsHonoursAKeepSetSincePlan(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	removed, err := a.removeAgents(chores, watchParty)
+	removed, err := a.removeAgents(chores, watch.WatchParty)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,13 +167,16 @@ func TestRegisterAgentCarriesTheKeep(t *testing.T) {
 }
 
 // The watch says no AGENTS STOPPED line for an entry parked on purpose.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestStoppedAgentsLeaveKeptEntriesOut(t *testing.T) {
 	w, _, out := reportingWatch(t, t.TempDir())
 	kept, woken, stopped := staleAgent("Judge"), staleAgent("BK 1"), staleAgent("Crashed")
 	kept.Task, woken.Task, stopped.Task = "review", "a batch job", "a crash"
 	kept.Keep = &state.Keep{}
 	st := &state.State{Agents: []state.Agent{kept, woken, stopped}, Timers: []state.Timer{{ID: 1, Wake: "BK 1"}}}
-	w.stoppedAgents(st, nil)
+	w.StoppedAgents(st, nil)
 	if s := out.String(); !strings.Contains(s, `"Crashed"`) || strings.Contains(s, "Judge") || strings.Contains(s, "BK 1") {
 		t.Errorf("stopped line:\n%s", s)
 	}

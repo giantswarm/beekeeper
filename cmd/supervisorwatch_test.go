@@ -10,8 +10,11 @@ import (
 	"github.com/giantswarm/beekeeper/internal/alerts"
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLoopWatchKeepsQuietAlertsOutOfEventFeed(t *testing.T) {
 	read := readLoopAlerts
 	r := newLoopRig(t)
@@ -19,19 +22,21 @@ func TestLoopWatchKeepsQuietAlertsOutOfEventFeed(t *testing.T) {
 	w := r.a.newWatcher(false, false)
 	f := loopFiring()
 	f.Cluster = "test-cluster"
-	w.publishAlerts([]alerts.Firing{f})
+	w.PublishAlerts([]alerts.Firing{f})
 	got, err := read(context.Background(), r.a)
 	if err != nil || len(got) != 0 {
 		t.Fatalf("quiet alert entered event feed: %+v %v", got, err)
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLoopOwnsWatchUntilShutdown(t *testing.T) {
 	r := newLoopRig(t)
 	old := runLoopWatch
 	t.Cleanup(func() { runLoopWatch = old })
-	started, ended := make(chan *watcher, 1), make(chan struct{})
-	runLoopWatch = func(ctx context.Context, w *watcher) error {
+	started, ended := make(chan *watch.Watcher, 1), make(chan struct{})
+	runLoopWatch = func(ctx context.Context, w *watch.Watcher) error {
 		started <- w
 		<-ctx.Done()
 		close(ended)
@@ -39,7 +44,7 @@ func TestLoopOwnsWatchUntilShutdown(t *testing.T) {
 	}
 	stop := r.a.startLoopWatch(context.Background())
 	w := <-started
-	if w.standby || !w.loopOwned || w.cfg.Watch.BudgetEvery.Duration != max(30*time.Second, w.cfg.Watch.Interval.Duration) {
+	if w.Standby || !w.LoopOwned || watchApp(w.Host).cfg.Watch.BudgetEvery.Duration != max(30*time.Second, watchApp(w.Host).cfg.Watch.Interval.Duration) {
 		t.Error("watch does not own alert and bounded budget observations")
 	}
 	stop()
@@ -50,21 +55,25 @@ func TestLoopOwnsWatchUntilShutdown(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchRecognizesLoopWithoutSupervisorSession(t *testing.T) {
 	r := newLoopRig(t)
 	w := r.a.newWatcher(true, false)
 	if err := r.a.store.WriteFile(loop.LoopPIDFile, os.Getpid()); err != nil {
 		t.Fatal(err)
 	}
-	if !w.checkLoop(context.Background(), &state.State{}) {
+	if !w.CheckLoop(context.Background(), &state.State{}) {
 		t.Fatal("standby ignored running loop")
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLoopWatchFillForecastReleasesStartsWhenItStops(t *testing.T) {
 	r := newLoopRig(t)
 	w := r.a.newWatcher(false, false)
-	w.publishDisk(watchDiskReading{Low: true, Filling: true, Writers: "go build", FreeMiB: 1 * gibMiB, MinMiB: 18 * gibMiB})
+	w.PublishDisk(watchDiskReading{Low: true, Filling: true, Writers: "go build", FreeMiB: 1 * gibMiB, MinMiB: 18 * gibMiB})
 	l, err := r.a.newSupervisorLoop(false)
 	if err != nil {
 		t.Fatal(err)
@@ -79,7 +88,7 @@ func TestLoopWatchFillForecastReleasesStartsWhenItStops(t *testing.T) {
 	// The writer finishes; the rate falls and the prune frees enough: the
 	// recovery in the reading lifts the hold on its own, no note closes,
 	// no person acts.
-	w.publishDisk(watchDiskReading{Low: false, Filling: false, Writers: stateIdle, FreeMiB: 25 * gibMiB, MinMiB: 18 * gibMiB})
+	w.PublishDisk(watchDiskReading{Low: false, Filling: false, Writers: stateIdle, FreeMiB: 25 * gibMiB, MinMiB: 18 * gibMiB})
 	if err := l.Pass(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -88,10 +97,12 @@ func TestLoopWatchFillForecastReleasesStartsWhenItStops(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLoopWatchPrunesThenFilesPersistentLowDiskOnce(t *testing.T) {
 	r := newLoopRig(t)
 	w := r.a.newWatcher(false, false)
-	w.publishDisk(watchDiskReading{Low: true, Writers: "test-writer"})
+	w.PublishDisk(watchDiskReading{Low: true, Writers: "test-writer"})
 	r.pass(t)
 	if r.called(loop.LoopDiskKind, "prune", "--apply") == nil {
 		t.Fatal("low disk not pruned")
@@ -100,7 +111,7 @@ func TestLoopWatchPrunesThenFilesPersistentLowDiskOnce(t *testing.T) {
 	if err := r.a.store.WriteFile(diskHoldingFile, diskHolding{At: r.a.now, Text: "caches app 9 GiB (last write 2026-10-27)"}); err != nil {
 		t.Fatal(err)
 	}
-	w.publishDisk(watchDiskReading{Low: true, Writers: "test-writer"})
+	w.PublishDisk(watchDiskReading{Low: true, Writers: "test-writer"})
 	r.pass(t)
 	if r.called(loop.LoopDiskKind, "prune", "--apply") != nil {
 		t.Fatal("same disk episode pruned twice")
@@ -129,11 +140,13 @@ func TestLoopWatchPrunesThenFilesPersistentLowDiskOnce(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLoopWatchPressureHoldsAndRecovers(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, loopPR, time.Now())
 	w := r.a.newWatcher(false, false)
-	w.check("load", true, "HIGH LOAD: test")
+	w.Check("load", true, "HIGH LOAD: test")
 	r.pass(t)
 	if r.called(agentsName, agentStartName) != nil {
 		t.Fatal("start during high load")
@@ -141,7 +154,7 @@ func TestLoopWatchPressureHoldsAndRecovers(t *testing.T) {
 	if !strings.Contains(r.out.String(), "SUPERVISOR STARTS HELD") {
 		t.Fatal("hold not explained")
 	}
-	w.clear("load")
+	w.Clear("load")
 	r.pass(t)
 	if r.called(agentsName, agentStartName) == nil {
 		t.Fatal("start did not recover")
@@ -164,22 +177,26 @@ func TestLoopWatchStaleBudgetHoldsStarts(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLoopWatchDiskFeedsCapacity(t *testing.T) {
 	r := newLoopRig(t)
 	w := r.a.newWatcher(false, false)
-	w.publishDisk(watchDiskReading{Low: true, FreeMiB: 1, MinMiB: 100})
+	w.PublishDisk(watchDiskReading{Low: true, FreeMiB: 1, MinMiB: 100})
 	got := r.a.watchDisk()
 	if got == nil || !got.Low || got.FreeMiB != 1 || got.MinMiB != 100 {
 		t.Fatalf("capacity disk reading: %+v", got)
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLoopWatchFreshMachineReadingClearsPreviousWatchPressure(t *testing.T) {
 	r := newLoopRig(t)
 	old := r.a.newWatcher(false, false)
-	old.check("load", true, "HIGH LOAD: old watch")
+	old.Check("load", true, "HIGH LOAD: old watch")
 	fresh := r.a.newWatcher(false, false)
-	fresh.publishMachine()
+	fresh.PublishMachine()
 	l, err := r.a.newSupervisorLoop(false)
 	if err != nil {
 		t.Fatal(err)
@@ -193,6 +210,8 @@ func TestLoopWatchFreshMachineReadingClearsPreviousWatchPressure(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLoopWatchDiskFailureKeepsPassAlive(t *testing.T) {
 	r := newLoopRig(t)
 	prunes := 0
@@ -204,7 +223,7 @@ func TestLoopWatchDiskFailureKeepsPassAlive(t *testing.T) {
 		return "", 0
 	}
 	w := r.a.newWatcher(false, false)
-	w.publishDisk(watchDiskReading{Low: true, Writers: loopWorker})
+	w.PublishDisk(watchDiskReading{Low: true, Writers: loopWorker})
 	l, err := r.a.newSupervisorLoop(false)
 	if err != nil {
 		t.Fatal(err)
@@ -217,7 +236,7 @@ func TestLoopWatchDiskFailureKeepsPassAlive(t *testing.T) {
 		if !l.StartsHeld {
 			t.Fatal("low disk allowed starts")
 		}
-		w.publishDisk(watchDiskReading{Low: true, Writers: loopWorker})
+		w.PublishDisk(watchDiskReading{Low: true, Writers: loopWorker})
 	}
 	restarted, err := r.a.newSupervisorLoop(false)
 	if err != nil {
@@ -240,6 +259,9 @@ func TestLoopWatchDiskFailureKeepsPassAlive(t *testing.T) {
 
 // A failed cleanup's cause must survive the loop restarting before the next
 // disk sample: the guide needs the cause, not just the usage-level hold.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLoopWatchDiskFailureReachesGuideAfterRestart(t *testing.T) {
 	r := newLoopRig(t)
 	r.answer = func(args []string) (string, int) {
@@ -249,12 +271,12 @@ func TestLoopWatchDiskFailureReachesGuideAfterRestart(t *testing.T) {
 		return "", 0
 	}
 	w := r.a.newWatcher(false, false)
-	w.publishDisk(watchDiskReading{Low: true, FreeMiB: 1, MinMiB: 100})
+	w.PublishDisk(watchDiskReading{Low: true, FreeMiB: 1, MinMiB: 100})
 	r.pass(t)
 	if findings := r.logged(t, loop.LoopFileVerb); len(findings) != 0 {
 		t.Fatalf("alarm before a post-cleanup sample: %+v", findings)
 	}
-	w.publishDisk(watchDiskReading{Low: true, FreeMiB: 2, MinMiB: 100})
+	w.PublishDisk(watchDiskReading{Low: true, FreeMiB: 2, MinMiB: 100})
 	r.pass(t) // Each rig pass creates a fresh supervisor loop.
 	findings := r.logged(t, loop.LoopFileVerb)
 	if len(findings) != 1 {
@@ -273,7 +295,7 @@ func TestLoopWatchDiskFailureReachesGuideAfterRestart(t *testing.T) {
 	if findings := r.logged(t, loop.LoopFileVerb); len(findings) != 1 {
 		t.Fatalf("duplicate failure alarm: %+v", findings)
 	}
-	w.publishDisk(watchDiskReading{FreeMiB: 200, MinMiB: 100})
+	w.PublishDisk(watchDiskReading{FreeMiB: 200, MinMiB: 100})
 	l, err := r.a.newSupervisorLoop(false)
 	if err != nil {
 		t.Fatal(err)
@@ -287,14 +309,16 @@ func TestLoopWatchDiskFailureReachesGuideAfterRestart(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLoopWatchLevelsOnlyLogTransitions(t *testing.T) {
 	r := newLoopRig(t)
 	w := r.a.newWatcher(false, false)
 	for i := range 10 {
-		w.publishBudget(false)
-		w.publishMachine()
-		w.publishAlerts(nil)
-		w.publishDisk(watchDiskReading{Low: true, FreeMiB: i, MinMiB: 100})
+		w.PublishBudget(false)
+		w.PublishMachine()
+		w.PublishAlerts(nil)
+		w.PublishDisk(watchDiskReading{Low: true, FreeMiB: i, MinMiB: 100})
 	}
 	evs, err := r.a.store.Events(0, func(e state.Event) bool { return strings.HasSuffix(e.Verb, "-state") })
 	if err != nil {
@@ -309,12 +333,14 @@ func TestLoopWatchLevelsOnlyLogTransitions(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLoopWatchDiskFindingFailureKeepsPassAlive(t *testing.T) {
 	r := newLoopRig(t)
 	w := r.a.newWatcher(false, false)
-	w.publishDisk(watchDiskReading{Low: true})
+	w.PublishDisk(watchDiskReading{Low: true})
 	r.pass(t)
-	w.publishDisk(watchDiskReading{Low: true})
+	w.PublishDisk(watchDiskReading{Low: true})
 	r.failRecord = func(e state.Event) bool { return e.Verb == loop.LoopFileVerb }
 	l, err := r.a.newSupervisorLoop(false)
 	if err != nil {
@@ -343,15 +369,17 @@ func TestLoopWatchDiskFindingFailureKeepsPassAlive(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLoopWatchDiskRecoveryAfterPruneDoesNotAlarm(t *testing.T) {
 	r := newLoopRig(t)
 	w := r.a.newWatcher(false, false)
-	w.publishDisk(watchDiskReading{Low: true, FreeMiB: 1, MinMiB: 100})
+	w.PublishDisk(watchDiskReading{Low: true, FreeMiB: 1, MinMiB: 100})
 	r.pass(t)
 	if r.called(loop.LoopDiskKind, "prune", "--apply") == nil {
 		t.Fatal("disk floor did not trigger cleanup")
 	}
-	w.publishDisk(watchDiskReading{FreeMiB: 200, MinMiB: 100})
+	w.PublishDisk(watchDiskReading{FreeMiB: 200, MinMiB: 100})
 	r.pass(t)
 	events, err := r.a.store.Events(0, func(e state.Event) bool { return e.Verb == loop.LoopFileVerb })
 	if err != nil || len(events) != 0 {

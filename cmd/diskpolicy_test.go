@@ -13,6 +13,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 	"github.com/giantswarm/beekeeper/internal/worktrees"
 )
 
@@ -220,21 +221,23 @@ func TestAutomaticBuildOutputMovesToTrashBeforePressureReclaimsIt(t *testing.T) 
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestAutomaticDiskDisablesLegacyGoCacheSchedule(t *testing.T) {
 	a, m := diskFixture(t)
 	saved := goCacheDir
 	t.Cleanup(func() { goCacheDir = saved })
 	goCacheDir = func() string { return m.cache }
-	w := &watcher{app: a, goCacheOn: true, last: map[string]time.Time{}}
-	w.goCache(a.now)
-	w.bg.Wait()
+	w := &watch.Watcher{Host: a, GoCacheOn: true, Last: map[string]time.Time{}}
+	w.GoCache(a.now)
+	w.Bg.Wait()
 	var mark goCacheMark
 	if found, _ := a.store.ReadFile(goCacheFile, &mark); found {
 		t.Fatal("auto mode ran legacy cache schedule")
 	}
 	a.cfg.Disk.Prune = config.DiskPruneAsk
-	w.goCache(a.now)
-	w.bg.Wait()
+	w.GoCache(a.now)
+	w.Bg.Wait()
 	if found, _ := a.store.ReadFile(goCacheFile, &mark); !found {
 		t.Fatal("ask mode lost legacy cache schedule")
 	}

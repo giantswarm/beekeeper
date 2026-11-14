@@ -11,6 +11,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/alerts"
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 const loopAlertOwner = "alert-fixture-owner"
@@ -74,6 +75,8 @@ const (
 	labelTeam      = "team"
 )
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLoopAlertIgnoresOtherTeamsPages(t *testing.T) {
 	read := readLoopAlerts
 	r := newLoopRig(t)
@@ -86,7 +89,7 @@ func TestLoopAlertIgnoresOtherTeamsPages(t *testing.T) {
 	unowned := loopFiring()
 	unowned.Installation, unowned.Team = "unowned-fixture", loopOtherTeam
 	w := r.a.newWatcher(false, false)
-	w.publishAlerts([]alerts.Firing{f, unowned})
+	w.PublishAlerts([]alerts.Firing{f, unowned})
 	r.pass(t)
 	st, err := r.a.store.Read()
 	if err != nil || len(st.Notes) != 0 {
@@ -100,6 +103,9 @@ func TestLoopAlertIgnoresOtherTeamsPages(t *testing.T) {
 // The team's alerts are relevant 24/7: one the business-hours inhibition
 // mutes is read from the Alertmanager's answer, published by the watch and
 // routed by the loop like any other page.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLoopAlertTeamPageUnderWorkingHoursInhibitionCounts(t *testing.T) {
 	read := readLoopAlerts
 	r := newLoopRig(t)
@@ -123,7 +129,7 @@ func TestLoopAlertTeamPageUnderWorkingHoursInhibitionCounts(t *testing.T) {
 	}
 	blockLoopAlert(t, r, firing[0])
 	w := r.a.newWatcher(false, false)
-	w.publishAlerts(firing)
+	w.PublishAlerts(firing)
 	r.pass(t)
 	st, err := r.a.store.Read()
 	if err != nil || len(st.Notes) != 1 || !strings.Contains(st.Notes[0].Text, firing[0].Instance()) {
@@ -198,6 +204,8 @@ func TestLoopAlertReplacesUnresumableWorkerAndRetriesStaffing(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLoopAlertBudgetHoldsWakeAndReplacement(t *testing.T) {
 	for _, resumable := range []bool{true, false} {
 		t.Run(strconv.FormatBool(resumable), func(t *testing.T) {
@@ -206,7 +214,7 @@ func TestLoopAlertBudgetHoldsWakeAndReplacement(t *testing.T) {
 			readLoopAlerts = func(context.Context, *app) ([]alerts.Firing, error) { return []alerts.Firing{f}, nil }
 			loopResumable = func(*app, *state.State, state.Agent) bool { return resumable }
 			r.park(t, loop.AlertParkPrefix+f.Alertname, time.Now())
-			if err := r.a.store.Record(event(watchParty, "watch.budget-state", "true")); err != nil {
+			if err := r.a.store.Record(event(watch.WatchParty, "watch.budget-state", "true")); err != nil {
 				t.Fatal(err)
 			}
 			r.pass(t)
@@ -251,18 +259,20 @@ func TestLoopAlertParkCommandAcceptsNamedEvent(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLoopAlertReadsWatchEvent(t *testing.T) {
 	read := readLoopAlerts
 	r := newLoopRig(t)
 	f := loopFiring()
 	w := r.a.newWatcher(false, false)
-	w.publishAlerts([]alerts.Firing{f})
-	w.emitNow("alerts", "NEW alert line after the structured snapshot")
+	w.PublishAlerts([]alerts.Firing{f})
+	w.EmitNow("alerts", "NEW alert line after the structured snapshot")
 	got, err := read(context.Background(), r.a)
 	if err != nil || len(got) != 1 || got[0].Instance() != f.Instance() {
 		t.Fatalf("watch event: %+v %v", got, err)
 	}
-	w.publishAlerts(nil)
+	w.PublishAlerts(nil)
 	got, err = read(context.Background(), r.a)
 	if err != nil || len(got) != 0 {
 		t.Fatalf("resolved: %+v %v", got, err)
@@ -480,6 +490,8 @@ func TestLoopAlertLegacyOwnerKeepsItsInstallation(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLoopAlertLegacyWatchStateKeepsOwner(t *testing.T) {
 	read := readLoopAlerts
 	r := newLoopRig(t)
@@ -494,7 +506,7 @@ func TestLoopAlertLegacyWatchStateKeepsOwner(t *testing.T) {
 		t.Fatal(err)
 	}
 	w := r.a.newWatcher(false, false)
-	w.publishAlerts([]alerts.Firing{f})
+	w.PublishAlerts([]alerts.Firing{f})
 	r.pass(t)
 	st, err := r.a.store.Read()
 	if err != nil || len(st.Notes) != 0 {

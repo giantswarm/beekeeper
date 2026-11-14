@@ -10,11 +10,14 @@ import (
 // A role's past run is never resumed or reopened: the holder and the
 // successor an open relay names are not past runs, a run a taken relay
 // relieved is, and a worker is not.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestPastRun(t *testing.T) {
 	now := time.Date(2026, 10, 6, 0, 2, 0, 0, time.UTC)
-	holder := state.Party{Session: "h", Name: guideRole.runName(10)}
-	next := state.Party{Session: "n", Name: guideRole.runName(11)}
-	old := state.Party{Session: "o", Name: guideRole.runName(9)}
+	holder := state.Party{Session: "h", Name: guideRole.RunName(10)}
+	next := state.Party{Session: "n", Name: guideRole.RunName(11)}
+	old := state.Party{Session: "o", Name: guideRole.RunName(9)}
 	worker := state.Party{Session: "w", Name: "Board pull 192"}
 	st := &state.State{Guide: &state.Role{
 		Holder:   &state.Supervisor{Party: holder, Since: now.Add(-time.Hour)},

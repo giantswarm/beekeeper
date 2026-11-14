@@ -16,6 +16,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // endDevctl writes the files a merge's devctl leaves when it ends: its
@@ -148,8 +149,8 @@ func TestAPromotionWaitsForTheRunningMergeAheadToSettle(t *testing.T) {
 // behind it starts: merged, its release unknown, the lane settles by the
 // settle rule first; not merged, the promotion starts at once.
 //
-// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
-// The merge base has no internal/gate package, so these tests cannot build there.
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestAPromotionBehindAMergeWithoutItsOutcomeWaitsForItsJudgement(t *testing.T) {
 	for _, c := range []struct {
 		name, pull, held string
@@ -196,8 +197,8 @@ func TestAPromotionBehindAMergeWithoutItsOutcomeWaitsForItsJudgement(t *testing.
 			if !strings.Contains(out, "o/r: settling o/r#889, its release unknown, until ") {
 				t.Errorf("lanes does not say the settle:\n%s", out)
 			}
-			w := &watcher{app: a, last: map[string]time.Time{}}
-			w.settled(context.Background(), a.now)
+			w := &watch.Watcher{Host: a, Last: map[string]time.Time{}}
+			w.Settled(context.Background(), a.now)
 			if st, _ := a.store.Read(); !slices.ContainsFunc(st.Merges, func(m state.Merge) bool { return m.Phase == state.Settling }) {
 				t.Fatal("the watch settled a release unknown before the settle rule")
 			}

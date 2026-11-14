@@ -462,16 +462,6 @@ func (a *app) publishClaimed(ctx context.Context, w io.Writer, me state.Party, i
 	return refused("%s was claimed by %s first: the claim is given back; board next --claim picks again", issue, winner)
 }
 
-// claims is a watch's sync of the desk's claims: a failure is a condition
-// of its own, said once until a sync succeeds.
-func (w *watcher) claims(ctx context.Context) {
-	if err := w.syncClaims(ctx); err != nil {
-		w.emit("claims", "CLAIMS on GitHub failed: %v", err)
-		return
-	}
-	w.clear("claims")
-}
-
 // warnClaimedElsewhere says on w when another desk's live claim holds issue,
 // which sessions serve records over: two desks then work it.
 func (a *app) warnClaimedElsewhere(ctx context.Context, w io.Writer, issue string) {

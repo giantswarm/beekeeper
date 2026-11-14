@@ -20,6 +20,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/upgrade"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // laneView is one lane's queue with its installation and hold.
@@ -861,7 +862,7 @@ func (a *app) recordGateExits(ctx context.Context, workerStopped bool) (recorded
 				cutBases = append(cutBases, m.Run)
 			}
 			st.Merges[i].Run = ""
-			e := event(watchParty, "merge.cut", "%s in lane %s: %s", m.Key(), m.Lane, cutText(m))
+			e := event(watch.WatchParty, "merge.cut", "%s in lane %s: %s", m.Key(), m.Lane, cutText(m))
 			if m.By.Session != "" || m.By.HostSession != "" {
 				o := cutOwed(m, now)
 				o.Cancelled = readStopped(gate.MergeBase(a.store.Dir(), m.Repo, m.PR)) != (state.Party{})
@@ -882,14 +883,14 @@ func (a *app) recordGateExits(ctx context.Context, workerStopped bool) (recorded
 			m := st.Merges[i]
 			lane, _ := a.cfg.LaneNamed(m.Lane)
 			lane.Name = m.Lane
-			ev := recordRun(st, i, lane, watchParty, r, now, fmt.Sprintf(" (for %q, whose gate, pid %d, is gone)", m.By.Name, m.PID))
+			ev := recordRun(st, i, lane, watch.WatchParty, r, now, fmt.Sprintf(" (for %q, whose gate, pid %d, is gone)", m.By.Name, m.PID))
 			evs = append(evs, ev...)
 			recorded = append(recorded, ev[len(ev)-1].Detail)
 			recordedBases = append(recordedBases, gate.MergeBase(a.store.Dir(), m.Repo, m.PR))
 		}
 		lost = merge.Lost(st, a.now, proc.Alive)
 		for _, m := range lost {
-			evs = append(evs, event(watchParty, "merge.lost", "%s in lane %s: its gate (pid %d) and devctl are gone", m.Key(), m.Lane, m.PID))
+			evs = append(evs, event(watch.WatchParty, "merge.lost", "%s in lane %s: its gate (pid %d) and devctl are gone", m.Key(), m.Lane, m.PID))
 		}
 		return a.mergeEvents(evs)
 	})

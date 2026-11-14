@@ -17,6 +17,9 @@ import (
 // DISK FILLING from the write rate; only free space under the floor is the
 // emergency. On the base the loop reads the forecast as Low: starts stay
 // held, a note for the person appears.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLoopWatchFillForecastAloneNeverHoldsStarts(t *testing.T) {
 	r := newLoopRig(t)
 	r.a.cfg.Watch.DiskFillWithin = config.Duration{Duration: 2 * time.Hour}
@@ -24,7 +27,7 @@ func TestLoopWatchFillForecastAloneNeverHoldsStarts(t *testing.T) {
 	total := 1900 * gibMiB // floor 95 GiB; free stays above it while falling fast
 	for i := range 5 {
 		now := time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC).Add(time.Duration(i) * 30 * time.Second)
-		w.sampleDisk(now, machine.Disk{FreeMiB: 100*gibMiB - i*1229, TotalMiB: total}, nil, nil)
+		w.SampleDisk(now, machine.Disk{FreeMiB: 100*gibMiB - i*1229, TotalMiB: total}, nil, nil)
 	}
 	l, err := r.a.newSupervisorLoop(false)
 	if err != nil {

@@ -16,6 +16,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 const (
@@ -26,6 +27,9 @@ const (
 
 // A supervisor inventory can hold admission longer than the fatal timer
 // deadline. Timers must defer that check and still deliver unrelated wakes.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTimerDispatcherBoundsGitHubAdmissionWait(t *testing.T) {
 	a, _ := stubApp(t)
 	a.out = io.Discard
@@ -61,7 +65,7 @@ func TestTimerDispatcherBoundsGitHubAdmissionWait(t *testing.T) {
 	go func() {
 		w, err := a.dispatchTimerPass(t.Context())
 		if err == nil {
-			w.timerActs.Wait()
+			w.TimerActs.Wait()
 		}
 		done <- err
 	}()
@@ -84,6 +88,8 @@ func TestTimerDispatcherBoundsGitHubAdmissionWait(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTimerDispatcherStopCancelsEarlierCommandAndResumeRetries(t *testing.T) {
 	for _, repeat := range []string{"", state.RepeatDaily} {
 		t.Run("repeat="+repeat, func(t *testing.T) {
@@ -145,7 +151,7 @@ func TestTimerDispatcherStopCancelsEarlierCommandAndResumeRetries(t *testing.T) 
 			if err != nil {
 				t.Fatal(err)
 			}
-			w.timerActs.Wait()
+			w.TimerActs.Wait()
 			st, err = a.store.Read()
 			if err != nil || len(st.Timers) > 0 && !st.Timers[0].Due.After(tm.Due) {
 				t.Fatalf("resume did not retry occurrence: %+v, %v", st, err)
@@ -154,6 +160,8 @@ func TestTimerDispatcherStopCancelsEarlierCommandAndResumeRetries(t *testing.T) 
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTimerDispatcherWorksWithoutWatchOrLoopAndClaimsOnce(t *testing.T) {
 	a, _ := stubApp(t)
 	a.out = io.Discard
@@ -175,7 +183,7 @@ func TestTimerDispatcherWorksWithoutWatchOrLoopAndClaimsOnce(t *testing.T) {
 				t.Error(err)
 				return
 			}
-			w.timerActs.Wait()
+			w.TimerActs.Wait()
 		})
 	}
 	passes.Wait()
@@ -226,6 +234,8 @@ func TestTimerDispatcherStopRetainsInterruptedWake(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTimerDispatcherKeepsTickingDuringEarlierAction(t *testing.T) {
 	a, _ := stubApp(t)
 	a.out = io.Discard
@@ -241,7 +251,7 @@ func TestTimerDispatcherKeepsTickingDuringEarlierAction(t *testing.T) {
 	var releaseOnce sync.Once
 	unblock := func() { releaseOnce.Do(func() { close(release) }) }
 	defer unblock()
-	var batches []*watcher
+	var batches []*watch.Watcher
 	for id := 1; id <= 2; id++ {
 		if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 			st.Timers = append(st.Timers, state.Timer{ID: id, Due: a.now.Add(-time.Minute), Wake: timerDispatchRepairWorker, What: timerProofFinished})
@@ -263,10 +273,12 @@ func TestTimerDispatcherKeepsTickingDuringEarlierAction(t *testing.T) {
 	// Release and wait before restoring the global wake implementation.
 	unblock()
 	for _, w := range batches {
-		w.timerActs.Wait()
+		w.TimerActs.Wait()
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTimerDispatcherHonorsStopForCommandsAndWakes(t *testing.T) {
 	a, _ := stubApp(t)
 	a.out = io.Discard
@@ -281,13 +293,15 @@ func TestTimerDispatcherHonorsStopForCommandsAndWakes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w.timerActs.Wait()
+	w.TimerActs.Wait()
 	st, err := a.store.Read()
 	if err != nil || len(st.Timers) != 2 {
 		t.Fatal("stop did not retain timers", err)
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTimerDispatcherSamplesItsOwnGitHubBudget(t *testing.T) {
 	a, _ := stubApp(t)
 	a.out = io.Discard
@@ -309,7 +323,7 @@ func TestTimerDispatcherSamplesItsOwnGitHubBudget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w.timerActs.Wait()
+	w.TimerActs.Wait()
 	st, err := a.store.Read()
 	if err != nil {
 		t.Fatal(err)
@@ -319,6 +333,8 @@ func TestTimerDispatcherSamplesItsOwnGitHubBudget(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTimerDispatcherPreservesLongCheckIntervals(t *testing.T) {
 	a, _ := stubApp(t)
 	a.out = io.Discard
@@ -339,7 +355,7 @@ func TestTimerDispatcherPreservesLongCheckIntervals(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w.timerActs.Wait()
+	w.TimerActs.Wait()
 	st, err := a.store.Read()
 	if err != nil || !st.Timers[0].Checked.Equal(checked) {
 		t.Fatal("deferred timer interval was restarted", err)
@@ -436,6 +452,9 @@ func TestTimerDispatcherBusyLockKeepsServiceAlive(t *testing.T) {
 // of a minute each, so a check ran on its tick but settled past the fatal
 // deadline. A writer holding the lock must not hold back the checks: the
 // pass checks from the snapshot, and only its settlement waits for the lock.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTimerDispatcherChecksWhileWriterHoldsStateLock(t *testing.T) {
 	a, _ := stubApp(t)
 	a.out = io.Discard
@@ -475,7 +494,7 @@ func TestTimerDispatcherChecksWhileWriterHoldsStateLock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w.timerActs.Wait()
+	w.TimerActs.Wait()
 	if err := <-held; err != nil {
 		t.Fatal(err)
 	}
@@ -529,16 +548,19 @@ func TestTimerDispatcherObservesStopWithoutStateLock(t *testing.T) {
 
 // Rejected plain wakes must wait between delivery attempts just like conditional
 // wakes, without losing the original occurrence or its delivery reason.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestPlainWakeRetryWaitsForInterval(t *testing.T) {
 	now := time.Now().UTC()
 	timer := state.Timer{ID: 1, Due: now.Add(-time.Hour), Checked: now, Wake: workerRole, PendingWakeReason: timerDueEarlier, Every: time.Minute}
 	st := &state.State{Timers: []state.Timer{timer}}
-	_, _, fires, changed := settleTimers(st, nil, now.Add(30*time.Second))
+	_, _, fires, changed := watch.SettleTimers(st, nil, now.Add(30*time.Second))
 	if changed || len(fires) != 0 || len(st.Timers) != 1 {
 		t.Fatal("plain wake retried before its interval", fires, st.Timers)
 	}
-	_, _, fires, _ = settleTimers(st, nil, now.Add(time.Minute))
-	if len(fires) != 1 || fires[0].reason != timer.PendingWakeReason || !fires[0].t.Due.Equal(timer.Due) {
+	_, _, fires, _ = watch.SettleTimers(st, nil, now.Add(time.Minute))
+	if len(fires) != 1 || fires[0].Reason != timer.PendingWakeReason || !fires[0].T.Due.Equal(timer.Due) {
 		t.Fatal("retry lost its due occurrence", fires)
 	}
 }
@@ -559,6 +581,8 @@ func (s *timerWriteCountingStore) Record(events ...state.Event) error {
 	return s.Store.Record(events...)
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestIdleTimerDispatchDoesNotWriteState(t *testing.T) {
 	a, _ := stubApp(t)
 	store := &timerWriteCountingStore{Store: a.store}
@@ -567,12 +591,14 @@ func TestIdleTimerDispatchDoesNotWriteState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w.timerActs.Wait()
+	w.TimerActs.Wait()
 	if store.updates != 0 || store.records != 0 {
 		t.Fatalf("idle timer dispatch wrote state updates=%d records=%d", store.updates, store.records)
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTimerDispatchBatchesSkippedAndFailedWakeRetries(t *testing.T) {
 	a, _ := stubApp(t)
 	a.out = io.Discard
@@ -610,7 +636,7 @@ func TestTimerDispatchBatchesSkippedAndFailedWakeRetries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w.timerActs.Wait()
+	w.TimerActs.Wait()
 	if store.updates > 3 || store.records != 0 {
 		t.Fatalf("unbounded timer state writes: updates=%d records=%d", store.updates, store.records)
 	}
@@ -626,6 +652,8 @@ func TestTimerDispatchBatchesSkippedAndFailedWakeRetries(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTimerDispatchSkipsConditionProbesForPendingWakeRetries(t *testing.T) {
 	a, _ := stubApp(t)
 	a.out = io.Discard
@@ -656,7 +684,7 @@ func TestTimerDispatchSkipsConditionProbesForPendingWakeRetries(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	oldBudget, oldReadProbe, oldProbe, oldWake := readBudget, readProbe, runProbe, wakeOwner
+	oldBudget, oldReadProbe, oldProbe, oldWake := readBudget, readProbe, watch.RunProbe, wakeOwner
 	readBudget = func(*app, context.Context) (github.Budget, error) {
 		t.Error("budget sampled for latched pending wake retry")
 		return github.Budget{}, errors.New("unexpected budget read")
@@ -665,7 +693,7 @@ func TestTimerDispatchSkipsConditionProbesForPendingWakeRetries(t *testing.T) {
 		t.Error("check probe executed for latched pending wake retry")
 		return nil, errors.New("unexpected probe")
 	}
-	runProbe = func(context.Context, string) bool {
+	watch.RunProbe = func(context.Context, string) bool {
 		t.Error("shell probe executed for latched pending wake retry")
 		return false
 	}
@@ -674,7 +702,7 @@ func TestTimerDispatchSkipsConditionProbesForPendingWakeRetries(t *testing.T) {
 		wakes.Add(1)
 		return nil
 	}
-	t.Cleanup(func() { readBudget, readProbe, runProbe, wakeOwner = oldBudget, oldReadProbe, oldProbe, oldWake })
+	t.Cleanup(func() { readBudget, readProbe, watch.RunProbe, wakeOwner = oldBudget, oldReadProbe, oldProbe, oldWake })
 	lock := flock.New(filepath.Join(a.store.Dir(), "loop-graphql.lock"))
 	if err := lock.Lock(); err != nil {
 		t.Fatal(err)
@@ -684,12 +712,14 @@ func TestTimerDispatchSkipsConditionProbesForPendingWakeRetries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w.timerActs.Wait()
+	w.TimerActs.Wait()
 	if wakes.Load() != 2 {
 		t.Fatalf("expected 2 wakes delivered without re-probing, got %d", wakes.Load())
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestIdleWatchHealthPassesDoNotWriteState(t *testing.T) {
 	a, _ := stubApp(t)
 	a.out = io.Discard
@@ -722,8 +752,8 @@ func TestIdleWatchHealthPassesDoNotWriteState(t *testing.T) {
 		t.Fatal(err)
 	}
 	w := a.newWatcher(false, true)
-	w.now = a.now
-	w.guideMonitor(t.Context(), st, nil)
+	watchApp(w.Host).now = a.now
+	w.GuideMonitor(t.Context(), st, nil)
 	if store.updates != 0 || store.records != 0 {
 		t.Fatalf("idle watch health passes wrote state updates=%d records=%d", store.updates, store.records)
 	}

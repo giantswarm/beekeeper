@@ -19,7 +19,6 @@ const boardReleased = "board.released"
 // How a held decision closed, as its release says it.
 const (
 	closedAnswered  = "answered"
-	closedDefaulted = "closed by its default"
 	closedOvertaken = "closed as overtaken"
 	closedDone      = "closed by hand"
 )

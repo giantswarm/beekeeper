@@ -12,9 +12,12 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/proc"
+	"github.com/giantswarm/beekeeper/internal/watch"
 	"github.com/giantswarm/beekeeper/pkg/project"
 )
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestStaleWatches(t *testing.T) {
 	const path = "/home/u/.go/bin/beekeeper"
 	table := func(ps ...*proc.Process) *proc.Table {
@@ -34,10 +37,10 @@ func TestStaleWatches(t *testing.T) {
 
 	var out bytes.Buffer
 	replaced := map[int]bool{}
-	w := &watcher{app: &app{out: &out, cfg: &config.Config{}}, last: map[string]time.Time{}}
-	w.owners.Store(&map[int]string{10: "Supervisor 3"})
-	w.replaced = func(pid int) (string, bool) { return path, replaced[pid] }
-	w.versionOf = func(_ context.Context, file string) string {
+	w := &watch.Watcher{Host: &app{out: &out, cfg: &config.Config{}}, Last: map[string]time.Time{}}
+	w.Owners.Store(&map[int]string{10: "Supervisor 3"})
+	w.Replaced = func(pid int) (string, bool) { return path, replaced[pid] }
+	w.VersionOf = func(_ context.Context, file string) string {
 		if file == path {
 			return "v9.9.9"
 		}
@@ -45,7 +48,7 @@ func TestStaleWatches(t *testing.T) {
 	}
 	poll := func(tb *proc.Table) string {
 		out.Reset()
-		w.staleWatches(context.Background(), tb)
+		w.StaleWatches(context.Background(), tb)
 		return out.String()
 	}
 
@@ -79,19 +82,21 @@ func TestStaleWatches(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchReportsFailedGateAfterInstall(t *testing.T) {
 	const path = "/home/u/.go/bin/beekeeper"
 	var out bytes.Buffer
-	w := &watcher{app: &app{out: &out, cfg: &config.Config{}}, last: map[string]time.Time{}}
-	w.replaced = func(int) (string, bool) { return path, true }
-	w.versionOf = func(context.Context, string) string { return "v8.8.8" }
-	w.gateOf = func(context.Context, string) error {
+	w := &watch.Watcher{Host: &app{out: &out, cfg: &config.Config{}}, Last: map[string]time.Time{}}
+	w.Replaced = func(int) (string, bool) { return path, true }
+	w.VersionOf = func(context.Context, string) string { return "v8.8.8" }
+	w.GateOf = func(context.Context, string) error {
 		return errors.New("GitHub budget under the floor")
 	}
 	tb := &proc.Table{ByPID: map[int]*proc.Process{
 		os.Getpid(): {PID: os.Getpid(), PPID: 1, Comm: pluginName, Args: []string{path, watchName}},
 	}}
-	w.staleWatches(context.Background(), tb)
+	w.StaleWatches(context.Background(), tb)
 	if !strings.Contains(out.String(), "WATCH GATE FAILED "+path+": budget --gate failed after install: GitHub budget under the floor") {
 		t.Fatalf("watch output missing gate failure:\n%s", out.String())
 	}

@@ -700,7 +700,7 @@ func (a *app) uiRoles(st *state.State, sessions []*claude.Session) []tui.Role {
 
 // uiRole is rl's record with r and sv as the screen reads it.
 func (a *app) uiRole(rl role, r state.Role, sessions []*claude.Session, sv supervision) tui.Role {
-	v := tui.Role{Name: rl.name}
+	v := tui.Role{Name: rl.Name}
 	rv := a.viewRole(rl, r, sessions, sv)
 	if rv == nil {
 		return v

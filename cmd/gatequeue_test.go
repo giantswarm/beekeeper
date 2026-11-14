@@ -22,6 +22,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // queueApp is an app with one lane, o/r, whose merges are seeded with
@@ -284,8 +285,8 @@ func lastEventOf(t *testing.T, a *app, verb string) string {
 // request closes and settles it once merged, including a live waiting gate;
 // one asked less than a check ago is not asked.
 //
-// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
-// The merge base has no internal/gate package, so these tests cannot build there.
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestClosedAndMergedPlacesLeaveTheirLane(t *testing.T) {
 	now := time.Now()
 	alive := sleeper(t)
@@ -303,7 +304,7 @@ func TestClosedAndMergedPlacesLeaveTheirLane(t *testing.T) {
 		asked = append(asked, n)
 		return pulls[n], nil
 	}
-	if err := a.checkPlaces(context.Background(), watchParty, now, "", "", 0, 30*time.Second); err != nil {
+	if err := a.checkPlaces(context.Background(), watch.WatchParty, now, "", "", 0, 30*time.Second); err != nil {
 		t.Fatal(err)
 	}
 	if !slices.Equal(asked, []int{1, 2, 3, 4}) {

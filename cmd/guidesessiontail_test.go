@@ -17,6 +17,8 @@ const (
 	pastGuideHost = "local_guide15"
 )
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestSuccessorGuideReadsPersonsWordsFromPastGuideSession(t *testing.T) {
 	a, _ := answerApp(t)
 	now := time.Date(2026, 10, 30, 14, 0, 0, 0, time.UTC)
@@ -57,7 +59,7 @@ func TestSuccessorGuideReadsPersonsWordsFromPastGuideSession(t *testing.T) {
 
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		// Guide run 16 replaced Guide run 15 (so Guide run 15 is no longer in st.Agents).
-		st.Agents = []state.Agent{{Party: nextGuide, Task: guideRole.duty}}
+		st.Agents = []state.Agent{{Party: nextGuide, Task: guideRole.Duty}}
 		st.SetGuideRole(state.Role{Holder: &state.Supervisor{Party: nextGuide, Since: now}})
 		return []state.Event{
 			{At: now.Add(-10 * time.Minute), By: pastGuide, Verb: guideStartVerb, Detail: "as " + pastGuideName},

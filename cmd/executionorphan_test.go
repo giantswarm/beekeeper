@@ -12,6 +12,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/update"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 func TestHostsDrainNamesRecordedExecutions(t *testing.T) {
@@ -36,6 +37,8 @@ func (f *orphanTransport) Inventory(context.Context, string) ([]execution.Ref, e
 }
 func (f *orphanTransport) Missing(context.Context, execution.Ref) (bool, error) { return f.absent, nil }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestExecutionOrphanInventoryStopsOnlyUnknownJournal(t *testing.T) {
 	a, r := executionTestApp(t)
 	a.cfg.Identity.Host = r.Coordinator
@@ -66,13 +69,13 @@ func TestExecutionOrphanInventoryStopsOnlyUnknownJournal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w := &watcher{app: a}
-	w.syncExecutions(context.Background(), st)
+	w := &watch.Watcher{Host: a}
+	w.SyncExecutions(context.Background(), st)
 	if fake.inventoryCalls != 2 {
 		t.Fatalf("inventory calls=%d", fake.inventoryCalls)
 	}
-	w.now = w.now.Add(time.Minute)
-	w.syncExecutions(context.Background(), st)
+	watchApp(w.Host).now = watchApp(w.Host).now.Add(time.Minute)
+	w.SyncExecutions(context.Background(), st)
 	if fake.inventoryCalls != 2 {
 		t.Fatalf("settled idle host polled again: inventory calls=%d", fake.inventoryCalls)
 	}
@@ -243,6 +246,8 @@ func (f *unsupportedMissingTransport) Missing(context.Context, execution.Ref) (b
 	return false, execution.ErrUnsupported
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestExecutionWatchFindsHostOnlyJournal(t *testing.T) {
 	a, r := executionTestApp(t)
 	a.cfg.Identity.Host = r.Coordinator
@@ -262,8 +267,8 @@ func TestExecutionWatchFindsHostOnlyJournal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w := &watcher{app: a}
-	w.syncExecutions(context.Background(), st)
+	w := &watch.Watcher{Host: a}
+	w.SyncExecutions(context.Background(), st)
 	if stops != 1 {
 		t.Fatalf("host-only journal stops=%d; expected one", stops)
 	}

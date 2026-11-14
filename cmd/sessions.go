@@ -74,8 +74,8 @@ func (a *app) viewRole(rl role, r state.Role, sessions []*claude.Session, sv sup
 		return nil
 	}
 	return &roleView{
-		Supervisor: *r.Holder, Live: sv.live, CLIGone: sv.gone, RestartUntil: sv.until, Relay: r.Relay,
-		Context: sessionContext(sessions, r.Holder.Party), RelayAt: int64(rl.cfg(a.cfg).RelayAt), Run: r.Run,
+		Supervisor: *r.Holder, Live: sv.Live, CLIGone: sv.Gone, RestartUntil: sv.Until, Relay: r.Relay,
+		Context: sessionContext(sessions, r.Holder.Party), RelayAt: int64(rl.Cfg(a.cfg).RelayAt), Run: r.Run,
 	}
 }
 
@@ -182,8 +182,8 @@ func (v *view) attributeBrowseSessions() {
 
 func roleOf(st *state.State, s *claude.Session) string {
 	for _, rl := range roles {
-		if h := rl.get(st).Holder; h != nil && h.Is(s.Party()) {
-			return rl.name
+		if h := rl.Get(st).Holder; h != nil && h.Is(s.Party()) {
+			return rl.Name
 		}
 	}
 	for _, ag := range st.Agents {
@@ -691,7 +691,7 @@ func servedBy(st *state.State, p state.Party) state.Party {
 // when it says none.
 func rosterRole(st *state.State, me state.Party) string {
 	switch {
-	case guideRole.get(st).Holder != nil && guideRole.get(st).Holder.Is(me):
+	case guideRole.Get(st).Holder != nil && guideRole.Get(st).Holder.Is(me):
 		return guideRoleAlias
 	case slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(me) }):
 		return workerRole
@@ -1137,7 +1137,7 @@ func (a *app) endedSessionNamed(running []*claude.Session, st *state.State, q st
 		if r.Holder != nil {
 			var names []string
 			if r.Run > 0 {
-				names = append(names, guideRole.runName(r.Run))
+				names = append(names, guideRole.RunName(r.Run))
 			}
 			addParty(r.Holder.Party, r.Holder.Since, names...)
 		}

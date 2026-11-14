@@ -12,6 +12,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 const (
@@ -35,7 +36,7 @@ func (f *retireTransport) Retire(_ context.Context, ref execution.Ref, q executi
 
 // retireFixture is an ended execution whose log reached the transcript store,
 // shaped by change, and the watcher and transport that retire it.
-func retireFixture(t *testing.T, change func(*state.State, *state.ExecutionRecord)) (*app, *watcher, *retireTransport, execution.Ref) {
+func retireFixture(t *testing.T, change func(*state.State, *state.ExecutionRecord)) (*app, *watch.Watcher, *retireTransport, execution.Ref) {
 	t.Helper()
 	a, r := executionTestApp(t)
 	fake := &retireTransport{testExecutionTransport: &testExecutionTransport{}}
@@ -51,7 +52,7 @@ func retireFixture(t *testing.T, change func(*state.State, *state.ExecutionRecor
 	}); err != nil {
 		t.Fatal(err)
 	}
-	return a, &watcher{app: a}, fake, r.Ref
+	return a, &watch.Watcher{Host: a}, fake, r.Ref
 }
 
 func retirementOf(t *testing.T, a *app, ref execution.Ref) *state.ExecutionRetirement {
@@ -64,15 +65,17 @@ func retirementOf(t *testing.T, a *app, ref execution.Ref) *state.ExecutionRetir
 	return rec.Retirement
 }
 
-func tick(t *testing.T, a *app, w *watcher) {
+func tick(t *testing.T, a *app, w *watch.Watcher) {
 	t.Helper()
 	st, err := a.store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
-	w.retireEndedExecutions(context.Background(), st)
+	w.RetireEndedExecutions(context.Background(), st)
 }
 
+// An inherited review record keeps a completed round, but must not prevent
+// an unreported fixer crash from retiring its execution.
 func TestExecutionRetirementTriggers(t *testing.T) {
 	park := &state.Park{On: retireFixturePark}
 	for _, tc := range []struct {
@@ -122,7 +125,7 @@ func TestExecutionRetirementTriggers(t *testing.T) {
 				if tc.change != nil {
 					tc.change(st, r)
 				}
-				got = executionRetirementTrigger(st, r)
+				got = watch.ExecutionRetirementTrigger(st, r)
 			})
 			if got != tc.want {
 				t.Fatalf("trigger = %q, want %q", got, tc.want)
@@ -159,12 +162,15 @@ func TestExecutionWatchRetiresOnceAndKeepsParkedWorkers(t *testing.T) {
 
 // An unreachable host neither blocks revocation nor reads as retired, and the
 // retry resumes the retirement already recorded.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestExecutionRetirementSurvivesAnUnreachableHost(t *testing.T) {
 	a, w, fake, ref := retireFixture(t, func(_ *state.State, r *state.ExecutionRecord) { r.Request.GitHub = true })
 	fake.fail = &execution.UnreachableError{Operation: "retire", Cause: errors.New("connection refused")}
 	tick(t, a, w)
 	x := retirementOf(t, a, ref)
-	if x.RevokedAt.IsZero() || !x.RetiredAt.IsZero() || x.HostError == "" || x.Attempts != 1 || !x.NextAttempt.After(w.now) || x.Finished() {
+	if x.RevokedAt.IsZero() || !x.RetiredAt.IsZero() || x.HostError == "" || x.Attempts != 1 || !x.NextAttempt.After(watchApp(w.Host).now) || x.Finished() {
 		t.Fatalf("retirement = %+v", x)
 	}
 	tick(t, a, w)
@@ -172,7 +178,7 @@ func TestExecutionRetirementSurvivesAnUnreachableHost(t *testing.T) {
 		t.Fatalf("a retry ignored its backoff: %d", len(fake.requests))
 	}
 	fake.fail = nil
-	w.now = x.NextAttempt.Add(time.Second)
+	watchApp(w.Host).now = x.NextAttempt.Add(time.Second)
 	tick(t, a, w)
 	done := retirementOf(t, a, ref)
 	if !done.Finished() || done.ID != x.ID || done.HostError != "" || !done.RevokedAt.Equal(x.RevokedAt) {
@@ -185,6 +191,9 @@ func TestExecutionRetirementSurvivesAnUnreachableHost(t *testing.T) {
 
 // A failed revocation is retried on its own and never reported as done, while
 // the host's part does not wait for GitHub.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestExecutionRevocationRetriesWithoutFalseSuccess(t *testing.T) {
 	a, w, fake, ref := retireFixture(t, func(_ *state.State, r *state.ExecutionRecord) { r.Request.GitHub = true })
 	ledger := a.workerGitHubPath(ref)
@@ -202,7 +211,7 @@ func TestExecutionRevocationRetriesWithoutFalseSuccess(t *testing.T) {
 	if err := os.WriteFile(ledger, []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	w.now = x.NextAttempt.Add(time.Second)
+	watchApp(w.Host).now = x.NextAttempt.Add(time.Second)
 	tick(t, a, w)
 	done := retirementOf(t, a, ref)
 	if !done.Finished() || done.RevokeError != "" || len(fake.requests) != 1 {
@@ -279,25 +288,31 @@ func TestExecutionRetirementRefusesAnUnconfirmedAnswer(t *testing.T) {
 
 // A host on an older release holds the retirement open on its backoff without
 // reporting it as retired.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestExecutionRetirementWaitsForAnOlderHost(t *testing.T) {
 	a, w, fake, ref := retireFixture(t, nil)
 	fake.fail = execution.ErrUnsupported
 	tick(t, a, w)
 	x := retirementOf(t, a, ref)
-	if !x.RetiredAt.IsZero() || x.HostError == "" || !x.NextAttempt.After(w.now) {
+	if !x.RetiredAt.IsZero() || x.HostError == "" || !x.NextAttempt.After(watchApp(w.Host).now) {
 		t.Fatalf("retirement = %+v", x)
 	}
-	if w.isActive(executionRetireEmitKey) {
+	if w.IsActive(watch.ExecutionRetireEmitKey) {
 		t.Fatal("an older host was raised as a failure")
 	}
 }
 
 // A backlog retires in bounded ticks, the rest on the next one.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestExecutionRetirementBoundsATick(t *testing.T) {
 	a, w, fake, _ := retireFixture(t, func(st *state.State, _ *state.ExecutionRecord) {
 		first := st.Starts[0]
 		st.Agents = nil
-		for range executionRetireBatch {
+		for range watch.ExecutionRetireBatch {
 			next := first
 			copied := *first.Execution
 			copied.Handle.Ref.Execution = execution.ExecutionID(uuid.NewString())
@@ -306,11 +321,11 @@ func TestExecutionRetirementBoundsATick(t *testing.T) {
 		}
 	})
 	tick(t, a, w)
-	if len(fake.requests) != executionRetireBatch {
+	if len(fake.requests) != watch.ExecutionRetireBatch {
 		t.Fatalf("first tick retired %d", len(fake.requests))
 	}
 	tick(t, a, w)
-	if len(fake.requests) != executionRetireBatch+1 {
+	if len(fake.requests) != watch.ExecutionRetireBatch+1 {
 		t.Fatalf("second tick left a total of %d", len(fake.requests))
 	}
 }

@@ -138,6 +138,8 @@ func TestGuideInstructionSessionUsesDesktopCLIIdentity(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWakeGuideAfterRelayWithoutHooks(t *testing.T) {
 	a, out := stubApp(t)
 	from := state.Party{Session: "s3", Name: "Previous guide"}
@@ -147,10 +149,10 @@ func TestWakeGuideAfterRelayWithoutHooks(t *testing.T) {
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Guide = &state.Role{Holder: &state.Supervisor{Party: from, Since: a.now.Add(-time.Hour)}}
 		st.Agents = []state.Agent{{Party: from}, {Party: to}}
-		if _, _, err := guideRole.relay(st, from, to, a.now, 15*time.Minute); err != nil {
+		if _, _, err := guideRole.Relay(st, from, to, a.now, 15*time.Minute); err != nil {
 			return nil, err
 		}
-		_, evs, err := guideRole.start(st, to, true, false, a.now.Add(time.Minute))
+		_, evs, err := guideRole.Take(st, to, true, false, a.now.Add(time.Minute))
 		return evs, err
 	}); err != nil {
 		t.Fatal(err)

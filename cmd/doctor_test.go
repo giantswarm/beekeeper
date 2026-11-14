@@ -20,6 +20,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 	"github.com/giantswarm/beekeeper/pkg/project"
 )
 
@@ -27,6 +28,8 @@ const testParkRelieved = "relieved-role"
 
 const parkedIssueRef = "giantswarm/x#4"
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestRemoveAgentsHonoursAParkSetSincePlan(t *testing.T) {
 	for _, reason := range []string{verbDone, testParkRelieved} {
 		t.Run(reason, func(t *testing.T) {
@@ -48,7 +51,7 @@ func TestRemoveAgentsHonoursAParkSetSincePlan(t *testing.T) {
 			}); err != nil {
 				t.Fatal(err)
 			}
-			removed, err := a.removeAgents(chores, watchParty)
+			removed, err := a.removeAgents(chores, watch.WatchParty)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -146,6 +149,9 @@ func TestPlanChores(t *testing.T) {
 // A managed SSH execution is never removed for local CLI staleness or
 // archived in the desktop; once its stop is acknowledged (or it reported
 // done and its execution is terminal), the doctor takes it off the roster.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestDoctorRetiresStoppedSSHExecutions(t *testing.T) {
 	a, _ := stubApp(t)
 	now := a.now
@@ -215,7 +221,7 @@ func TestDoctorRetiresStoppedSSHExecutions(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Fatalf("planChores:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
-	removed, err := a.removeAgents(chores, watchParty)
+	removed, err := a.removeAgents(chores, watch.WatchParty)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -363,6 +369,9 @@ const (
 
 // agents idle --done requires the report's "Problems found", and each
 // finding reaches the supervisor's watch once.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestIdleDoneProblemsFound(t *testing.T) {
 	const task, merged = "the task", "merged " + prURL
 	a, out := noteApp(t)
@@ -423,12 +432,12 @@ func TestIdleDoneProblemsFound(t *testing.T) {
 	if rs := st.WorkerReports; len(rs) != 1 || rs[0].Text != reportText || len(rs[0].Problems) != 2 || rs[0].Problems[0] != found[0] || rs[0].Task != task || rs[0].By.Name != agentOne {
 		t.Fatalf("reports = %+v", st.WorkerReports)
 	}
-	lines, _ := firePending(st, nil, time.Now())
+	lines, _ := watch.FirePending(st, nil, time.Now())
 	if len(lines) != 3 || !strings.HasPrefix(lines[0], `WORKER REPORT by "`+agentOne+`" (task: the task): `+merged) ||
 		!strings.HasPrefix(lines[1], `PROBLEM FOUND by "`+agentOne+`": `+found[0]) {
 		t.Errorf("lines = %q", lines)
 	}
-	if lines, _ := firePending(st, nil, time.Now()); len(lines) != 0 || len(st.WorkerReports) != 0 {
+	if lines, _ := watch.FirePending(st, nil, time.Now()); len(lines) != 0 || len(st.WorkerReports) != 0 {
 		t.Errorf("printed again: %q", lines)
 	}
 }
@@ -436,6 +445,9 @@ func TestIdleDoneProblemsFound(t *testing.T) {
 // A park on a person reaches the supervisor's watch once; a park on a
 // merge ahead in the lane, a timer or the supervisor's lease grant does not,
 // and a park on a lease is said once as a lease wait with its queue place.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestParkedOnPersonIsSaidOnce(t *testing.T) {
 	now := time.Now()
 	lab := labOne
@@ -454,7 +466,7 @@ func TestParkedOnPersonIsSaidOnce(t *testing.T) {
 			{Party: state.Party{Name: "on a probe"}, Task: "t", Park: &state.Park{Waits: "the rollout probe the supervisor set"}},
 		},
 	}
-	lines, evs := parkedNews(st, "operator", now)
+	lines, evs := watch.ParkedNews(st, "operator", now)
 	if len(lines) != 4 || len(evs) != 4 ||
 		!strings.HasPrefix(lines[0], `PARKED ON A PERSON: "on a note" parked on #12`) ||
 		!strings.HasPrefix(lines[1], `PARKED ON A PERSON: "on operator"`) || !strings.Contains(lines[1], "tells operator") ||
@@ -463,12 +475,15 @@ func TestParkedOnPersonIsSaidOnce(t *testing.T) {
 		!strings.Contains(lines[3], `number 2 in the queue of agentlab-1 behind "first"`) {
 		t.Fatalf("lines = %q", lines)
 	}
-	if lines, _ := parkedNews(st, "operator", now); len(lines) != 0 {
+	if lines, _ := watch.ParkedNews(st, "operator", now); len(lines) != 0 {
 		t.Errorf("said again: %q", lines)
 	}
 }
 
 // Operational handoffs are not news for the person; explicit human waits are.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestParkOnPersonOperationalHandoffs(t *testing.T) {
 	for name, tc := range map[string]struct {
 		on, waits string
@@ -493,7 +508,7 @@ func TestParkOnPersonOperationalHandoffs(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			p := &state.Park{On: tc.on, Waits: tc.waits}
-			if got := watchParkOnPerson(p, "operator"); got != tc.want {
+			if got := watch.WatchParkOnPerson(p, "operator"); got != tc.want {
 				t.Errorf("parkOnPerson(%+v) = %v, want %v", p, got, tc.want)
 			}
 		})
@@ -733,6 +748,9 @@ func TestCheckCodexSkills(t *testing.T) {
 // idle entries without a CLI, while leaving active role holders, relieved
 // role runs (the person's to close) and sessions the person started
 // running.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestDoctorStopsFinishedBackgroundSessionsNotRelievedGuides(t *testing.T) {
 	a, _ := stubApp(t)
 	plat.Machine = tableMachine{plat.Machine}
@@ -742,8 +760,8 @@ func TestDoctorStopsFinishedBackgroundSessionsNotRelievedGuides(t *testing.T) {
 	a.cfg.Agents.StaleAfter.Duration = 24 * time.Hour
 
 	doneWorker := state.Party{Session: "aaaaaaaa-0000-4000-8000-000000000001", Name: loopWorker}
-	relievedGuide := state.Party{Session: "bbbbbbbb-0000-4000-8000-000000000002", Name: guideRole.runName(1)}
-	activeGuide := state.Party{Session: "cccccccc-0000-4000-8000-000000000003", Name: guideRole.runName(2)}
+	relievedGuide := state.Party{Session: "bbbbbbbb-0000-4000-8000-000000000002", Name: guideRole.RunName(1)}
+	activeGuide := state.Party{Session: "cccccccc-0000-4000-8000-000000000003", Name: guideRole.RunName(2)}
 	personSession := state.Party{Session: "dddddddd-0000-4000-8000-000000000004", Name: "person own"}
 
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
@@ -773,7 +791,7 @@ func TestDoctorStopsFinishedBackgroundSessionsNotRelievedGuides(t *testing.T) {
 		bgSession{ID: activeGuide.Session[:8], SessionID: activeGuide.Session, Kind: bgKind},
 		bgSession{ID: personSession.Session[:8], SessionID: personSession.Session, Kind: bgKind},
 	)
-	if _, err := a.doctor(t.Context(), doctorRun{by: watchParty}); err != nil {
+	if _, err := a.doctor(t.Context(), doctorRun{by: watch.WatchParty}); err != nil {
 		t.Fatal(err)
 	}
 	var stopped []string
@@ -793,6 +811,9 @@ func TestDoctorStopsFinishedBackgroundSessionsNotRelievedGuides(t *testing.T) {
 // The doctor flags a running supervisor loop whose binary version is older
 // than the installed binary, and stays silent once the loop runs the installed
 // version.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestDoctorFlagsStaleSupervisorLoop(t *testing.T) {
 	a, _ := stubApp(t)
 	plat.Machine = tableMachine{plat.Machine}
@@ -821,7 +842,7 @@ func TestDoctorFlagsStaleSupervisorLoop(t *testing.T) {
 	if err := a.store.WriteFile(loop.LoopVersionFile, loop.LoopVersionRecord{PID: pid, Version: testLoopOldVer}); err != nil {
 		t.Fatal(err)
 	}
-	rep, err := a.doctor(t.Context(), doctorRun{by: watchParty})
+	rep, err := a.doctor(t.Context(), doctorRun{by: watch.WatchParty})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -833,7 +854,7 @@ func TestDoctorFlagsStaleSupervisorLoop(t *testing.T) {
 		t.Fatal(err)
 	}
 	installedLoopBinary = os.Executable
-	rep, err = a.doctor(t.Context(), doctorRun{by: watchParty})
+	rep, err = a.doctor(t.Context(), doctorRun{by: watch.WatchParty})
 	if err != nil {
 		t.Fatal(err)
 	}

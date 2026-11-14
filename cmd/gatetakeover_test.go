@@ -15,6 +15,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 func takeoverGate(t *testing.T, pid int, phase string) *gate.GateRun {
@@ -127,8 +128,8 @@ func TestGateTakesOverOlderBinaryAndLateSaveIsRefused(t *testing.T) {
 	}
 }
 
-// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
-// The merge base has no internal/gate package, so these tests cannot build there.
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLanesAndWatchSayStaleMergeOnce(t *testing.T) {
 	g := takeoverGate(t, 1<<30, state.Running)
 	var out bytes.Buffer
@@ -138,9 +139,9 @@ func TestLanesAndWatchSayStaleMergeOnce(t *testing.T) {
 		t.Fatal(out.String())
 	}
 	out.Reset()
-	w := &watcher{app: gateApp(g.Host), last: map[string]time.Time{}}
-	w.staleMerges()
-	w.staleMerges()
+	w := &watch.Watcher{Host: gateApp(g.Host), Last: map[string]time.Time{}}
+	w.StaleMerges()
+	w.StaleMerges()
 	if strings.Count(out.String(), "MERGE STALE:") != 1 {
 		t.Fatal(out.String())
 	}
@@ -164,12 +165,12 @@ func TestSameSessionReusesWaitingPlace(t *testing.T) {
 	}
 }
 
-// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
-// The merge base has no internal/gate package, so these tests cannot build there.
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestMergedWaitingHeadLeavesQueueWithLiveOwner(t *testing.T) {
 	stubGitHub(t, github.Merged, "")
 	g := takeoverGate(t, sleeper(t), state.Waiting)
-	if err := gateApp(g.Host).checkPlaces(g.Ctx, watchParty, gateApp(g.Host).now, "", "", 0, time.Second); err != nil {
+	if err := gateApp(g.Host).checkPlaces(g.Ctx, watch.WatchParty, gateApp(g.Host).now, "", "", 0, time.Second); err != nil {
 		t.Fatal(err)
 	}
 	q := merge.Queue(gateState(t, g), scratchRepo)

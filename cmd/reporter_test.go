@@ -15,6 +15,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 var reportNow = time.Date(2026, 9, 26, 23, 0, 30, 0, time.UTC)
@@ -23,6 +24,8 @@ func hourly() config.Reporter {
 	return config.Reporter{Every: config.Duration{Duration: time.Hour}, Brief: "b.md", Timeout: config.Duration{Duration: 20 * time.Minute}}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestReportDue(t *testing.T) {
 	slot := reportSlot(time.Hour, reportNow)
 	last := slot.Add(-time.Hour)
@@ -34,21 +37,21 @@ func TestReportDue(t *testing.T) {
 		posted, ended bool
 		want          reportAction
 	}{
-		{"never ran", nil, nil, reportNow, false, false, reportStart},
-		{"the last slot's ended", &state.Report{Slot: last, Started: last, Ended: last.Add(time.Minute)}, nil, reportNow, false, false, reportStart},
-		{"this slot's ended", &state.Report{Slot: slot, Started: slot, Ended: slot.Add(time.Minute)}, nil, reportNow.Add(30 * time.Minute), false, false, reportNone},
-		{"runs", &state.Report{Slot: slot, Started: slot}, nil, reportNow.Add(5 * time.Minute), false, false, reportNone},
-		{"posted", &state.Report{Slot: slot, Started: slot}, nil, reportNow, true, true, reportPosted},
-		{"ended without a post", &state.Report{Slot: slot, Started: slot}, nil, reportNow, false, true, reportUnposted},
-		{"past the timeout", &state.Report{Slot: slot, Started: slot}, nil, slot.Add(20 * time.Minute), false, false, reportTimeout},
-		{"the next slot while it runs", &state.Report{Slot: last, Started: slot.Add(-5 * time.Minute)}, nil, reportNow, false, false, reportSkip},
-		{"the next slot, skipped already", &state.Report{Slot: last, Started: slot.Add(-5 * time.Minute), Skipped: slot}, nil, reportNow, false, false, reportNone},
-		{"paused", &state.Report{Slot: last, Started: last, Ended: last.Add(time.Minute)}, &state.ReportPause{Since: last}, reportNow, false, false, reportNone},
-		{"paused while one runs: no skip", &state.Report{Slot: last, Started: slot.Add(-5 * time.Minute)}, &state.ReportPause{Since: slot}, reportNow, false, false, reportNone},
-		{"a final not yet due", &state.Report{Slot: slot, Started: slot, Ended: slot.Add(time.Minute)}, &state.ReportPause{Final: slot.Add(45 * time.Minute)}, slot.Add(30 * time.Minute), false, false, reportNone},
-		{"a final not yet due, the next slot", &state.Report{Slot: last, Started: last, Ended: last.Add(time.Minute)}, &state.ReportPause{Final: slot.Add(45 * time.Minute)}, reportNow, false, false, reportStart},
-		{"the final due", &state.Report{Slot: slot, Started: slot, Ended: slot.Add(time.Minute)}, &state.ReportPause{Final: slot.Add(45 * time.Minute)}, slot.Add(45 * time.Minute), false, false, reportFinal},
-		{"the final due while one runs", &state.Report{Slot: slot, Started: slot}, &state.ReportPause{Final: slot.Add(5 * time.Minute)}, slot.Add(6 * time.Minute), false, false, reportNone},
+		{"never ran", nil, nil, reportNow, false, false, watch.ReportStart},
+		{"the last slot's ended", &state.Report{Slot: last, Started: last, Ended: last.Add(time.Minute)}, nil, reportNow, false, false, watch.ReportStart},
+		{"this slot's ended", &state.Report{Slot: slot, Started: slot, Ended: slot.Add(time.Minute)}, nil, reportNow.Add(30 * time.Minute), false, false, watch.ReportNone},
+		{"runs", &state.Report{Slot: slot, Started: slot}, nil, reportNow.Add(5 * time.Minute), false, false, watch.ReportNone},
+		{"posted", &state.Report{Slot: slot, Started: slot}, nil, reportNow, true, true, watch.ReportPosted},
+		{"ended without a post", &state.Report{Slot: slot, Started: slot}, nil, reportNow, false, true, watch.ReportUnposted},
+		{"past the timeout", &state.Report{Slot: slot, Started: slot}, nil, slot.Add(20 * time.Minute), false, false, watch.ReportTimeout},
+		{"the next slot while it runs", &state.Report{Slot: last, Started: slot.Add(-5 * time.Minute)}, nil, reportNow, false, false, watch.ReportSkip},
+		{"the next slot, skipped already", &state.Report{Slot: last, Started: slot.Add(-5 * time.Minute), Skipped: slot}, nil, reportNow, false, false, watch.ReportNone},
+		{"paused", &state.Report{Slot: last, Started: last, Ended: last.Add(time.Minute)}, &state.ReportPause{Since: last}, reportNow, false, false, watch.ReportNone},
+		{"paused while one runs: no skip", &state.Report{Slot: last, Started: slot.Add(-5 * time.Minute)}, &state.ReportPause{Since: slot}, reportNow, false, false, watch.ReportNone},
+		{"a final not yet due", &state.Report{Slot: slot, Started: slot, Ended: slot.Add(time.Minute)}, &state.ReportPause{Final: slot.Add(45 * time.Minute)}, slot.Add(30 * time.Minute), false, false, watch.ReportNone},
+		{"a final not yet due, the next slot", &state.Report{Slot: last, Started: last, Ended: last.Add(time.Minute)}, &state.ReportPause{Final: slot.Add(45 * time.Minute)}, reportNow, false, false, watch.ReportStart},
+		{"the final due", &state.Report{Slot: slot, Started: slot, Ended: slot.Add(time.Minute)}, &state.ReportPause{Final: slot.Add(45 * time.Minute)}, slot.Add(45 * time.Minute), false, false, watch.ReportFinal},
+		{"the final due while one runs", &state.Report{Slot: slot, Started: slot}, &state.ReportPause{Final: slot.Add(5 * time.Minute)}, slot.Add(6 * time.Minute), false, false, watch.ReportNone},
 	} {
 		if got := reportDue(c.r, c.pause, hourly(), c.now, c.posted, c.ended); got != c.want {
 			t.Errorf("%s: reportDue = %d, want %d", c.name, got, c.want)
@@ -58,22 +61,22 @@ func TestReportDue(t *testing.T) {
 
 // reportingWatch is a standby watch with an hourly reporter on the state in
 // dir; launched collects the turns it starts.
-func reportingWatch(t *testing.T, dir string) (*watcher, *[]string, *bytes.Buffer) {
+func reportingWatch(t *testing.T, dir string) (*watch.Watcher, *[]string, *bytes.Buffer) {
 	t.Helper()
 	w, _, out := notifyingWatch(t, dir, true)
-	w.notifier = nil
+	w.Notifier = nil
 	brief := filepath.Join(dir, "brief.md")
 	if err := os.WriteFile(brief, []byte("# Hourly status\n\nPost it."), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	w.cfg.Reporter = hourly()
-	w.cfg.Reporter.Brief, w.cfg.Reporter.Dir, w.cfg.Reporter.Person = brief, dir, "Ada"
-	w.cfg.Claude.ProjectsDir = filepath.Join(dir, "projects")
-	w.now = reportNow
+	watchApp(w.Host).cfg.Reporter = hourly()
+	watchApp(w.Host).cfg.Reporter.Brief, watchApp(w.Host).cfg.Reporter.Dir, watchApp(w.Host).cfg.Reporter.Person = brief, dir, "Ada"
+	watchApp(w.Host).cfg.Claude.ProjectsDir = filepath.Join(dir, "projects")
+	watchApp(w.Host).now = reportNow
 	var launched []string
-	w.turnEnded = func(context.Context, string) bool { return false }
-	w.zone = func() (*time.Location, error) { return time.LoadLocation("Europe/Athens") }
-	w.runReport = func(unit, id, name, prompt string) error {
+	w.TurnEnded = func(context.Context, string) bool { return false }
+	watchApp(w.Host).zone = func() (*time.Location, error) { return time.LoadLocation("Europe/Athens") }
+	w.RunReport = func(unit, id, name, prompt string) error {
 		if !strings.HasPrefix(unit, "beekeeper-report-"+id[:8]) || !strings.Contains(prompt, "to Ada") || !strings.Contains(prompt, "–"+strings.TrimPrefix(name, "Status report ")+" EEST, every time in Europe/Athens") || !regexp.MustCompile("`beekeeper report --since \\S+\\+03:00 --until \\S+T"+strings.TrimPrefix(name, "Status report ")+":00\\+03:00`").MatchString(prompt) || !strings.Contains(prompt, "beekeeper reporter check") || !strings.HasSuffix(prompt, "Post it.") {
 			t.Errorf("launch %s %s %q", unit, name, prompt)
 		}
@@ -83,17 +86,19 @@ func reportingWatch(t *testing.T, dir string) (*watcher, *[]string, *bytes.Buffe
 	return w, &launched, out
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestReporterStartsOncePerSlotAcrossWatches(t *testing.T) {
 	dir := t.TempDir()
 	a, la, _ := reportingWatch(t, dir)
 	b, lb, _ := reportingWatch(t, dir)
 	ctx := context.Background()
-	a.tendReporter(ctx, nil)
-	b.tendReporter(ctx, nil)
+	a.TendReporter(ctx, nil)
+	b.TendReporter(ctx, nil)
 	if names := append(*la, *lb...); len(names) != 1 || names[0] != "Status report 02:00" {
 		t.Fatalf("started %v and %v, want one reporter, Status report 02:00", *la, *lb)
 	}
-	st, err := a.store.Read()
+	st, err := watchApp(a.Host).store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,15 +112,17 @@ func TestReporterStartsOncePerSlotAcrossWatches(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestReporterSkipsTheNextSlotWhileItRuns(t *testing.T) {
 	dir := t.TempDir()
 	w, launched, out := reportingWatch(t, dir)
 	ctx := context.Background()
-	w.tendReporter(ctx, nil)
-	w.cfg.Reporter.Timeout.Duration = 2 * time.Hour
-	w.now = reportNow.Add(time.Hour)
-	w.tendReporter(ctx, nil)
-	w.tendReporter(ctx, nil)
+	w.TendReporter(ctx, nil)
+	watchApp(w.Host).cfg.Reporter.Timeout.Duration = 2 * time.Hour
+	watchApp(w.Host).now = reportNow.Add(time.Hour)
+	w.TendReporter(ctx, nil)
+	w.TendReporter(ctx, nil)
 	if len(*launched) != 1 || strings.Count(out.String(), "is skipped") != 1 {
 		t.Errorf("launched %v; out:\n%s", *launched, out)
 	}
@@ -124,14 +131,16 @@ func TestReporterSkipsTheNextSlotWhileItRuns(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestReporterEndsOnThePost(t *testing.T) {
 	dir := t.TempDir()
 	w, _, out := reportingWatch(t, dir)
 	ctx := context.Background()
-	w.tendReporter(ctx, nil)
-	st, _ := w.store.Read()
+	w.TendReporter(ctx, nil)
+	st, _ := watchApp(w.Host).store.Read()
 	id := st.Report.Session
-	proj := filepath.Join(w.cfg.Claude.ProjectsDir, "p")
+	proj := filepath.Join(watchApp(w.Host).cfg.Claude.ProjectsDir, "p")
 	if err := os.MkdirAll(proj, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -141,30 +150,32 @@ func TestReporterEndsOnThePost(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(proj, id+".jsonl"), []byte(post), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	w.now = reportNow.Add(3 * time.Minute)
-	w.tendReporter(ctx, nil)
-	st, _ = w.store.Read()
+	watchApp(w.Host).now = reportNow.Add(3 * time.Minute)
+	w.TendReporter(ctx, nil)
+	st, _ = watchApp(w.Host).store.Read()
 	if st.Report.Running() || st.Report.Outcome != "posted" || len(st.Agents) != 0 {
 		t.Errorf("report %+v, agents %+v", st.Report, st.Agents)
 	}
 	if !strings.Contains(out.String(), "posted: posted its report, off the roster") || verbs(t, w, "reporter.posted") != 1 {
 		t.Errorf("out:\n%s", out)
 	}
-	w.now = reportNow.Add(time.Hour)
-	w.tendReporter(ctx, nil)
-	if st, _ = w.store.Read(); !st.Report.Running() || st.Report.Session == id {
+	watchApp(w.Host).now = reportNow.Add(time.Hour)
+	w.TendReporter(ctx, nil)
+	if st, _ = watchApp(w.Host).store.Read(); !st.Report.Running() || st.Report.Session == id {
 		t.Errorf("the next slot's report %+v", st.Report)
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestReporterTimesOut(t *testing.T) {
 	dir := t.TempDir()
 	w, _, out := reportingWatch(t, dir)
 	ctx := context.Background()
-	w.tendReporter(ctx, nil)
-	w.now = reportNow.Add(20 * time.Minute)
-	w.tendReporter(ctx, nil)
-	st, _ := w.store.Read()
+	w.TendReporter(ctx, nil)
+	watchApp(w.Host).now = reportNow.Add(20 * time.Minute)
+	w.TendReporter(ctx, nil)
+	st, _ := watchApp(w.Host).store.Read()
 	if st.Report.Running() || st.Report.Outcome != "timeout" || len(st.Agents) != 0 {
 		t.Errorf("report %+v, agents %+v", st.Report, st.Agents)
 	}
@@ -173,26 +184,32 @@ func TestReporterTimesOut(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestReporterOnlyInTheStandbyWatch(t *testing.T) {
 	w, launched, _ := reportingWatch(t, t.TempDir())
-	w.standby = false
-	w.tendReporter(context.Background(), nil)
+	w.Standby = false
+	w.TendReporter(context.Background(), nil)
 	if len(*launched) != 0 {
 		t.Errorf("a supervisor's watch started %v", *launched)
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestReporterNotStartedSaysWhyOnce(t *testing.T) {
 	w, _, out := reportingWatch(t, t.TempDir())
-	w.cfg.Reporter.Brief = filepath.Join(t.TempDir(), "missing.md")
+	watchApp(w.Host).cfg.Reporter.Brief = filepath.Join(t.TempDir(), "missing.md")
 	for range 2 {
-		w.tendReporter(context.Background(), nil)
+		w.TendReporter(context.Background(), nil)
 	}
 	if strings.Count(out.String(), "REPORTER not started") != 1 {
 		t.Errorf("out:\n%s", out)
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTurnPIDs(t *testing.T) {
 	tb := &proc.Table{ByPID: map[int]*proc.Process{
 		10: {PID: 10, Comm: claudeComm, Args: []string{claudeComm, "-p", sessionIDFlag, "s1", "--", "brief"}},
@@ -200,44 +217,50 @@ func TestTurnPIDs(t *testing.T) {
 		12: {PID: 12, Comm: claudeComm, Args: []string{claudeComm, sessionIDFlag, "s2"}},
 		13: {PID: 13, Comm: testShell, Args: []string{testShell, sessionIDFlag, "s1"}},
 	}}
-	if got := turnPIDs(tb, "s1"); len(got) != 2 || got[0] != 10 || got[1] != 11 {
+	if got := watch.TurnPIDs(tb, "s1"); len(got) != 2 || got[0] != 10 || got[1] != 11 {
 		t.Errorf("turnPIDs = %v, want [10 11]", got)
 	}
 }
 
 // verbs counts the events of verb in w's log.
-func verbs(t *testing.T, w *watcher, verb string) int {
+func verbs(t *testing.T, w *watch.Watcher, verb string) int {
 	t.Helper()
-	evs, err := w.store.Events(0, func(e state.Event) bool { return e.Verb == verb })
+	evs, err := watchApp(w.Host).store.Events(0, func(e state.Event) bool { return e.Verb == verb })
 	if err != nil {
 		t.Fatal(err)
 	}
 	return len(evs)
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestReporterEndsATurnThatEndedWithoutAPost(t *testing.T) {
 	w, _, out := reportingWatch(t, t.TempDir())
 	ctx := context.Background()
-	w.tendReporter(ctx, nil)
-	w.turnEnded = func(context.Context, string) bool { return true }
-	w.now = reportNow.Add(2 * time.Minute)
-	w.tendReporter(ctx, nil)
-	st, _ := w.store.Read()
+	w.TendReporter(ctx, nil)
+	w.TurnEnded = func(context.Context, string) bool { return true }
+	watchApp(w.Host).now = reportNow.Add(2 * time.Minute)
+	w.TendReporter(ctx, nil)
+	st, _ := watchApp(w.Host).store.Read()
 	if st.Report.Running() || st.Report.Outcome != "unposted" || len(st.Agents) != 0 || verbs(t, w, "reporter.unposted") != 1 {
 		t.Errorf("report %+v, agents %+v; out:\n%s", st.Report, st.Agents, out)
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestStoppedAgentsLeaveTheRunningReporterOut(t *testing.T) {
 	w, _, out := reportingWatch(t, t.TempDir())
 	rp := state.Party{Session: "r-1", Name: "Status report 23:00"}
 	st := &state.State{Agents: []state.Agent{{Party: rp, Task: "Hourly status"}}, Report: &state.Report{Party: rp, Started: reportNow}}
-	w.stoppedAgents(st, nil)
+	w.StoppedAgents(st, nil)
 	if out.Len() != 0 {
 		t.Errorf("the running reporter said stopped:\n%s", out)
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestReportSettings(t *testing.T) {
 	var s struct {
 		Hooks struct {
@@ -249,7 +272,7 @@ func TestReportSettings(t *testing.T) {
 			} `json:"PreToolUse"`
 		} `json:"hooks"`
 	}
-	if err := json.Unmarshal([]byte(reportSettings("/bin/bee keeper")), &s); err != nil {
+	if err := json.Unmarshal([]byte(watch.ReportSettings("/bin/bee keeper")), &s); err != nil {
 		t.Fatal(err)
 	}
 	pre := s.Hooks.PreToolUse
@@ -259,46 +282,48 @@ func TestReportSettings(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestReporterFinalThenPaused(t *testing.T) {
 	dir := t.TempDir()
 	w, launched, out := reportingWatch(t, dir)
 	ctx := context.Background()
-	w.tendReporter(ctx, nil) // 02:00 EEST
-	w.turnEnded = func(context.Context, string) bool { return true }
-	w.now = reportNow.Add(time.Minute)
-	w.tendReporter(ctx, nil) // ended
-	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+	w.TendReporter(ctx, nil) // 02:00 EEST
+	w.TurnEnded = func(context.Context, string) bool { return true }
+	watchApp(w.Host).now = reportNow.Add(time.Minute)
+	w.TendReporter(ctx, nil) // ended
+	if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 		st.ReportPause = &state.ReportPause{Final: reportNow.Add(45 * time.Minute)}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
 	var prompt string
-	w.runReport = func(_, _, name, p string) error {
+	w.RunReport = func(_, _, name, p string) error {
 		*launched = append(*launched, name)
 		prompt = p
 		return nil
 	}
-	w.now = reportNow.Add(30 * time.Minute)
-	w.tendReporter(ctx, nil)
-	w.now = reportNow.Add(45 * time.Minute)
-	w.tendReporter(ctx, nil)
+	watchApp(w.Host).now = reportNow.Add(30 * time.Minute)
+	w.TendReporter(ctx, nil)
+	watchApp(w.Host).now = reportNow.Add(45 * time.Minute)
+	w.TendReporter(ctx, nil)
 	if len(*launched) != 2 || (*launched)[1] != "Status report 02:45" || !strings.Contains(prompt, "Report 02:00–02:45 EEST") ||
 		!strings.Contains(prompt, "last report before the 1h00m reports pause") {
 		t.Fatalf("launched %v, prompt %q; out:\n%s", *launched, prompt, out)
 	}
-	w.tendReporter(ctx, nil) // ended
-	w.now = reportNow.Add(3 * time.Hour)
-	w.tendReporter(ctx, nil)
-	w.tendReporter(ctx, nil)
-	st, _ := w.store.Read()
+	w.TendReporter(ctx, nil) // ended
+	watchApp(w.Host).now = reportNow.Add(3 * time.Hour)
+	w.TendReporter(ctx, nil)
+	w.TendReporter(ctx, nil)
+	st, _ := watchApp(w.Host).store.Read()
 	if len(*launched) != 2 || !st.ReportPause.Paused() || verbs(t, w, "reporter.pause") != 1 {
 		t.Errorf("after the final: launched %v, pause %+v", *launched, st.ReportPause)
 	}
-	if err := w.store.Update(func(st *state.State) ([]state.Event, error) { st.ReportPause = nil; return nil, nil }); err != nil {
+	if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) { st.ReportPause = nil; return nil, nil }); err != nil {
 		t.Fatal(err)
 	}
-	w.tendReporter(ctx, nil)
+	w.TendReporter(ctx, nil)
 	if len(*launched) != 3 {
 		t.Errorf("after resume: launched %v", *launched)
 	}

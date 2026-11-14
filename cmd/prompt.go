@@ -28,7 +28,7 @@ func roleSlash(cfg config.Role) string {
 // roleInstructions opens rl's successor prompt: the configured skill's bare
 // slash command or a reference to its instruction file.
 func (a *app) roleInstructions(rl role, r state.Role) (string, error) {
-	cfg := rl.cfg(a.cfg)
+	cfg := rl.Cfg(a.cfg)
 	from := ""
 	if r.Holder != nil {
 		from = fmt.Sprintf(" from %q", r.Holder.Name)
@@ -36,13 +36,13 @@ func (a *app) roleInstructions(rl role, r state.Role) (string, error) {
 	switch {
 	case cfg.Instructions != "":
 		if _, err := os.ReadFile(cfg.Instructions); err != nil {
-			return "", fmt.Errorf("%s.instructions: %w", rl.name, err)
+			return "", fmt.Errorf("%s.instructions: %w", rl.Name, err)
 		}
-		return fmt.Sprintf("You take over %s%s. Read and follow the instructions in %q.", rl.duty, from, cfg.Instructions), nil
+		return fmt.Sprintf("You take over %s%s. Read and follow the instructions in %q.", rl.Duty, from, cfg.Instructions), nil
 	case cfg.Skill != "":
-		return fmt.Sprintf("%syou take over %s%s.", roleSlash(cfg), rl.duty, from), nil
+		return fmt.Sprintf("%syou take over %s%s.", roleSlash(cfg), rl.Duty, from), nil
 	}
-	return fmt.Sprintf("You take over %s%s. (No instructions are configured: set %s.skill or %s.instructions.)", rl.duty, from, rl.name, rl.name), nil
+	return fmt.Sprintf("You take over %s%s. (No instructions are configured: set %s.skill or %s.instructions.)", rl.Duty, from, rl.Name, rl.Name), nil
 }
 
 // stamp is a time with its zone: the successor may read it in another one.

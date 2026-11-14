@@ -7,19 +7,21 @@ import (
 	"time"
 )
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchWaitsForAsyncDelivery(t *testing.T) {
 	w, _ := onceWatch(t, nil)
 	started, release, delivered := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	var once sync.Once
 	finish := func() { once.Do(func() { close(release) }) }
 	defer finish()
-	w.stand.send = func(context.Context, string, string) error { close(started); <-release; return nil }
-	if !w.sendAsync(context.Background(), "fixture-recipient", "resume", func(error) { close(delivered) }) {
+	w.Stand.Send = func(context.Context, string, string) error { close(started); <-release; return nil }
+	if !w.SendAsync(context.Background(), "fixture-recipient", "resume", func(error) { close(delivered) }) {
 		t.Fatal("delivery did not start")
 	}
 	<-started
 	waited := make(chan struct{})
-	go func() { w.stand.inflight.Wait(); close(waited) }()
+	go func() { w.Stand.Inflight.Wait(); close(waited) }()
 	select {
 	case <-waited:
 		finish()

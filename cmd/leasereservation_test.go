@@ -9,8 +9,11 @@ import (
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLeaseWakeReservesFullWindow(t *testing.T) {
 	a := claimApp(t, claimGrant(labTwo, claimMe, 29*time.Minute))
 	st, err := a.store.Read()
@@ -22,7 +25,7 @@ func TestLeaseWakeReservesFullWindow(t *testing.T) {
 		t.Fatalf("wake: %q, %v", answer, ready)
 	}
 	st.Agents = []state.Agent{{Party: claimMe, Park: &state.Park{On: leaseParkOn(labTwo)}}}
-	markResumable(st, []settledPark{{party: claimMe, on: leaseParkOn(labTwo), answer: answer}}, true, a.now)
+	watch.MarkResumable(st, []settledPark{{Party: claimMe, On: leaseParkOn(labTwo), Answer: answer}}, true, a.now)
 	later := a.now.Add(29 * time.Minute)
 	gate := lease.Gate{Resource: labTwo, Caller: claimOther, Now: later, TTL: 30 * time.Minute}
 	if _, err := lease.Check(st, gate); err == nil {
@@ -50,13 +53,15 @@ func TestExpiredGrantNeverPromisesLease(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLeaseWakeRechecksQueue(t *testing.T) {
 	a := claimApp(t, claimGrant(labTwo, claimFirst, time.Minute))
 	st, err := a.store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
-	parks := []settledPark{{party: claimMe, on: leaseParkOn(labTwo), answer: "previous queue observation"}}
+	parks := []settledPark{{Party: claimMe, On: leaseParkOn(labTwo), Answer: "previous queue observation"}}
 	if got := a.recheckLeaseParks(st, parks); len(got) != 0 {
 		t.Fatalf("stale queue wake: %+v", got)
 	}

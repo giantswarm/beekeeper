@@ -508,7 +508,7 @@ func (a *app) resume(ctx context.Context) error {
 		line, err := a.resumeRole(ctx, rl, me)
 		if err != nil {
 			p("resume: FAILED %v", err)
-			return fmt.Errorf("the stop is lifted, but the %s did not start (above): beekeeper %s start --new starts it", rl.name, rl.name)
+			return fmt.Errorf("the stop is lifted, but the %s did not start (above): beekeeper %s start --new starts it", rl.Name, rl.Name)
 		}
 		if line != "" {
 			p("resume: %s", line)
@@ -520,13 +520,3 @@ func (a *app) resume(ctx context.Context) error {
 // stoppedNothing is what a watch's revive, successor or reopen says while
 // beekeeper is stopped.
 const stoppedNothing = "beekeeper is stopped: nothing revives, starts or reopens until beekeeper resume"
-
-// sayStop says the standing stop once, with its reason, and ENDED once
-// beekeeper resume lifted it.
-func (w *watcher) sayStop(st *state.State) {
-	if st.Stop == nil {
-		w.clear("stop")
-		return
-	}
-	w.check("stop", true, "STOPPED: %s; the sessions it ended: %s", w.stopText(st.Stop), listOrNone(st.Stop.Sessions))
-}

@@ -14,10 +14,14 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // The watch says each agent whose shell resolves a gh other than the agent's
 // own (agents.shell.path) once, and its end once the agent's gh is its own.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTheWatchSaysAnUnbrokeredGH(t *testing.T) {
 	const own, plain, missing, unread = "Own", "Plain", "Missing", "Unread"
 	dir := t.TempDir()
@@ -52,9 +56,9 @@ func TestTheWatchSaysAnUnbrokeredGH(t *testing.T) {
 	}
 	set(map[string]string{own: filepath.Join(link, "gh"), plain: "/usr/bin/gh", missing: ghNone})
 	var out bytes.Buffer
-	w := &watcher{app: &app{cfg: cfg, store: store, now: now, out: &out}, last: map[string]time.Time{}}
-	w.unbrokered()
-	w.unbrokered()
+	w := &watch.Watcher{Host: &app{cfg: cfg, store: store, now: now, out: &out}, Last: map[string]time.Time{}}
+	w.Unbrokered()
+	w.Unbrokered()
 	s := out.String()
 	if strings.Count(s, line(plain, "/usr/bin/gh")) != 1 || strings.Count(s, line(missing, ghNone)) != 1 ||
 		strings.Contains(s, `"`+own+`"`) || strings.Contains(s, `"`+unread+`"`) {
@@ -63,7 +67,7 @@ func TestTheWatchSaysAnUnbrokeredGH(t *testing.T) {
 
 	out.Reset()
 	set(map[string]string{own: filepath.Join(link, "gh"), plain: filepath.Join(link, "gh"), missing: ghNone})
-	w.unbrokered()
+	w.Unbrokered()
 	if s := out.String(); !strings.Contains(s, fmt.Sprintf("ENDED GH UNBROKERED %q", plain)) || strings.Contains(s, fmt.Sprintf("ENDED GH UNBROKERED %q", missing)) {
 		t.Errorf("watch after %s's gh became its own:\n%s", plain, s)
 	}

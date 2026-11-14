@@ -24,6 +24,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/update"
+	"github.com/giantswarm/beekeeper/internal/watch"
 	"github.com/giantswarm/beekeeper/pkg/project"
 )
 
@@ -338,24 +339,27 @@ func stubGitHub(t *testing.T, pullAt string, version string) *int {
 
 // The watch lifts a hold once its probe passes, and only the hold that
 // still carries the probe that passed.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestHoldsLiftWhenTheirProbePasses(t *testing.T) {
 	now := time.Now()
-	probe := runProbe
-	t.Cleanup(func() { runProbe = probe })
+	probe := watch.RunProbe
+	t.Cleanup(func() { watch.RunProbe = probe })
 	const green, red = "test 1 -eq 1", "test 1 -eq 0"
-	runProbe = func(_ context.Context, p string) bool { return p == green }
+	watch.RunProbe = func(_ context.Context, p string) bool { return p == green }
 	holds := []state.Hold{
 		{Target: merge.AllMerges, Reason: "devctl window", LiftWhen: green},
 		{Target: "lane:gpu", Reason: "model load", LiftWhen: red},
 		{Target: repo, Reason: "no probe"},
 		{Target: "o/past", Reason: "past its time", LiftWhen: green, Until: now.Add(-time.Minute)},
 	}
-	passed := probeHoldLifts(context.Background(), holds, now)
+	passed := watch.ProbeHoldLifts(context.Background(), holds, now)
 	if len(passed) != 1 || passed[merge.AllMerges] != green {
 		t.Fatalf("passed %v", passed)
 	}
 	st := &state.State{Holds: slices.Clone(holds)}
-	lines, evs := liftProbed(st, passed)
+	lines, evs := watch.LiftProbed(st, passed)
 	if len(st.Holds) != 3 || slices.ContainsFunc(st.Holds, func(h state.Hold) bool { return h.Target == merge.AllMerges }) {
 		t.Errorf("holds left: %+v", st.Holds)
 	}
@@ -364,7 +368,7 @@ func TestHoldsLiftWhenTheirProbePasses(t *testing.T) {
 	}
 	// A hold set again with another probe since stays.
 	st = &state.State{Holds: []state.Hold{{Target: merge.AllMerges, LiftWhen: "test -f /x"}}}
-	if _, evs := liftProbed(st, passed); len(st.Holds) != 1 || len(evs) != 0 {
+	if _, evs := watch.LiftProbed(st, passed); len(st.Holds) != 1 || len(evs) != 0 {
 		t.Errorf("a re-set hold was lifted: %+v", st.Holds)
 	}
 }

@@ -10,6 +10,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // An execution that published more than once keeps one transfer per push. A
@@ -77,6 +78,9 @@ func TestSupersededPublicationTransferDoesNotHoldRetirement(t *testing.T) {
 // Publishing twice in the same turn leaves the second bundle as the newest
 // recovered transfer without a separate recovery pass, and the first watch
 // sync after completion retires the execution on its host.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestExecutionRetiresOnHostAfterMultiplePublications(t *testing.T) {
 	rig := newPublicationRig(t)
 	ctx := context.Background()
@@ -138,8 +142,8 @@ func TestExecutionRetiresOnHostAfterMultiplePublications(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w := &watcher{app: rig.a}
-	st = w.syncExecutions(ctx, st)
+	w := &watch.Watcher{Host: rig.a}
+	st = w.SyncExecutions(ctx, st)
 	if len(fake.requests) != 1 || fake.requests[0].Trigger != execution.RetireTriggerReport {
 		t.Fatalf("host retire requests after syncExecutions = %+v, want 1 report retirement", fake.requests)
 	}

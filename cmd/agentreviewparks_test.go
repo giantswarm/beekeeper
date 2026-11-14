@@ -17,6 +17,8 @@ const pendingReviewWorktree = "/fixture/worktree"
 
 const multiParkSecondPR = "o/r#8"
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestReviewParksRetainEachPullRequest(t *testing.T) {
 	w := parkingWatch(t, map[string]string{refOne: github.Open, refTwo: github.Open})
 	was := parkReviewHead
@@ -25,12 +27,12 @@ func TestReviewParksRetainEachPullRequest(t *testing.T) {
 	parkReviewHead = func(string) (string, string) { return head, parkVerificationUnavailable }
 	me := state.Party{Name: agentOne}
 	for _, ref := range []string{refOne, refTwo, refOne} {
-		if _, err := w.park(me, ref, deskReviewWait); err != nil {
+		if _, err := watchApp(w.Host).park(me, ref, deskReviewWait); err != nil {
 			t.Fatal(err)
 		}
 		head = loopFixed
 	}
-	st, err := w.store.Read()
+	st, err := watchApp(w.Host).store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,10 +47,10 @@ func TestReviewParksRetainEachPullRequest(t *testing.T) {
 	}
 	// A plain wait cannot erase either independently proven request.
 	parkReviewHead = func(string) (string, string) { return "", parkVerificationUnavailable }
-	if _, err := w.park(me, "#3", "answer"); err != nil {
+	if _, err := watchApp(w.Host).park(me, "#3", "answer"); err != nil {
 		t.Fatal(err)
 	}
-	st, _ = w.store.Read()
+	st, _ = watchApp(w.Host).store.Read()
 	if len(st.ReviewParks) != 2 {
 		t.Fatalf("plain wait erased review requests: %+v", st.ReviewParks)
 	}
@@ -125,19 +127,21 @@ func TestMergedPullKeepsOtherReviewRequests(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestReviewParkPostMergeWorkStaysWithItsPullRequest(t *testing.T) {
 	w := parkingWatch(t, map[string]string{refOne: github.Open, refTwo: github.Open})
 	was := parkReviewHead
 	t.Cleanup(func() { parkReviewHead = was })
 	parkReviewHead = func(string) (string, string) { return loopHead, parkVerificationUnavailable }
 	me := state.Party{Name: agentOne}
-	if _, err := w.park(me, refOne, deskReviewWait, "release first PR"); err != nil {
+	if _, err := watchApp(w.Host).park(me, refOne, deskReviewWait, "release first PR"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := w.park(me, refTwo, deskReviewWait); err != nil {
+	if _, err := watchApp(w.Host).park(me, refTwo, deskReviewWait); err != nil {
 		t.Fatal(err)
 	}
-	st, _ := w.store.Read()
+	st, _ := watchApp(w.Host).store.Read()
 	first, _ := st.ReviewParkFor(refOne)
 	second, _ := st.ReviewParkFor(refTwo)
 	if first.PostMerge == nil || *first.PostMerge != "release first PR" || second.PostMerge == nil || *second.PostMerge != "" {

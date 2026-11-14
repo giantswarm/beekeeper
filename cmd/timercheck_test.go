@@ -14,6 +14,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // fakeRead answers the timers' check commands with read for the test.
@@ -83,6 +84,9 @@ func TestControlPlaneReadyReadsBothAPIVersions(t *testing.T) {
 // A controlplane-ready timer records why the control plane is not ready yet
 // and wakes its agent within one tick of the rollout, for either API
 // version.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestControlPlaneTimerFiresOnceRolledOut(t *testing.T) {
 	for version, stages := range map[string][2]string{
 		"v1beta1": {kcpV1beta1Rolling, kcpV1beta1Rolled},
@@ -90,8 +94,8 @@ func TestControlPlaneTimerFiresOnceRolledOut(t *testing.T) {
 	} {
 		t.Run(version, func(t *testing.T) {
 			w, _, out := notifyingWatch(t, t.TempDir(), false)
-			defer w.bg.Wait() // pending also starts the doctor; finish it before TempDir cleanup.
-			w.chores = true   // a running watch, not --once
+			defer w.Bg.Wait() // pending also starts the doctor; finish it before TempDir cleanup.
+			w.Chores = true   // a running watch, not --once
 			obj := stages[0]
 			fakeRead(t, func(cmd string) ([]byte, error) {
 				if !strings.Contains(cmd, "get kubeadmcontrolplanes.controlplane.cluster.x-k8s.io wc1") {
@@ -106,7 +110,7 @@ func TestControlPlaneTimerFiresOnceRolledOut(t *testing.T) {
 				return nil
 			}
 			t.Cleanup(func() { wakeOwner = wasWake })
-			if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+			if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 				st.Agents = []state.Agent{{Party: state.Party{Session: "s9", Name: "BK 594"}}}
 				st.Timers = []state.Timer{{ID: 1, Due: relayNow.Add(-time.Minute), When: cpWhen, Wake: "BK 594", What: "upgrade the node pools"}}
 				return nil, nil
@@ -114,21 +118,21 @@ func TestControlPlaneTimerFiresOnceRolledOut(t *testing.T) {
 				t.Fatal(err)
 			}
 			live := []*claude.Session{}
-			w.pending(context.Background(), live)
-			w.bg.Wait()
-			st, _ := w.store.Read()
+			w.Pending(context.Background(), live)
+			w.Bg.Wait()
+			st, _ := watchApp(w.Host).store.Read()
 			if len(woke) != 0 || len(st.Timers) != 1 || st.Timers[0].Unreadable || !strings.Contains(st.Timers[0].Reason, "of 3 replicas") {
 				t.Fatalf("rolling: woke %v, timers %+v", woke, st.Timers)
 			}
 			obj = stages[1]
-			w.now = relayNow.Add(timerEvery)
-			w.pending(context.Background(), live)
-			w.bg.Wait()
-			w.timerActs.Wait()
+			watchApp(w.Host).now = relayNow.Add(timerEvery)
+			w.Pending(context.Background(), live)
+			w.Bg.Wait()
+			w.TimerActs.Wait()
 			if len(woke) != 1 || woke[0] != "BK 594: beekeeper timer #1 ("+cpWhen+" holds): upgrade the node pools" {
 				t.Fatalf("woke %q", woke)
 			}
-			if st, _ := w.store.Read(); len(st.Timers) != 0 {
+			if st, _ := watchApp(w.Host).store.Read(); len(st.Timers) != 0 {
 				t.Fatalf("still open: %+v", st.Timers)
 			}
 			if strings.Contains(out.String(), "UNREADABLE") {
@@ -140,15 +144,18 @@ func TestControlPlaneTimerFiresOnceRolledOut(t *testing.T) {
 
 // A reference the watch cannot read is one TIMER UNREADABLE line, again only
 // when the reason changes; the timer keeps waiting and fires once it holds.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestUnreadableReferenceIsOneWatchLine(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
-	w.doctoring.Store(true) // only timers are under test; no concurrent doctor output
-	w.chores = true         // a running watch, not --once
+	w.Doctoring.Store(true) // only timers are under test; no concurrent doctor output
+	w.Chores = true         // a running watch, not --once
 	answer := func() ([]byte, error) {
 		return nil, errors.New(`exit status 1: error: context "admin@mc" does not exist`)
 	}
 	fakeRead(t, func(string) ([]byte, error) { return answer() })
-	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+	if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Timers = []state.Timer{{ID: 3, Due: relayNow.Add(-time.Minute), When: cpWhen, What: "look at wc1"}}
 		return nil, nil
 	}); err != nil {
@@ -156,9 +163,9 @@ func TestUnreadableReferenceIsOneWatchLine(t *testing.T) {
 	}
 	live := []*claude.Session{}
 	tick := func(n int) {
-		w.now = relayNow.Add(time.Duration(n) * timerEvery)
-		w.pending(context.Background(), live)
-		w.bg.Wait()
+		watchApp(w.Host).now = relayNow.Add(time.Duration(n) * timerEvery)
+		w.Pending(context.Background(), live)
+		w.Bg.Wait()
 	}
 	tick(0)
 	tick(1)
@@ -166,11 +173,11 @@ func TestUnreadableReferenceIsOneWatchLine(t *testing.T) {
 	if got := strings.Count(out.String(), "TIMER UNREADABLE"); got != 1 || !strings.Contains(out.String(), line) {
 		t.Fatalf("%d lines, watch said %q", got, out.String())
 	}
-	st, _ := w.store.Read()
+	st, _ := watchApp(w.Host).store.Read()
 	if len(st.Timers) != 1 || !st.Timers[0].Unreadable || !strings.Contains(st.Timers[0].Reason, "does not exist") {
 		t.Fatalf("timers %+v", st.Timers)
 	}
-	evs, err := w.store.Events(0, func(e state.Event) bool { return e.Verb == "timer.unreadable" })
+	evs, err := watchApp(w.Host).store.Events(0, func(e state.Event) bool { return e.Verb == "timer.unreadable" })
 	if err != nil || len(evs) != 1 {
 		t.Fatalf("events %+v, %v", evs, err)
 	}
@@ -183,7 +190,7 @@ func TestUnreadableReferenceIsOneWatchLine(t *testing.T) {
 	}
 	answer = func() ([]byte, error) { return []byte(kcpV1beta2Rolling), nil }
 	tick(3)
-	if st, _ := w.store.Read(); len(st.Timers) != 1 || st.Timers[0].Unreadable || st.Timers[0].Reason != "4 of 3 replicas, 4 ready, 1 up to date" {
+	if st, _ := watchApp(w.Host).store.Read(); len(st.Timers) != 1 || st.Timers[0].Unreadable || st.Timers[0].Reason != "4 of 3 replicas, 4 ready, 1 up to date" {
 		t.Fatalf("readable again: %+v", st.Timers)
 	}
 	answer = func() ([]byte, error) { return []byte(kcpV1beta2Rolled), nil }
@@ -195,6 +202,9 @@ func TestUnreadableReferenceIsOneWatchLine(t *testing.T) {
 
 // A check reads its reference's output: a failure to read it, or output that
 // is not the reference, is unreadable; a probe's non-zero exit is "not yet".
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestCheckResultTellsUnreadableFromNotYet(t *testing.T) {
 	kcp, _ := conditionCheck(cpWhen)
 	pr, _ := conditionCheck(prMerged7)
@@ -206,13 +216,13 @@ func TestCheckResultTellsUnreadableFromNotYet(t *testing.T) {
 		err  error
 		want checkResult
 	}{
-		"a reference not read":    {kcp, "", failed, checkResult{unreadable: true, reason: "exit status 1: boom"}},
-		"not the reference":       {kcp, `{"kind":"Cluster"}`, nil, checkResult{unreadable: true, reason: "not a KubeadmControlPlane: kind Cluster"}},
-		"a PR not merged":         {pr, "false\n", nil, checkResult{reason: prNotMerged}},
-		"a PR merged":             {pr, "true\n", nil, checkResult{holds: true}},
-		"an empty answer":         {pr, "", nil, checkResult{unreadable: true, reason: "an empty answer"}},
-		"a probe not holding yet": {probe, "", failed, checkResult{reason: "exit status 1: boom"}},
-		"a probe holding":         {probe, "", nil, checkResult{holds: true}},
+		"a reference not read":    {kcp, "", failed, checkResult{Unreadable: true, Reason: "exit status 1: boom"}},
+		"not the reference":       {kcp, `{"kind":"Cluster"}`, nil, checkResult{Unreadable: true, Reason: "not a KubeadmControlPlane: kind Cluster"}},
+		"a PR not merged":         {pr, "false\n", nil, checkResult{Reason: prNotMerged}},
+		"a PR merged":             {pr, "true\n", nil, checkResult{Holds: true}},
+		"an empty answer":         {pr, "", nil, checkResult{Unreadable: true, Reason: "an empty answer"}},
+		"a probe not holding yet": {probe, "", failed, checkResult{Reason: "exit status 1: boom"}},
+		"a probe holding":         {probe, "", nil, checkResult{Holds: true}},
 	} {
 		if got := tc.c.result([]byte(tc.out), tc.err); got != tc.want {
 			t.Errorf("%s: %+v", name, got)
@@ -270,6 +280,9 @@ func TestHelmReleaseReadyReadsTheRolledVersionFromItsHistory(t *testing.T) {
 
 // A helmrelease-ready timer with a version fires once the release runs it,
 // read through the condition's own kubectl command.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestHelmReleaseTimerFiresOnceTheVersionRolled(t *testing.T) {
 	obj, err := os.ReadFile(filepath.Join("testdata", "helmrelease-history.json"))
 	if err != nil {
@@ -279,11 +292,11 @@ func TestHelmReleaseTimerFiresOnceTheVersionRolled(t *testing.T) {
 	if err != nil || c.cmd != "kubectl --context admin@mc -n flux-giantswarm get helmreleases.helm.toolkit.fluxcd.io backstage -o json" {
 		t.Fatalf("%q, %v", c.cmd, err)
 	}
-	if r := c.result(obj, nil); !r.holds {
+	if r := c.result(obj, nil); !r.Holds {
 		t.Fatalf("2.67.0: %+v", r)
 	}
 	c, _ = conditionCheck("helmrelease-ready admin@mc/flux-giantswarm/backstage 2.68.0")
-	if r := c.result(obj, nil); r.holds || r.unreadable || r.reason != "runs 2.67.0, not 2.68.0" {
+	if r := c.result(obj, nil); r.Holds || r.Unreadable || r.Reason != "runs 2.67.0, not 2.68.0" {
 		t.Fatalf("2.68.0: %+v", r)
 	}
 }
@@ -300,9 +313,12 @@ func TestProbeOutputSaysHowItFailed(t *testing.T) {
 
 // timer list -v says what each condition's last check found; timer check
 // runs it now and leaves the timer as it is.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTimerListAndCheckSayWhatTheCheckFound(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
-	a := w.app
+	a := watchApp(w.Host)
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Timers = []state.Timer{
 			{ID: 1, Due: relayNow, When: cpWhen, Checked: relayNow.UTC(), Reason: "context gone", Unreadable: true, What: "a"},
@@ -377,6 +393,8 @@ func TestTimerProbeHelpDocumentsBudget(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTimerProbeTimeoutWatchLine(t *testing.T) {
 	// An expired deadline exercises the command runner without a ten second sleep.
 	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
@@ -387,16 +405,16 @@ func TestTimerProbeTimeoutWatchLine(t *testing.T) {
 	}
 	r := (timerCheck{cmd: "exec sleep 30"}).result(nil, err)
 	st := state.State{Timers: []state.Timer{{ID: 1, Due: relayNow, Probe: "exec sleep 30", What: appCheck}}}
-	lines, _, fires, _ := settleTimers(&st, map[int]checkResult{1: r}, relayNow)
+	lines, _, fires, _ := watch.SettleTimers(&st, map[int]checkResult{1: r}, relayNow)
 	if len(lines) != 1 || !strings.Contains(lines[0], "probe timed out after 10 s") || len(fires) != 0 {
 		t.Fatalf("lines %v, fires %v", lines, fires)
 	}
-	lines, _, _, _ = settleTimers(&st, map[int]checkResult{1: r}, relayNow.Add(time.Minute))
+	lines, _, _, _ = watch.SettleTimers(&st, map[int]checkResult{1: r}, relayNow.Add(time.Minute))
 	if len(lines) != 0 {
 		t.Fatalf("repeated unchanged timeout: %v", lines)
 	}
 	unmet := (timerCheck{}).result(nil, errors.New("exit status 1"))
-	if unmet.unreadable || strings.Contains(unmet.reason, "timed out") {
+	if unmet.Unreadable || strings.Contains(unmet.Reason, "timed out") {
 		t.Fatalf("unmet: %+v", unmet)
 	}
 }

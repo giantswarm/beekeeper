@@ -316,6 +316,9 @@ func TestSessionsByKind(t *testing.T) {
 
 // The watch says SPEND <kind> once a day past its dailySpend, and a
 // restarted watch keeps its mark.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchSaysKindSpendOnceADay(t *testing.T) {
 	a := kindsApp(t)
 	a.cfg.Agents.Kinds[0].DailySpend = 2
@@ -334,20 +337,20 @@ func TestWatchSaysKindSpendOnceADay(t *testing.T) {
 	out := &syncBuffer{}
 	a.out = out
 	w := a.newWatcher(false, false)
-	w.kindSpending(now)
-	w.kindSpending(now.Add(time.Minute))
+	w.KindSpending(now)
+	w.KindSpending(now.Add(time.Minute))
 	if n := strings.Count(out.String(), "SPEND filer: $3.00 today"); n != 1 {
 		t.Fatalf("SPEND said %d times:\n%s", n, out)
 	}
 	if strings.Contains(out.String(), "SPEND meta") {
 		t.Errorf("meta has no dailySpend:\n%s", out)
 	}
-	if !w.reported[kindSpendKey(kindFiler, now.Truncate(24*time.Hour))] {
-		t.Errorf("no mark for the day: %v", w.reported)
+	if !w.Reported[kindSpendKey(kindFiler, now.Truncate(24*time.Hour))] {
+		t.Errorf("no mark for the day: %v", w.Reported)
 	}
 	// The next day forgets the mark of the last.
-	w.kindSpending(now.Add(24 * time.Hour))
-	if w.reported[kindSpendKey(kindFiler, now.Truncate(24*time.Hour))] {
-		t.Errorf("yesterday's mark kept: %v", w.reported)
+	w.KindSpending(now.Add(24 * time.Hour))
+	if w.Reported[kindSpendKey(kindFiler, now.Truncate(24*time.Hour))] {
+		t.Errorf("yesterday's mark kept: %v", w.Reported)
 	}
 }

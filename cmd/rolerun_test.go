@@ -26,28 +26,31 @@ func rebootedGuide() *state.Role {
 // A guide whose own watch went with it (a reboot, a crash) is recorded
 // gone by the standby watch at its first poll, so its grace runs out and
 // its successor starts, instead of a grace that starts anew on every poll.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestStandbyRecordsAGuideGoneWithItsWatch(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), true)
 	var started atomic.Int32
-	w.stand = standbyWatch{
-		turning: func(context.Context, string) bool { return false },
-		succeed: func(context.Context, role, state.Party) (state.Party, error) {
+	w.Stand = standbyWatch{
+		Turning: func(context.Context, string) bool { return false },
+		Succeed: func(context.Context, role, state.Party) (state.Party, error) {
 			started.Add(1)
 			return state.Party{Session: "sG8", Name: guideEight}, nil
 		},
 	}
-	if err := w.store.Update(func(st *state.State) ([]state.Event, error) { st.Guide = rebootedGuide(); return nil, nil }); err != nil {
+	if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) { st.Guide = rebootedGuide(); return nil, nil }); err != nil {
 		t.Fatal(err)
 	}
 	for _, at := range []time.Duration{0, 30 * time.Second, 2 * time.Minute} {
-		w.now = relayNow.Add(at)
-		w.pending(context.Background(), nil)
-		w.stand.inflight.Wait()
+		watchApp(w.Host).now = relayNow.Add(at)
+		w.Pending(context.Background(), nil)
+		w.Stand.Inflight.Wait()
 	}
 	if n := started.Load(); n != 1 {
 		t.Fatalf("%d successors, want 1 once the grace from the first poll ran out:\n%s", n, out)
 	}
-	st, _ := w.store.Read()
+	st, _ := watchApp(w.Host).store.Read()
 	if g := st.Guide.CLI.Gone; !g.Equal(relayNow) {
 		t.Errorf("gone recorded at %v, want the first poll %v", g, relayNow)
 	}
@@ -117,6 +120,9 @@ func TestOnlyABeekeeperRunTakesTheGuide(t *testing.T) {
 // guide start --new starts the next run as a background session with
 // Remote Control when none is recorded; its start records the role, so its
 // own guide start takes it.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestNewGuideRunWithoutAGuide(t *testing.T) {
 	a, out := stubApp(t)
 	plat.Machine = tableMachine{plat.Machine}
@@ -141,7 +147,7 @@ func TestNewGuideRunWithoutAGuide(t *testing.T) {
 		t.Errorf("brief:\n%s", brief)
 	}
 	st, _ := a.store.Read()
-	if st.Guide.Relay == nil || st.Guide.Relay.To.Session != bgID || !guideRole.startedAs(st, state.Party{Session: bgID}) {
+	if st.Guide.Relay == nil || st.Guide.Relay.To.Session != bgID || !guideRole.StartedAs(st, state.Party{Session: bgID}) {
 		t.Fatalf("relay %+v, starts %+v", st.Guide.Relay, st.Starts)
 	}
 	a.as = ""
@@ -187,6 +193,9 @@ func TestNewGuideRunRefusals(t *testing.T) {
 
 // beekeeper resume starts the guide whose session runs no CLI after the
 // stop and a reboot; none when no guide is recorded.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestResumeStartsAGoneGuide(t *testing.T) {
 	a, out := stubApp(t)
 	plat.Machine = tableMachine{plat.Machine}
@@ -197,7 +206,7 @@ func TestResumeStartsAGoneGuide(t *testing.T) {
 	t.Cleanup(func() { startRunAfterResume = orig })
 	startRunAfterResume = func(_ context.Context, _ *app, rl role, by state.Party) (state.Party, string, error) {
 		runs = append(runs, by)
-		return state.Party{Session: bgID, Name: rl.runName(8)}, "", nil
+		return state.Party{Session: bgID, Name: rl.RunName(8)}, "", nil
 	}
 	stop := &state.Stop{Reason: "reboot", By: state.Party{Name: personAsker}, At: relayNow.Add(-time.Hour)}
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
@@ -224,9 +233,12 @@ func TestResumeStartsAGoneGuide(t *testing.T) {
 }
 
 // The first background launch reserves its run before the daemon returns.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestInitialGuideRunReservesLaunch(t *testing.T) {
 	for _, run := range []int{0, 11} {
-		t.Run(guideRole.runName(run+1), func(t *testing.T) {
+		t.Run(guideRole.RunName(run+1), func(t *testing.T) {
 			a, _ := stubApp(t)
 			plat.Machine = tableMachine{plat.Machine}
 			a.now = relayNow
@@ -255,7 +267,7 @@ func TestInitialGuideRunReservesLaunch(t *testing.T) {
 					waitCtx, cancel := context.WithCancel(ctx)
 					waiting := make(chan error, 1)
 					go func() {
-						waiting <- a.awaitRoleStart(waitCtx, guideRole, state.Party{Session: bgID, Name: guideRole.runName(run + 1)})
+						waiting <- a.awaitRoleStart(waitCtx, guideRole, state.Party{Session: bgID, Name: guideRole.RunName(run + 1)})
 					}()
 					select {
 					case err := <-waiting:
@@ -275,7 +287,7 @@ func TestInitialGuideRunReservesLaunch(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					if r := guideRole.get(st).Relay; !r.Open(a.now) || r.To.Session != "" || r.To.Name != guideRole.runName(run+1) {
+					if r := guideRole.Get(st).Relay; !r.Open(a.now) || r.To.Session != "" || r.To.Name != guideRole.RunName(run+1) {
 						t.Errorf("pending launch: %+v", r)
 					}
 				}
@@ -289,13 +301,15 @@ func TestInitialGuideRunReservesLaunch(t *testing.T) {
 				t.Errorf("daemon launches = %d, want 1", len(*calls))
 			}
 			st, _ := a.store.Read()
-			if !guideRole.startedAs(st, to) {
+			if !guideRole.StartedAs(st, to) {
 				t.Fatal("start not recorded")
 			}
 		})
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestInitialGuideRunLaunchFailureWithdrawsReservation(t *testing.T) {
 	a, _ := stubApp(t)
 	plat.Machine = tableMachine{plat.Machine}
@@ -322,7 +336,7 @@ func TestInitialGuideRunLaunchFailureWithdrawsReservation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if to.Name != guideRole.runName(2) || len(*calls) != 1 {
+	if to.Name != guideRole.RunName(2) || len(*calls) != 1 {
 		t.Fatalf("retry: %+v, launches %d", to, len(*calls))
 	}
 }
