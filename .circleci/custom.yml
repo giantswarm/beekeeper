@@ -1,346 +1,171 @@
 # Repo-specific CircleCI jobs, merged into the generated workflows.yml by the
-# setup workflow in config.yml.
+# setup workflow in config.yml (lists append, maps merge).
 #
-# The generated go-build job runs only `make test`, where the envtest-backed
-# tests of the Kubernetes store skip without KUBEBUILDER_ASSETS and the
-# mailbox tests without BEEKEEPER_TEST_DATABASE_URL. This job runs them
-# against a real kube-apiserver from setup-envtest and a Postgres beside it,
-# after checking that the committed CRDs are what pkg/apis generates. Its
-# first image is the one the architect orb's executor runs.
+# The repository's ruleset requires these job names; each runs a real part of
+# the engine's suite (docs/phase1/plan.md §9):
 #
-# test-stable-version runs `make test` linked with a stable release's version
-# on every branch: go-build links a branch's or an RC's version, which the
-# state store neither stamps nor judges, so a test that only fails under a
-# stable version would otherwise first fail on the stable tag.
+#   go-build            generated: `make test` (unit tests, scenarios, RBAC
+#                       envtest, helm-unittest) and the cross-builds. It runs
+#                       as root in the architect image, so Makefile.custom.mk
+#                       runs each test binary as nobody there (initdb refuses
+#                       root) and fetches the test binaries first.
+#   test-loop-workflow  the whole suite, the scenarios included, with -race
+#   test-envtest        the CRDs against api/ (make check-crds) and the RBAC
+#                       tests against envtest's kube-apiserver
+#   test-large-history  replay over a generated history of 10,000 decisions
+#   test-stable-version promtool tests of every alert rule, and helm lint and
+#                       template with production-like values
+#   chart-test          the chart's own tests: helm lint and helm-unittest
 #
-# chart-test lints helm/beekeeper and runs its helm-unittest suites, in a plain
-# container: the dependencies are helm and its plugin, not Go tooling. The
-# versions are pinned so a plugin release cannot turn an unrelated PR red.
-#
-# test-performance runs the performance budgets (docs/performance.md) on a
-# generated desk, never on a desk's machine: CLI calls, the idle loop and
-# concurrent calls, its report in the job output and artifacts. Its control
-# step proves the loop budgets reject main before the fix of
-# https://github.com/giantswarm/beekeeper/issues/3657. The session footprint
-# needs a systemd user manager and runs nightly in GitHub Actions
-# (.github/workflows/performance.yaml).
-#
-# test-scenarios runs the behavioral scenarios (docs/scenarios.md) on every
-# pull request. Each scenario runs in its own user, mount, PID and network
-# namespaces, which the Docker executor's seccomp profile refuses, so the job
-# runs on a machine executor with the Go toolchain go.mod pins. The job runs
-# in two containers (parallelism), each one shard of the scenarios
-# (BEEKEEPER_SCENARIO_SHARD, split by a hash of flow/name), so the one check
-# stays and the suite can grow. Each shard fails above 10 minutes of wall
-# time and warns from 8; its report, JUnit results and every scenario's
-# artifacts are kept. Its scenario-control step
-# (.circleci/scenario-control.sh) builds the pull request's merge base and
-# runs the scenarios of its shard that the pull request adds or changes
-# against it: each must fail there on an assertion, or opt out with
-# control: {none: <reason>}. Shard 0's step also runs the Test functions the
-# pull request adds or changes in any _test.go against the merge base's code
-# with its test files applied (internal/testcontrol): at least one must fail
-# there and pass on the pull request's code, or each opts out with a
-# control: none: <reason> paragraph.
+# The jobs run in cimg/go (Ubuntu, a C toolchain for -race, a user that is not
+# root for the embedded Postgres). Each job caches the Go modules and build
+# cache by go.sum, and its test binaries (~/.cache/beekeeper/test-deps) by
+# their versions (make test-deps-versions).
 version: 2.1
+
+commands:
+  beekeeper-prepare:
+    description: Check out, restore the caches, install helm and fetch the test binaries.
+    parameters:
+      deps:
+        description: The make target that fetches the job's test binaries.
+        type: string
+        default: test-deps
+    steps:
+      - checkout
+      - run:
+          name: Key the caches
+          command: |
+            set -euo pipefail
+            make -s test-deps-versions > /tmp/beekeeper-test-deps.key
+            cat /tmp/beekeeper-test-deps.key
+      - restore_cache:
+          keys:
+            - beekeeper-go-v1-{{ .Environment.CIRCLE_JOB }}-{{ arch }}-{{ checksum "go.sum" }}
+            - beekeeper-go-v1-{{ .Environment.CIRCLE_JOB }}-{{ arch }}-
+      - restore_cache:
+          keys:
+            - beekeeper-test-deps-v1-{{ .Environment.CIRCLE_JOB }}-{{ arch }}-{{ checksum "/tmp/beekeeper-test-deps.key" }}
+      - run:
+          name: Install helm
+          environment:
+            # renovate: datasource=github-releases depName=helm/helm
+            HELM_VERSION: v3.22.1
+          command: |
+            set -euo pipefail
+            tgz="helm-${HELM_VERSION}-linux-amd64.tar.gz"
+            curl -sSfL --retry 3 -o "/tmp/$tgz" "https://get.helm.sh/$tgz"
+            echo "$(curl -sSfL --retry 3 "https://get.helm.sh/$tgz.sha256sum" | cut -d' ' -f1)  /tmp/$tgz" | sha256sum -c -
+            tar -xzf "/tmp/$tgz" -C /tmp linux-amd64/helm
+            sudo install -m 0755 /tmp/linux-amd64/helm /usr/local/bin/helm
+            helm version --short
+      - run:
+          name: Fetch the test binaries
+          command: make << parameters.deps >>
+
+  beekeeper-save:
+    description: Save the Go and test-deps caches.
+    steps:
+      - save_cache:
+          key: beekeeper-go-v1-{{ .Environment.CIRCLE_JOB }}-{{ arch }}-{{ checksum "go.sum" }}
+          paths:
+            - ~/go/pkg/mod
+            - ~/.cache/go-build
+      - save_cache:
+          key: beekeeper-test-deps-v1-{{ .Environment.CIRCLE_JOB }}-{{ arch }}-{{ checksum "/tmp/beekeeper-test-deps.key" }}
+          paths:
+            - ~/.cache/beekeeper/test-deps
 
 jobs:
   test-loop-workflow:
     docker:
-    - image: gsoci.azurecr.io/giantswarm/architect:8.6.48
-      entrypoint: /bin/bash
-    resource_class: medium
-    environment:
-      LANG: C.UTF-8
-      BEEKEEPER_TEST_LOOP_ARTIFACTS: /tmp/loop-workflow-artifacts
+      - image: cimg/go:1.27.4
+    resource_class: large
     steps:
-    - checkout
-    - architect/tools-info
-    - architect/go-cache-restore
-    - run:
-        name: Prove merge-result lint policy and baseline with the real linter
-        command: |
-          set -euo pipefail
-          golangci-lint version
-          BEEKEEPER_TEST_REAL_LINT=1 go test ./cmd -run '^TestMergeResultRealLint' -count=1 -timeout=5m -v
-    - run:
-        name: Exercise the real supervisor binary and historical parser control
-        no_output_timeout: 15m
-        command: timeout 15m make test-loop-workflow
-    - run:
-        name: Replay standstills and reject the historical defects
-        no_output_timeout: 30m
-        command: bash .circleci/standstill-controls.sh
-    - store_artifacts:
-        path: /tmp/loop-workflow-artifacts
-        destination: loop-workflow
-    - architect/go-cache-save
-
-  test-scenarios:
-    machine:
-      image: ubuntu-2404:current
-    resource_class: medium
-    parallelism: 2
-    environment:
-      BEEKEEPER_SCENARIO_REPORT: /tmp/scenarios
-    steps:
-    - checkout
-    - run:
-        name: Select this container's shard of the scenarios
-        command: |
-          set -euo pipefail
-          shard="${CIRCLE_NODE_INDEX:-0}/${CIRCLE_NODE_TOTAL:-1}"
-          echo "export BEEKEEPER_SCENARIO_SHARD=${shard}" >> "$BASH_ENV"
-          echo "scenario shard ${shard}"
-    - run:
-        name: Install the Go toolchain go.mod pins
-        command: |
-          set -euo pipefail
-          version="$(awk '$1 == "toolchain" { sub(/^go/, "", $2); print $2 }' go.mod)"
-          test -n "$version"
-          curl -fsSL "https://go.dev/dl/go${version}.linux-amd64.tar.gz" -o /tmp/go.tgz
-          sudo rm -rf /usr/local/go
-          sudo tar -C /usr/local -xzf /tmp/go.tgz
-          echo 'export PATH=/usr/local/go/bin:$HOME/go/bin:$PATH GOTOOLCHAIN=local' >> "$BASH_ENV"
-    - run:
-        name: Allow unprivileged user namespaces
-        command: |
-          set -euo pipefail
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
-          sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
-          unshare -Urmpnf --kill-child true
-          go version
-          git --version
-    - restore_cache:
-        keys:
-        - scenarios-go-v1-{{ checksum "go.sum" }}
-        - scenarios-go-v1-
-    - run:
-        name: Run the behavioral scenarios
-        no_output_timeout: 12m
-        command: |
-          set -o pipefail
-          mkdir -p /tmp/scenarios
-          timeout 14m make test-scenarios 2>&1 | tee /tmp/scenarios/go-test.log
-    - run:
-        name: scenario-control (the pull request's new and changed scenarios and Go tests fail on its merge base)
-        # Also after a red suite, so one round reports both.
-        when: always
-        no_output_timeout: 12m
-        command: |
-          set -o pipefail
-          mkdir -p /tmp/scenarios
-          timeout 25m bash .circleci/scenario-control.sh 2>&1 | tee /tmp/scenarios/control.log
-    - store_test_results:
-        path: /tmp/scenarios/junit
-    - store_artifacts:
-        path: /tmp/scenarios
-        destination: scenarios
-    - save_cache:
-        key: scenarios-go-v1-{{ checksum "go.sum" }}
-        paths:
-        - ~/go/pkg/mod
-        - ~/.cache/go-build
-
-  test-large-history:
-    docker:
-    - image: gsoci.azurecr.io/giantswarm/architect:8.6.48
-      entrypoint: /bin/bash
-    resource_class: medium
-    environment:
-      BEEKEEPER_TEST_LARGE_HISTORY: "1"
-    steps:
-    - checkout
-    - architect/tools-info
-    - architect/go-cache-restore
-    - run:
-        name: Bound startup and pass latency with 450k events and 1 GiB of history
-        no_output_timeout: 25m
-        command: go test ./cmd -run '^TestLargeHistoryStartupAndPass$' -count=1 -timeout=25m -v
-    - run:
-        name: Bound capacity latency with a large snapshot and event log
-        command: go test ./cmd -run '^TestCapacityLargeSnapshotLatency$' -count=1 -timeout=2m -v
-    - run:
-        name: Record cached state and event read cost
-        command: |
-          set -o pipefail
-          mkdir -p /tmp/state-performance
-          go test ./internal/state -run '^$' -bench '^Benchmark(UnchangedSnapshot|CachedEvents)$' -benchtime=1s -benchmem | tee /tmp/state-performance/benchmarks.txt
-    - store_artifacts:
-        path: /tmp/state-performance
-        destination: state-performance
-    - architect/go-cache-save
-
-  test-performance:
-    docker:
-    - image: gsoci.azurecr.io/giantswarm/architect:8.6.48
-      entrypoint: /bin/bash
-    resource_class: medium
-    environment:
-      BEEKEEPER_PERF_REPORT: /tmp/performance
-    steps:
-    - checkout
-    - architect/tools-info
-    - architect/go-cache-restore
-    - run:
-        name: Budgets for CLI calls, the idle loop and concurrent calls on a generated desk
-        no_output_timeout: 20m
-        command: make test-performance
-    - run:
-        name: Reject the idle loop's re-reads of main before the fix (control)
-        no_output_timeout: 20m
-        command: bash .circleci/performance-control.sh
-    - store_artifacts:
-        path: /tmp/performance
-        destination: performance
-    - architect/go-cache-save
+      - beekeeper-prepare
+      - run:
+          name: Run every test, the scenarios included, with the race detector
+          no_output_timeout: 20m
+          command: make test-race
+      - beekeeper-save
 
   test-envtest:
     docker:
-    - image: gsoci.azurecr.io/giantswarm/architect:8.6.48
-      entrypoint: /bin/bash
-    - image: gsoci.azurecr.io/giantswarm/postgres:18.7-alpine
-      environment:
-        POSTGRES_HOST_AUTH_METHOD: trust
-    environment:
-      BEEKEEPER_TEST_DATABASE_URL: postgres://postgres@localhost:5432/postgres?sslmode=disable
+      - image: cimg/go:1.27.4
     resource_class: medium
     steps:
-    - checkout
-    - architect/tools-info
-    - architect/go-cache-restore
-    - run:
-        name: Check the CRDs are generated from pkg/apis
-        command: make check-crds
-    - run:
-        name: Wait for the Postgres
-        command: for i in $(seq 60); do (echo > /dev/tcp/localhost/5432) 2>/dev/null && exit 0; sleep 1; done; exit 1
-    - run:
-        name: Run the envtest-backed and Postgres-backed tests (the Kubernetes store, serve, the mailboxes)
-        command: make test-envtest
-    - architect/go-cache-save
+      - beekeeper-prepare
+      - run:
+          name: Check the CRDs (config/crd, the chart's copy) and deepcopy code against api/
+          command: make check-crds
+      - run:
+          name: Test the chart's RBAC against envtest's kube-apiserver
+          command: make test-envtest
+      - beekeeper-save
+
+  test-large-history:
+    docker:
+      - image: cimg/go:1.27.4
+    resource_class: medium
+    steps:
+      - beekeeper-prepare
+      - run:
+          name: Replay a generated history of 10,000 decisions
+          no_output_timeout: 20m
+          command: make test-large-history
+      - beekeeper-save
 
   test-stable-version:
     docker:
-    - image: gsoci.azurecr.io/giantswarm/architect:8.6.48
-      entrypoint: /bin/bash
+      - image: cimg/go:1.27.4
     resource_class: medium
     steps:
-    - checkout
-    - architect/tools-info
-    - architect/go-cache-restore
-    - run:
-        name: Run the unit tests linked with a stable release's version, as a stable tag's go-build does
-        # Compilation plus the cmd suite can exceed the default 10m silence
-        # limit. Keep Go's test timeouts and bound the whole make invocation.
-        no_output_timeout: 20m
-        command: timeout 25m make test VERSION=v1.0.0
+      - beekeeper-prepare:
+          deps: test-deps-versions
+      - run:
+          name: Test every alert rule with promtool
+          command: make test-alerts
+      - run:
+          name: Lint and render the chart with production-like values
+          command: make helm-template-prod
+      - beekeeper-save
 
   chart-test:
     docker:
-    - image: cimg/base:current
+      - image: cimg/go:1.27.4
     resource_class: small
-    environment:
-      HELM_VERSION: v3.16.0
     steps:
-    - checkout
-    - run:
-        name: Install helm
-        command: |
-          set -euxo pipefail
-          curl -sSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz" | tar -xz -C /tmp
-          sudo install -m 0755 /tmp/linux-amd64/helm /usr/local/bin/helm
-          helm version --short
-    - run:
-        name: Lint the chart and run its unit tests
-        command: make helm-test
-
-  publish-canary-evidence:
-    docker:
-    - image: gsoci.azurecr.io/giantswarm/architect:8.6.48
-      entrypoint: /bin/bash
-    resource_class: medium
-    environment:
-      LANG: C.UTF-8
-    steps:
-    - checkout
-    - attach_workspace:
-        at: .
-    - run:
-        name: Apply shared sandbox proof policy
-        command: |
-          case "$(cat internal/update/sandbox-proof-required.txt)" in
-            false) echo "Sandbox proof publication temporarily disabled"; circleci-agent step halt ;;
-            true) ;;
-            *) echo "Invalid sandbox proof policy" >&2; exit 1 ;;
-          esac
-    - architect/tools-info
-    - run:
-        name: Retry transient Rekor conflict lookups during blob signing
-        command: |
-          mkdir -p /tmp/beekeeper-cosign-bin
-          printf 'export BEEKEEPER_COSIGN_BINARY=%q\n' "$(command -v cosign)" >> "$BASH_ENV"
-          cp .circleci/cosign-retry.sh /tmp/beekeeper-cosign-bin/cosign
-          chmod 0755 /tmp/beekeeper-cosign-bin/cosign
-          echo 'export PATH=/tmp/beekeeper-cosign-bin:$PATH' >> "$BASH_ENV"
-    - run:
-        name: Run staged sandbox canary on release candidate and build evidence blobs
-        no_output_timeout: 10m
-        command: bash .circleci/publish-canary-evidence.sh
-    - architect/cosign-sign-verify:
-        kind: blob
-        refs_file: /tmp/.cosign_canary_blobs
-    - architect/generate-github-token
-    - run:
-        name: Upload signed canary evidence to GitHub Release
-        command: |
-          set -euo pipefail
-          for b in ./beekeeper-*-*.canary.json.bundle; do
-            cp "$b" /tmp/canary-artifacts/
-          done
-          gh release upload "$CIRCLE_TAG" ./beekeeper-*-*.canary.json ./beekeeper-*-*.canary.json.bundle --clobber
-    - store_artifacts:
-        path: /tmp/canary-artifacts
-        destination: canary-evidence
+      - beekeeper-prepare:
+          deps: test-deps-versions
+      - run:
+          name: Lint the chart and run its unit tests (helm-unittest)
+          command: |
+            set -euo pipefail
+            helm lint --strict helm/beekeeper
+            helm lint --strict helm/beekeeper --values helm/beekeeper/ci/ci-values.yaml
+            make helm-test
+      - beekeeper-save
 
 workflows:
   build:
     jobs:
-    - test-large-history:
-        filters:
-          tags:
-            only: /^v.*/
-    - test-performance:
-        filters:
-          tags:
-            only: /^v.*/
-    - test-envtest:
-        filters:
-          tags:
-            only: /^v.*/
-    # No path or branch filters: loop, merge, capacity, watch, update and CI
-    # changes all run the same check. Tags also exercise it before release.
-    - test-loop-workflow:
-        filters:
-          tags:
-            only: /^v.*/
-    - test-stable-version
-    - test-scenarios:
-        filters:
-          tags:
-            only: /^v.*/
-    - chart-test:
-        filters:
-          tags:
-            only: /^v.*/
-    - publish-canary-evidence:
-        context: architect
-        requires:
-        - go-build
-        - test-loop-workflow
-        - upload-release-assets
-        filters:
-          branches:
-            ignore: /.*/
-          tags:
-            only: /^v.*/
+      - test-loop-workflow:
+          filters:
+            tags:
+              only: /^v.*/
+      - test-envtest:
+          filters:
+            tags:
+              only: /^v.*/
+      - test-large-history:
+          filters:
+            tags:
+              only: /^v.*/
+      - test-stable-version:
+          filters:
+            tags:
+              only: /^v.*/
+      - chart-test:
+          filters:
+            tags:
+              only: /^v.*/

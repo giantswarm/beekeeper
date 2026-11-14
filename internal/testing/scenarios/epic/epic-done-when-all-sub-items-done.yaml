@@ -1,0 +1,62 @@
+name: epic-done-when-all-sub-items-done
+concept: epic
+tags: [phase1]
+description: |
+  Given an Active Bumblebee epic whose two sub-items are In Progress
+  When a person closes one sub-item's issue, and later moves the other to Done
+  while its issue stays open
+  Then the epic stays Active after the first and is Done after the second.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#90
+        title: Klaus session resilience
+        assignees: [alice]
+        board: { status: "In Progress ⛏️", kind: "Epic 🎯", team: "Bumblebee🐝" }
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        assignees: [alice]
+        parent: giantswarm/roadmap#90
+        board: { status: "In Progress ⛏️", kind: "Story 📑", team: "Bumblebee🐝" }
+      - ref: giantswarm/roadmap#102
+        title: Resume klaus sessions after a gateway restart
+        body: |
+          ### Acceptance criteria
+          - [ ] a session survives a gateway restart
+          Repo: giantswarm/klaus
+        assignees: [bob]
+        parent: giantswarm/roadmap#90
+        board: { status: "In Progress ⛏️", kind: "Story 📑", team: "Bumblebee🐝" }
+steps:
+  - id: active
+    tool: get_item
+    args: { ref: giantswarm/roadmap#90 }
+    expected:
+      json_path: { status.phase: Active }
+
+  - id: first-closed
+    tool: github_issue_edit
+    args: { ref: giantswarm/roadmap#102, state: closed }
+
+  - id: still-active
+    tool: get_item
+    args: { ref: giantswarm/roadmap#90 }
+    expected:
+      json_path: { status.phase: Active }
+
+  - id: second-done
+    tool: github_board_set
+    args: { issue: giantswarm/roadmap#101, status: "Done ✅" }
+
+  - id: epic-done
+    tool: get_item
+    args: { ref: giantswarm/roadmap#90 }
+    expected:
+      json_path:
+        status.phase: Done
+        status.issue.state: open

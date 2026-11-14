@@ -1,0 +1,95 @@
+name: history-observation-source-attribution
+concept: history
+tags: [phase1]
+description: |
+  Given a ready Up Next item #101 and an In Progress item #102 whose PR waits on CI
+  When at 09:00 #101 is moved to In Progress (webhook delivered) and CI on #102's PR completes
+  green without a webhook ever being sent, and the clock reaches the 09:15 changes resync
+  Then each change is attributed to how it was first seen: #101's to webhook (09:00) and the
+  PR's to resync (09:15), in the event table, on the Change's observed field and in
+  engine_observations_total; the resync-only change counts as a missed webhook.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        assignees: [alice]
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝" }
+      - ref: giantswarm/roadmap#102
+        title: Expose klaus session metrics
+        body: |
+          ### Acceptance criteria
+          - [ ] a metric per session state
+          Repo: giantswarm/klaus
+        assignees: [bob]
+        board: { status: "In Progress ⛏️", kind: "Story 📑", team: "Bumblebee🐝" }
+    pulls:
+      - ref: giantswarm/klaus#56
+        author: bob
+        head: b1
+        closes: [giantswarm/roadmap#102]
+        checks:
+          - { name: "ci/circleci: go-build", status: completed, conclusion: success }
+          - { name: "ci/circleci: go-test", status: in_progress }
+steps:
+  - id: board-change
+    tool: github_board_set
+    args: { issue: giantswarm/roadmap#101, status: "In Progress ⛏️" }
+
+  - id: ci-change-unsent
+    tool: github_check_run
+    args: { repo: giantswarm/klaus, sha: b1, name: "ci/circleci: go-test", status: completed, conclusion: success, deliver: never }
+
+  - id: resync
+    tool: clock_advance
+    args: { by: 15m }
+
+  - id: webhook-row
+    tool: events
+    args: { item: giantswarm/roadmap#101, type: observed, since_step: board-change }
+    expected:
+      json_path:
+        count: 1
+        rows.0.at: "2026-11-16T09:00:00Z"
+        rows.0.source: webhook
+
+  - id: resync-row
+    tool: events
+    args: { change: giantswarm/klaus#56, type: observed, since_step: board-change }
+    expected:
+      json_path:
+        count: 1
+        rows.0.at: "2026-11-16T09:15:00Z"
+        rows.0.source: resync
+
+  - id: change-observed-field
+    tool: get_change
+    args: { ref: giantswarm/klaus#56 }
+    expected:
+      json_path:
+        status.ci.state: green
+        status.observed.at: "2026-11-16T09:15:00Z"
+        status.observed.source: resync
+
+  - id: webhook-metric
+    tool: metric
+    args: { name: engine_observations_total, labels: { source: webhook } }
+    expected:
+      json_path: { value: 1 }
+
+  - id: resync-metric
+    tool: metric
+    args: { name: engine_observations_total, labels: { source: resync } }
+    expected:
+      json_path: { value: 1 }
+
+  - id: missed
+    tool: metric
+    args: { name: engine_webhook_missed_total, labels: { event: check_run } }
+    expected:
+      json_path: { value: 1 }

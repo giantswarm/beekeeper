@@ -1,0 +1,106 @@
+name: board-kind-mapping
+concept: board
+tags: [phase1, kinds]
+description: |
+  Given Bumblebee items in Up Next of every Kind, and one with no Kind
+  When the engine starts and observes them
+  Then Epic maps to Epic; Story, Task, Feature and Bug to Implementable; Alert to
+  Incident; Note and no Kind to Ignored. The Alert is ready and has the best priority,
+  yet it is never picked: incidents are counted, not handled, in phase 1.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#201
+        title: Klaus session resilience
+        board: { status: "Up Next ➡️", kind: "Epic 🎯", team: "Bumblebee🐝" }
+      - ref: giantswarm/roadmap#202
+        title: Retry transient errors in the klaus client
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝" }
+      - ref: giantswarm/roadmap#203
+        title: Bump the klaus Go toolchain
+        board: { status: "Up Next ➡️", kind: "Task 🗒️", team: "Bumblebee🐝" }
+      - ref: giantswarm/roadmap#204
+        title: Session resume in klaus
+        board: { status: "Up Next ➡️", kind: "Feature 💫", team: "Bumblebee🐝" }
+      - ref: giantswarm/roadmap#205
+        title: klaus drops the last message on reconnect
+        board: { status: "Up Next ➡️", kind: "Bug 🐞", team: "Bumblebee🐝" }
+      - ref: giantswarm/roadmap#206
+        title: KlausGatewayDown firing in production
+        body: |
+          ### Acceptance criteria
+          - [ ] the gateway answers again
+          Repo: giantswarm/klaus
+        board: { status: "Up Next ➡️", kind: "Alert 🚨", team: "Bumblebee🐝", priority: 1 }
+      - ref: giantswarm/roadmap#207
+        title: Notes from the klaus retro
+        board: { status: "Up Next ➡️", kind: "Note 📝", team: "Bumblebee🐝" }
+      - ref: giantswarm/roadmap#208
+        title: Something about klaus
+        board: { status: "Up Next ➡️", team: "Bumblebee🐝" }
+steps:
+  - id: epic
+    tool: get_item
+    args: { ref: giantswarm/roadmap#201 }
+    expected:
+      json_path: { status.class: Epic }
+
+  - id: story
+    tool: get_item
+    args: { ref: giantswarm/roadmap#202 }
+    expected:
+      json_path: { status.class: Implementable }
+
+  - id: task
+    tool: get_item
+    args: { ref: giantswarm/roadmap#203 }
+    expected:
+      json_path: { status.class: Implementable }
+
+  - id: feature
+    tool: get_item
+    args: { ref: giantswarm/roadmap#204 }
+    expected:
+      json_path: { status.class: Implementable }
+
+  - id: bug
+    tool: get_item
+    args: { ref: giantswarm/roadmap#205 }
+    expected:
+      json_path: { status.class: Implementable }
+
+  - id: alert
+    tool: get_item
+    args: { ref: giantswarm/roadmap#206 }
+    expected:
+      json_path:
+        status.class: Incident
+        status.eligible.value: false
+        status.shadow.pick: null
+        status.shadow.actions: null
+
+  - id: note
+    tool: get_item
+    args: { ref: giantswarm/roadmap#207 }
+    expected:
+      json_path: { status.class: Ignored }
+
+  - id: no-kind
+    tool: get_item
+    args: { ref: giantswarm/roadmap#208 }
+    expected:
+      json_path: { status.class: Ignored }
+
+  - id: alert-never-picked
+    description: The incident is neither picked nor held for anyone
+    tool: get_team
+    args: { name: bumblebee }
+    expected:
+      not_contains: ["giantswarm/roadmap#206"]
+
+  - id: no-actions-for-the-alert
+    tool: events
+    args: { item: giantswarm/roadmap#206, type: shadow.action }
+    expected:
+      json_path: { count: 0 }

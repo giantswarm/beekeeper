@@ -1,0 +1,74 @@
+name: board-pr-outside-org-found-by-resync
+concept: board
+tags: [phase1, links, resync]
+description: |
+  Given an In Progress item and alice's personal public repo, which is outside the
+  App's installation (the installation covers the giantswarm org only)
+  When alice opens a PR there that closes the item; GitHub sends the App no webhook
+  for it, and none is logged
+  Then the next 10-minute board resync finds the PR among the item's closing
+  references and creates a Change observed by the resync, and this is not counted
+  as a missed webhook, since no webhook could exist.
+pre_configuration:
+  fixture: base
+  github:
+    repos:
+      - { name: alice/klaus-experiments, visibility: public, installed: false }
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        assignees: [alice]
+        board: { status: "In Progress ⛏️", kind: "Story 📑", team: "Bumblebee🐝" }
+steps:
+  - id: pr-opened-outside
+    description: No webhook exists for a repo outside the installation
+    tool: github_pr_open
+    args:
+      ref: alice/klaus-experiments#3
+      author: alice
+      head: c1
+      closes: [giantswarm/roadmap#101]
+      deliver: never
+
+  - id: not-seen-yet
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      json_path: { status.changes: null }
+
+  - id: board-resync
+    tool: clock_advance
+    args: { by: 10m }
+
+  - id: change-found
+    tool: get_change
+    args: { ref: alice/klaus-experiments#3 }
+    expected:
+      json_path:
+        status.pr.repo: alice/klaus-experiments
+        status.pr.number: 3
+        status.pr.state: open
+        status.items: [giantswarm/roadmap#101]
+        status.observed.source: resync
+
+  - id: item-lists-it
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      json_path: { status.changes: [alice/klaus-experiments#3] }
+
+  - id: not-a-missed-webhook
+    tool: metric
+    args: { name: engine_webhook_missed_total }
+    expected:
+      json_path: { value: 0 }
+
+  - id: no-missed-event
+    tool: events
+    args: { type: webhook.missed }
+    expected:
+      json_path: { count: 0 }

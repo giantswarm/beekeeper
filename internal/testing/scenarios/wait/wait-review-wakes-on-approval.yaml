@@ -1,0 +1,78 @@
+name: wait-review-wakes-on-approval
+concept: wait
+tags: [phase1, wake-index]
+description: |
+  Given a Published item whose PR is green on its head SHA and waits on review (the repo's
+  ruleset requires one approval; author and reviewer are both on the owning team)
+  When bob approves the PR
+  Then the pull_request_review webhook wakes the review wait, the Change records the approval
+  and has no wait any more, and the Item moves to Merging with no wait of its own: nothing
+  is pending until someone merges.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        assignees: [alice]
+        board: { status: "In Progress ⛏️", kind: "Story 📑", team: "Bumblebee🐝" }
+    pulls:
+      - ref: giantswarm/klaus#55
+        author: alice
+        head: a1
+        closes: [giantswarm/roadmap#101]
+        checks:
+          - { name: "ci/circleci: go-build", status: completed, conclusion: success }
+          - { name: "ci/circleci: go-test", status: completed, conclusion: success }
+        reviews: []
+steps:
+  - id: waiting-on-review
+    tool: get_change
+    args: { ref: giantswarm/klaus#55 }
+    expected:
+      json_path:
+        status.ci.state: green
+        status.review.needsOtherTeam: false
+        status.wait.on: review
+        status.wait.ref: "pr:giantswarm/klaus#55"
+        status.wait.deadline: "2026-11-18T09:00:00Z"
+        status.wait.atDeadline: re-observe
+
+  - id: published
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      json_path: { status.phase: Published }
+
+  - id: approved
+    tool: github_pr_review
+    args: { ref: giantswarm/klaus#55, by: bob, state: approved }
+
+  - id: wait-ended
+    tool: get_change
+    args: { ref: giantswarm/klaus#55 }
+    expected:
+      json_path:
+        status.review.state: approved
+        status.wait: null
+
+  - id: merging
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      json_path:
+        status.phase: Merging
+        status.wait: null
+
+  - id: woken-by-webhook
+    tool: events
+    args: { change: giantswarm/klaus#55, type: wait.woken, since_step: approved }
+    expected:
+      json_path:
+        count: 1
+        rows.0.source: webhook
+        rows.0.data.on: review

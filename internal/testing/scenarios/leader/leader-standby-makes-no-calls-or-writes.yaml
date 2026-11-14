@@ -1,0 +1,94 @@
+name: leader-standby-makes-no-calls-or-writes
+concept: leader
+tags: [phase1]
+description: |
+  Given two engine replicas, engine-0 (started first, so it leads) and engine-1, and a Change
+  waiting on CI
+  When the delivery-log check comes due and a check_run webhook wakes the Change
+  Then only the leader acts: the Installation names engine-0 as leader, the delivery log is
+  read once, not once per replica, and the wake is recorded once. The standby engine-1 makes
+  no GitHub calls, reconciles nothing and writes no object.
+pre_configuration:
+  fixture: base
+  engine: { replicas: 2 }
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        assignees: [alice]
+        board: { status: "In Progress ⛏️", kind: "Story 📑", team: "Bumblebee🐝" }
+    pulls:
+      - ref: giantswarm/klaus#55
+        author: alice
+        head: a1
+        closes: [giantswarm/roadmap#101]
+        checks:
+          - { name: "ci/circleci: go-build", status: completed, conclusion: success }
+          - { name: "ci/circleci: go-test", status: in_progress }
+steps:
+  - id: waiting
+    tool: get_change
+    args: { ref: giantswarm/klaus#55 }
+    expected:
+      json_path: { status.wait.on: ci, status.wait.state: watching }
+
+  - id: engine-0-leads
+    tool: get_installation
+    expected:
+      json_path: { status.leader: engine-0 }
+
+  - id: log-check-due
+    tool: clock_advance
+    args: { by: 5m }
+
+  - id: delivery-log-read-once
+    tool: github_calls
+    args: { since_step: log-check-due, api: app, operation: apps/list-webhook-deliveries }
+    expected:
+      json_path: { count: 1 }
+
+  - id: ci-completes
+    tool: github_check_run
+    args: { repo: giantswarm/klaus, sha: a1, name: "ci/circleci: go-test", status: completed, conclusion: success }
+
+  - id: woken
+    tool: get_change
+    args: { ref: giantswarm/klaus#55 }
+    expected:
+      json_path: { status.ci.state: green, status.wait.on: review }
+
+  - id: wake-recorded-once
+    tool: events
+    args: { change: giantswarm/klaus#55, type: wait.woken, since_step: ci-completes }
+    expected:
+      json_path:
+        count: 1
+        rows.0.source: webhook
+
+  - id: standby-made-no-calls
+    tool: github_calls
+    args: { replica: engine-1 }
+    expected:
+      json_path: { count: 0 }
+
+  - id: standby-reconciled-nothing
+    tool: reconciles
+    args: { replica: engine-1 }
+    expected:
+      json_path: { count: 0 }
+
+  - id: standby-wrote-nothing
+    tool: object_writes
+    args: { replica: engine-1 }
+    expected:
+      json_path: { count: 0 }
+
+  - id: leader-did-the-work
+    tool: object_writes
+    args: { replica: engine-0, since_step: ci-completes }
+    expected:
+      json_path_min: { count: 1 }

@@ -1,0 +1,84 @@
+name: budget-304-costs-nothing
+concept: budget
+tags: [phase1]
+description: |
+  Given a PR that is green and waiting on review, already read once with an ETag
+  When a Changes resync re-reads it and nothing has changed, and later a review
+  arrives and the engine reads what changed
+  Then the resync's read is conditional and answered 304, and the Budget's REST
+  remaining (taken from the rate-limit headers) is unchanged after it; the reads
+  after the review are answered 200 and do lower it, so the Budget is not simply
+  standing still.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        assignees: [alice]
+        board: { status: "In Progress ⛏️", kind: "Story 📑", team: "Bumblebee🐝" }
+    pulls:
+      - ref: giantswarm/klaus#55
+        author: alice
+        head: a1
+        closes: [giantswarm/roadmap#101]
+        checks:
+          - { name: "ci/circleci: go-build", status: completed, conclusion: success }
+          - { name: "ci/circleci: go-test", status: completed, conclusion: success }
+steps:
+  - id: warm-up
+    description: Startup reads and the first Changes resync are done; ETags are in hand
+    tool: clock_advance
+    args: { by: 15m }
+
+  - id: pin-rest-window
+    description: Set the App's REST remaining to a known number (the window resets at 10:15)
+    tool: github_fault
+    args: { kind: rate_limit, api: rest, remaining: 4500, reset_in: 1h }
+
+  - id: unchanged-resync
+    description: The 09:30 Changes resync (the delivery-log checks in between use the App's own bucket)
+    tool: clock_advance
+    args: { by: 15m }
+
+  - id: pr-read-was-a-304
+    tool: github_calls
+    args: { since_step: unchanged-resync, method: GET, path: /repos/giantswarm/klaus/pulls/55 }
+    expected:
+      json_path: { count: 1, conditional: 1, notModified: 1 }
+
+  - id: all-reads-free
+    tool: github_calls
+    args: { since_step: unchanged-resync, api: rest }
+    expected:
+      json_path: { modified: 0 }
+      json_path_min: { notModified: 3 } # the PR, its head's check runs and its head's statuses
+
+  - id: remaining-unchanged
+    tool: get_budget
+    expected:
+      json_path:
+        status.rest.limit: 5000
+        status.rest.remaining: 4500
+        status.rest.resetAt: "2026-11-16T10:15:00Z"
+
+  - id: remaining-metric-unchanged
+    tool: metric
+    args: { name: engine_github_rate_remaining, labels: { api: rest } }
+    expected:
+      json_path: { value: 4500 }
+
+  - id: review-arrives
+    tool: github_pr_review
+    args: { ref: giantswarm/klaus#55, by: bob, state: changes_requested }
+
+  - id: changed-reads-cost
+    description: The reviews changed, so at least one read is answered 200 and counts
+    tool: get_budget
+    expected:
+      json_path_max: { status.rest.remaining: 4499 }
+      json_path_min: { status.rest.remaining: 4496 }

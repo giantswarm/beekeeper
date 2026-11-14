@@ -1,0 +1,13 @@
+# The values hack/test-alerts.sh renders the PrometheusRule with (release
+# beekeeper in namespace beekeeper): labels from values, one severity
+# overridden, a runbook and the watchdog's own label.
+prometheusRule:
+  alertLabels:
+    cluster: test
+    layer: workload
+  runbookURL: https://example.com/runbook
+  severities:
+    noLeader: critical
+  watchdog:
+    labels:
+      heartbeat: "true"

@@ -1,0 +1,51 @@
+name: invariant-pending-ci-without-wait-detected
+concept: invariant
+tags: [phase1]
+description: |
+  Given an In Progress item in giantswarm/klaus, and an engine that no longer creates waits
+  When alice opens a PR that closes it, with CI not yet finished on its head SHA
+  Then the Change sees CI pending but holds no ci wait, and wip-has-run-or-wait counts that
+  one Change.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        assignees: [alice]
+        board: { status: "In Progress ⛏️", kind: "Story 📑", team: "Bumblebee🐝" }
+expect_violations: [wip-has-run-or-wait]
+steps:
+  - id: holds
+    description: Implementing with nothing pending needs no wait
+    tool: metric
+    args: { name: engine_invariant_violations, labels: { invariant: wip-has-run-or-wait } }
+    expected:
+      json_path: { value: 0 }
+
+  - id: waits-dropped
+    tool: engine_fault
+    args: { kind: drop_waits }
+
+  - id: pr-opened
+    tool: github_pr_open
+    args: { ref: giantswarm/klaus#55, author: alice, head: a1, closes: [giantswarm/roadmap#101] }
+
+  - id: pending-without-wait
+    tool: get_change
+    args: { ref: giantswarm/klaus#55 }
+    expected:
+      json_path:
+        status.ci.sha: a1
+        status.ci.state: pending
+        status.wait: null
+
+  - id: detected
+    tool: metric
+    args: { name: engine_invariant_violations, labels: { invariant: wip-has-run-or-wait } }
+    expected:
+      json_path: { value: 1 }

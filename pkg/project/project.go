@@ -1,92 +1,26 @@
-// Package project carries the build identity of the beekeeper binary: its
-// version, git commit and build time. The generated Makefile (devctl) and the
-// architect CI stamp them through `-ldflags -X`; a plain `go build` or
-// `go install` has no ldflags and takes the module build info, which Go
-// derives from the VCS tag of the checkout.
+// Package project holds the binary's identity; version and gitSHA are set at build time with
+// -ldflags "-X github.com/giantswarm/beekeeper/pkg/project.version=… -X …project.gitSHA=…".
 package project
 
-import (
-	"runtime/debug"
-	"strings"
-)
-
-// Name, Module and Source identify the project in messages.
-const (
-	Name   = "beekeeper"
-	Module = "github.com/giantswarm/beekeeper"
-	Source = "https://" + Module
-)
-
-// Set at link time by the Makefile / architect (`-X <module>/pkg/project.version=…`).
 var (
-	version        string
-	buildTimestamp string
-	gitSHA         string
+	description = "The beekeeper engine: observes the roadmap board and GitHub, and decides what it would do."
+	gitSHA      = "n/a"
+	name        = "beekeeper"
+	source      = "https://github.com/giantswarm/beekeeper"
+	version     = "1.0.0-dev"
 )
 
-// Version returns the version in the form the tags use ("v0.1.0"): the
-// linker-stamped one, else the module version Go recorded, else "dev".
-func Version() string {
-	if v := strings.TrimSpace(version); v != "" {
-		if v[0] >= '0' && v[0] <= '9' {
-			v = "v" + v
-		}
-		return v
-	}
-	if info, ok := debug.ReadBuildInfo(); ok {
-		if v := info.Main.Version; v != "" && v != "(devel)" {
-			return v
-		}
-	}
-	return "dev"
-}
+// Description is a one-line description of the binary.
+func Description() string { return description }
 
-// GitSHA returns the commit the binary was built from, or "" when unknown.
-func GitSHA() string {
-	if gitSHA != "" {
-		return gitSHA
-	}
-	return buildSetting("vcs.revision")
-}
+// GitSHA is the commit the binary was built from.
+func GitSHA() string { return gitSHA }
 
-// BuildTimestamp returns the build (or, unstamped, the commit) time in
-// RFC 3339, or "" when unknown.
-func BuildTimestamp() string {
-	if buildTimestamp != "" {
-		return buildTimestamp
-	}
-	return buildSetting("vcs.time")
-}
+// Name is the binary's name.
+func Name() string { return name }
 
-// VersionLine is what `beekeeper version` prints:
-// "v0.1.0 (commit 8b5caa0, built 2026-09-24T10:00:00Z)".
-func VersionLine() string {
-	line := Version()
-	var details []string
-	if sha := GitSHA(); sha != "" {
-		if len(sha) > 7 {
-			sha = sha[:7]
-		}
-		details = append(details, "commit "+sha)
-	}
-	if ts := BuildTimestamp(); ts != "" {
-		details = append(details, "built "+ts)
-	}
-	if len(details) > 0 {
-		line += " (" + strings.Join(details, ", ") + ")"
-	}
-	return line
-}
+// Source is the binary's source repository.
+func Source() string { return source }
 
-func buildSetting(key string) string {
-	info, ok := debug.ReadBuildInfo()
-	if !ok {
-		return ""
-	}
-	for _, s := range info.Settings {
-		if s.Key == key {
-			return s.Value
-		}
-	}
-	return ""
-}
+// Version is the binary's version.
+func Version() string { return version }

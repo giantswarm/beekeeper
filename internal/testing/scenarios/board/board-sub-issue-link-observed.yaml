@@ -1,0 +1,57 @@
+name: board-sub-issue-link-observed
+concept: board
+tags: [phase1, links]
+description: |
+  Given a Bumblebee epic and a Bumblebee story that are not linked
+  When a person adds the story as a sub-issue of the epic (sub_issues webhook)
+  Then the story's parent is the epic and the epic's subItems list the story,
+  both observed through the webhook.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#90
+        title: Klaus session resilience
+        assignees: [alice]
+        board: { status: "Up Next ➡️", kind: "Epic 🎯", team: "Bumblebee🐝" }
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        assignees: [alice]
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝" }
+steps:
+  - id: unlinked
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      json_path: { status.parent: null }
+
+  - id: linked
+    tool: github_sub_issue
+    args: { parent: giantswarm/roadmap#90, child: giantswarm/roadmap#101, op: add }
+
+  - id: child-has-parent
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      json_path:
+        status.parent: giantswarm/roadmap#90
+        status.observed.source: webhook
+
+  - id: epic-has-sub-item
+    tool: get_item
+    args: { ref: giantswarm/roadmap#90 }
+    expected:
+      json_path:
+        status.class: Epic
+        status.subItems: [giantswarm/roadmap#101]
+        status.observed.source: webhook
+
+  - id: not-missed
+    tool: metric
+    args: { name: engine_webhook_missed_total }
+    expected:
+      json_path: { value: 0 }

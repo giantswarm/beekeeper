@@ -1,0 +1,69 @@
+name: board-unrelated-pr-does-not-mask-missed-board-change
+concept: board
+tags: [phase1, review]
+description: |
+  Given an Up Next item that alice moves to In Progress, and GitHub never sends (nor
+  logs) the projects_v2_item webhook
+  When an unrelated PR that closes nothing is opened and its pull_request webhook is
+  delivered
+  Then the engine reads only that PR's closing issues (one PullClosingIssues query, no
+  board resync), so the item stays as last observed; the 10-minute board resync then
+  observes the move and counts it as one missed projects_v2_item webhook.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        assignees: [alice]
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝" }
+steps:
+  - id: started-unannounced
+    tool: github_board_set
+    args: { issue: giantswarm/roadmap#101, status: "In Progress ⛏️", deliver: never }
+
+  - id: unrelated-pr
+    tool: github_pr_open
+    args: { ref: giantswarm/muster#7, author: bob, head: b1, closes: [] }
+
+  - id: closing-issues-read
+    tool: github_calls
+    args: { since_step: unrelated-pr, api: graphql, operation: PullClosingIssues }
+    expected:
+      json_path: { count: 1 }
+
+  - id: no-board-resync
+    description: The pull_request webhook vouches only for the PR's links, never for the board
+    tool: github_calls
+    args: { since_step: unrelated-pr, api: graphql, operation: BoardTeamItems }
+    expected:
+      json_path: { count: 0 }
+
+  - id: not-seen-yet
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      json_path: { status.board.status: "Up Next ➡️", status.phase: Ready }
+
+  - id: board-resync
+    tool: clock_advance
+    args: { by: 10m }
+
+  - id: caught-up
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      json_path:
+        status.board.status: "In Progress ⛏️"
+        status.phase: Implementing
+        status.observed.source: resync
+
+  - id: missed-counted
+    tool: metric
+    args: { name: engine_webhook_missed_total, labels: { event: projects_v2_item } }
+    expected:
+      json_path: { value: 1 }

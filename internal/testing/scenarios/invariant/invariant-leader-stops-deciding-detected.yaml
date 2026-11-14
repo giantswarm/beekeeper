@@ -1,0 +1,47 @@
+name: invariant-leader-stops-deciding-detected
+concept: invariant
+tags: [phase1]
+description: |
+  Given an Up Next item picked for alice, and a leader that stops deciding at 09:00
+  When more than two board resync intervals (20m) pass, to 09:21, with the board resyncs at
+  09:10 and 09:20 running no decision pass
+  Then leader-decides is violated (the last decision pass is older than 2 × 10m), and the
+  Installation shows the last decision at 09:00.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        assignees: [alice]
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝" }
+expect_violations: [leader-decides]
+steps:
+  - id: deciding
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      json_path: { status.shadow.pick.person: alice }
+
+  - id: decisions-stop
+    tool: engine_fault
+    args: { kind: stop_decisions }
+
+  - id: two-resyncs-pass
+    tool: clock_advance
+    args: { by: 21m }
+
+  - id: detected
+    tool: metric
+    args: { name: engine_invariant_violations, labels: { invariant: leader-decides } }
+    expected:
+      json_path: { value: 1 }
+
+  - id: last-decision-visible
+    tool: get_installation
+    expected:
+      json_path: { status.lastDecisionAt: "2026-11-16T09:00:00Z" }

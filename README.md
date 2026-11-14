@@ -1,107 +1,125 @@
 # beekeeper
 
-beekeeper keeps the Claude Code sessions that share one machine working together.
+beekeeper is a deterministic engine for the software development lifecycle. It runs in Kubernetes
+as a set of controllers, observes a GitHub project board and the pull requests behind its items,
+and decides what to work on next with plain code: every decision is a pure function of what the
+engine observed, recorded with its inputs so it can be replayed. Agents are meant to be called only
+for work that needs judgement or language; the engine itself never guesses.
 
-A dozen sessions on one workstation compete for the same things:
+The [design](docs/design.md) describes the whole system and the phases it is built in.
 
-- RAM and swap: one OOM kill of the desktop scope ends every session.
-- A handful of kind labs and shared installations.
-- The one browser the Claude in Chrome extension drives.
-- The merges into a repository that rolls an installation.
-- The one GitHub budget every `gh` and `devctl` call draws from.
+## Phase 1: a read-only dry run
 
-beekeeper reads what is already on disk (the process table, the session records, the
-transcripts and the git checkouts) and keeps what must be shared in a small state directory.
-Every session and the supervisor use the same binary.
+This release is phase 1: the foundation and a short dry run for one opted-in team. The engine
+observes the board and GitHub and records what it *would* do. It never writes to GitHub, sends no
+messages and starts no work:
 
-On top of that it runs a desk: a supervisor loop that fills the desk from a project board,
-starts workers on Claude Code, omp, agy or codex, gates every merge, and a guide session that
-walks the person through the decisions waiting on them.
+- the GitHub client it is built with is a read-only `forge.Reader`; the mutating methods do not
+  exist on its type, and the only POSTs are GraphQL queries and installation-token minting;
+- each tracked board item becomes an `Item` whose phase is derived from the board status, the
+  issue and its pull requests; pull requests become `Change`s with their CI and review state;
+- per team and person, the engine computes eligibility, order, WIP gates and picks, and records the
+  would-actions once, in Postgres;
+- decision points (`ready?`, `next?`, `parallel-safe?`, `bug-severity?`) are answered by a rule,
+  with an optional second answer from JEV recorded next to it, in shadow;
+- it watches its own health: source freshness, API budget, waits that do not wake, and invariants
+  that raise alerts when they break.
 
-## Install
+What the dry run means in detail, and how it is tested, is in
+[docs/phase1/scenarios.md](docs/phase1/scenarios.md).
 
-Download the binary for your OS and architecture into a directory on your `PATH`:
+## Architecture in brief
 
-```bash
-dir=~/.local/bin   # any directory on PATH
-curl -fsSL -o "$dir/beekeeper" https://github.com/giantswarm/beekeeper/releases/latest/download/beekeeper-linux-amd64
-chmod +x "$dir/beekeeper"
-```
+One binary, `beekeeper`, with roles as subcommands:
 
-Then look at what the install would do, and install it for your user:
-
-```bash
-beekeeper install --dry-run   # every file, hook and service step; changes nothing
-beekeeper install
-```
-
-`install` adds beekeeper's hooks to Claude Code's settings and installs the supervisor loop
-as a user service. `beekeeper self-update` keeps it current.
-
-Releases are signed. [Install](docs/install.md) shows how to verify a download, what the
-install changes and how to add the role plugin:
-
-```bash
-claude plugin marketplace add giantswarm/beekeeper
-claude plugin install beekeeper@beekeeper
-```
-
-The session and machine views need Linux. Leases, holds and the budget work anywhere.
-
-## First commands
-
-| Command | What it shows or does |
+| Role | What it does |
 |---|---|
-| `beekeeper status` | One line: who supervises, leases and holds, due notes and timers, busy agents. |
-| `beekeeper sessions` | Every running session, what it works on and what it waits for. |
-| `beekeeper capacity` | Busy and idle agents against the ceiling, and whether a new start has room. |
-| `beekeeper ui` | A terminal screen over the machine, the sessions, the agents and the merges. |
-| `beekeeper lease claim <resource> -p "<why>"` | Takes a shared lab, installation or the browser. |
+| `engine` | the controllers (2 replicas, leader-elected): observation, decisions, timers, history, metrics |
+| `receiver` | the hardened webhook endpoint: verifies each delivery and stores it in the Postgres inbox |
+| `migrate` | applies the embedded Postgres schema (the engine's init container) |
+| `replay` | re-runs every recorded decision from its recorded inputs and counts the ones that changed |
+| `version` | prints the version |
 
-Every command takes `--json`. `beekeeper --help` lists them all, and
-[Commands](docs/commands.md) describes each one.
+- **Live state and configuration** are custom resources in `beekeeper.giantswarm.io/v1alpha1`
+  ([`api/v1alpha1`](api/v1alpha1), CRDs in [`config/crd`](config/crd)). `Installation`, `Team` and
+  `Person` are configuration, applied by Flux; `Item`, `Change` and `Budget` are owned by the
+  engine and keep everything in `status`.
+- **History** is an append-only event table and a decision table in Postgres. Webhook deliveries go
+  through a Postgres inbox that the leader drains.
+- **Time** comes from one clock ([`internal/clock`](internal/clock)); deadlines live on a timer
+  queue that wakes the controllers. Tests use a fake clock that moves only when told to.
+- **Decisions** are pure functions in [`internal/decide`](internal/decide): given a view of the
+  cache, the clock and recorded answers, they return the status to write, history rows and effects.
+
+The layout of the code is described in [AGENTS.md](AGENTS.md#layout).
+
+## Build and test
+
+Go 1.27 and `make`. The generated Makefile builds the binary for the host:
+
+```sh
+make build            # ./beekeeper
+go run . version
+```
+
+The tests need a few binaries (kine and kube-apiserver for k8senv, envtest's assets for the RBAC
+tests, and an embedded Postgres). `make test-deps` fetches each into `~/.cache/beekeeper/test-deps`
+once, checked against its published checksum; `make test` runs it first. Tests never download.
+
+```sh
+make test-deps        # fetch the test binaries (once)
+make test             # unit tests, the scenarios, the RBAC tests and the chart's unit tests
+make test-race        # everything with the race detector
+make test-envtest     # the chart's RBAC against envtest's kube-apiserver
+make check-crds       # deepcopy code and CRDs match api/
+make help             # every target
+```
+
+The behaviour is specified by YAML scenarios in
+[`internal/testing/scenarios/`](internal/testing/scenarios), listed in their
+[catalogue](internal/testing/scenarios/CATALOGUE.md). Each runs the real engine in-process against
+a real kube-apiserver (k8senv), a real Postgres and fakes for GitHub and JEV, on a fake clock:
+
+```sh
+go test ./internal/testing/harness/ -run TestScenarios -parallel 2
+go test ./internal/testing/harness/ -run TestScenarios/wait-ci-wakes-on-check-run -v
+go test ./internal/testing/harness/ -run TestScenarios -scenario.concept wait
+go test ./internal/testing/harness/ -run TestScenarios -scenario.tag learning-api-budget
+go test ./internal/testing/harness/ -run TestScenarios/NAME -v -scenario.phases -scenario.logs
+```
+
+`-scenario.pool` (or `BEEKEEPER_SCENARIO_POOL`, default 2) sets how many API servers the scenarios
+share; `-parallel` how many run at once. On a laptop, keep both at 2.
+
+## Deploy
+
+The chart is [`helm/beekeeper`](helm/beekeeper), published to the giantswarm-catalog; the image is
+`gsoci.azurecr.io/giantswarm/beekeeper`. The chart installs the CRDs, the engine and the receiver
+with their ServiceAccounts and RBAC, PodMonitors, a PrometheusRule with the engine's alerts, and
+CiliumNetworkPolicies. It expects, in the release's namespace:
+
+- a Postgres (for example a CloudNativePG `Cluster`) with an `engine` role and a `receiver` role
+  that may only insert into the inbox (`postgres.*`);
+- Secrets with the GitHub App's id, installation id and private key (`github.app.*`), its webhook
+  secret (`webhook.*`) and, optionally, a JEV key (`jev.*`);
+- a public route to the receiver's Service for GitHub's webhooks, on `receiver.path`.
+
+```sh
+helm install beekeeper helm/beekeeper --namespace beekeeper --create-namespace --values my-values.yaml
+```
+
+Then apply the configuration: an `Installation` (organisation, board, `mode: dry-run`, intervals),
+the `Team`s and the participating `Person`s. Every value is listed in the
+[chart's README](helm/beekeeper/README.md); [docs/phase1/plan.md](docs/phase1/plan.md) describes a
+full deployment with Flux, Postgres, network policies and the GitHub App.
 
 ## Documentation
 
-Start here:
+- [docs/](docs/README.md): the design, the phase 1 contract and the implementation plan
+- [CONTRIBUTING.md](CONTRIBUTING.md): commits, the test suite and how to add a scenario
+- [AGENTS.md](AGENTS.md): the layout, the seams and the rules for changing the code
+- [helm/beekeeper/README.md](helm/beekeeper/README.md): the chart's values
 
-- [How beekeeper works](docs/overview.md): what it reads, what it keeps.
-- [Install](docs/install.md): download, verify, hooks, updates and the role plugin.
-- [Commands](docs/commands.md): every command and the conventions they share.
-- [Configuration](docs/configuration.md): every key, with a complete
-  [example](docs/examples/config.yaml).
+## License
 
-Running a desk:
-
-- [The supervisor loop](docs/supervisor-loop.md): filling the desk, outages, alerts.
-- [The merge gate](docs/merge-gate.md): lanes, turns, releases and stuck merges.
-- [The guide and the desk](docs/guide.md): roles, relays and claims across desks.
-- [Agents and their turns](docs/agents.md): starting, waking, stopping and handing over.
-- [Worker sessions](docs/worker-sessions.md): headless and desktop turns, reviews, parking.
-- [omp, agy and codex agents](docs/harnesses.md): workers beyond Claude Code.
-- [Capacity, models and subscriptions](docs/capacity.md): who starts on which model.
-- [Notifications and reports](docs/notifications.md): desktop notifications, deliveries,
-  the status reporter.
-- [Remote hosts and the central instance](docs/remote-hosts.md): SSH execution hosts and
-  shared state.
-- [Disk](docs/disk.md): automatic reclamation and the disk floor.
-
-Safety:
-
-- [Threat model](docs/threat-model.md): who reaches what, what leaves the machine.
-- [Secrets](docs/secrets.md) and [GitHub Apps](docs/github-apps.md): credential work
-  without reading a value.
-- [The agent sandbox](docs/sandbox.md) and [Folders, deletes and guards](docs/safety.md).
-- [Clusters](docs/clusters.md): kube contexts, production writes, Teleport, upgrades.
-- [The browser](docs/browser.md): `beekeeper browse`, consents, uploads and proofs.
-
-Everything else, including design notes and proofs, is listed in the
-[documentation index](docs/README.md).
-
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) and [Developing on beekeeper](docs/development.md).
-
-Document new behaviour in its `docs/` page, not here. CI keeps this file under 150 lines and
-every Markdown line in it and in `docs/` under 200 characters
-([check](.github/check-markdown-budget.sh)).
+[Apache 2.0](LICENSE)

@@ -1,0 +1,97 @@
+name: source-delivery-log-unreadable-means-degraded
+concept: source
+tags: [phase1, learning-unobserved-not-stalled]
+description: |
+  Given a Change waiting on CI and webhooks that are being delivered normally
+  When the webhook delivery log starts answering 502, so the 5-minute check can't
+  tell whether any delivery failed
+  Then freshness can't be verified, so at the first failed check (09:05) the webhooks source
+  is degraded with reason delivery-log-unreadable (once, not again at every failed
+  check) and from 09:10 its waiters poll with conditional requests; an unverifiable log is
+  not counted as missed webhooks; and once the log is readable again and shows no failed
+  delivery, and a delivery has succeeded since the gap, the source is fresh and polling stops.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        assignees: [alice]
+        board: { status: "In Progress ⛏️", kind: "Story 📑", team: "Bumblebee🐝" }
+    pulls:
+      - ref: giantswarm/klaus#55
+        author: alice
+        head: a1
+        closes: [giantswarm/roadmap#101]
+        checks:
+          - { name: "ci/circleci: go-build", status: completed, conclusion: success }
+          - { name: "ci/circleci: go-test", status: in_progress }
+steps:
+  - id: log-unreadable
+    description: Until cleared, every read of the delivery log answers 502
+    tool: github_fault
+    args: { kind: http_error, status: 502, api: app, match: /app/hook/deliveries }
+
+  - id: first-failed-check
+    tool: clock_advance
+    args: { by: 5m }
+
+  - id: degraded-unverifiable
+    tool: get_installation
+    expected:
+      json_path:
+        status.sources.webhooks.state: degraded
+        status.sources.webhooks.reason: delivery-log-unreadable
+
+  - id: waiters-poll
+    description: The next 5 minutes, with the log still unreadable; polling starts at 09:10
+    tool: clock_advance
+    args: { by: 5m }
+
+  - id: polling-metric
+    tool: metric
+    args: { name: engine_polling_active, labels: { source: webhooks } }
+    expected:
+      json_path: { value: 1 }
+
+  - id: poll-was-conditional
+    description: The CI wait's SHA is re-read once, conditionally, and nothing changed
+    tool: github_calls
+    args: { since_step: waiters-poll, method: GET, path: /repos/giantswarm/klaus/commits/a1/check-runs }
+    expected:
+      json_path: { count: 1, conditional: 1, notModified: 1 }
+
+  - id: unverified-is-not-missed
+    tool: metric
+    args: { name: engine_webhook_missed_total }
+    expected:
+      json_path: { value: 0 }
+
+  - id: log-readable
+    tool: github_fault
+    args: { kind: clear }
+
+  - id: a-delivery-succeeds
+    description: CI completes at 09:10 and its webhook is delivered
+    tool: github_check_run
+    args: { repo: giantswarm/klaus, sha: a1, name: "ci/circleci: go-test", status: completed, conclusion: success }
+
+  - id: clean-check
+    description: The 09:15 check reads the log; no delivery failed meanwhile, and one succeeded
+    tool: clock_advance
+    args: { by: 5m }
+
+  - id: fresh-again
+    tool: get_installation
+    expected:
+      json_path: { status.sources.webhooks.state: fresh, status.sources.webhooks.polling: false }
+
+  - id: degraded-once
+    tool: events
+    args: { type: source.degraded, since_step: log-unreadable }
+    expected:
+      json_path: { count: 1 }

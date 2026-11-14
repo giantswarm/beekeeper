@@ -1,0 +1,66 @@
+name: board-status-change-is-input
+concept: board
+tags: [phase1, human-edits]
+description: |
+  Given a ready Up Next item assigned to alice, which is alice's pick
+  When a person moves it back to Backlog
+  Then the Item stays (it left the active statuses by status, not by scope) with
+  phase Backlog and no wait, it is no longer eligible (NotUpNext), and alice's
+  pick is dropped.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        assignees: [alice]
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝" }
+steps:
+  - id: picked-for-alice
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      json_path:
+        status.phase: Ready
+        status.eligible.value: true
+        status.shadow.pick.person: alice
+
+  - id: back-to-backlog
+    description: A person moves the item back to Backlog
+    tool: github_board_set
+    args: { issue: giantswarm/roadmap#101, status: "Backlog 📦" }
+
+  - id: item-follows
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      json_path:
+        status.board.status: "Backlog 📦"
+        status.phase: Backlog
+        status.wait: null
+        status.eligible.value: false
+        status.eligible.reasons: [NotUpNext]
+        status.shadow.pick: null
+        status.observed.source: webhook
+
+  - id: pick-dropped
+    tool: get_person
+    args: { login: alice }
+    expected:
+      json_path: { status.picks: null }
+
+  - id: phase-changed-once
+    tool: events
+    args: { item: giantswarm/roadmap#101, type: phase.changed, since_step: back-to-backlog }
+    expected:
+      json_path: { count: 1, rows.0.source: webhook }
+
+  - id: eligibility-changed-once
+    tool: events
+    args: { item: giantswarm/roadmap#101, type: eligibility.changed, since_step: back-to-backlog }
+    expected:
+      json_path: { count: 1, rows.0.source: webhook }

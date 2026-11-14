@@ -1,0 +1,84 @@
+name: wait-merge-result-ignores-irrelevant-check
+concept: wait
+tags: [phase1, merge-result, learning-false-alarm]
+description: |
+  Given an approved, green PR in giantswarm/muster (required set: "ci/circleci: go-test")
+  that alice merges at 09:00 as m1
+  When on m1 the board automation check "add-to-project", which is not in the required set,
+  fails first, and the required status then passes
+  Then the failing check never turns anything red: while the required status is pending the
+  merge result stays pending and the Change's ci wait on m1 keeps watching, then mergeResult
+  is green, with "add-to-project" in mergeResult.ignored, not in mergeResult.relevant. The
+  Change's ci keeps describing the head SHA a1 throughout, and once the merge result is in
+  neither the Change nor the Merged Item has a wait.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Add a dry-run flag to muster serve
+        body: |
+          ### Acceptance criteria
+          - [ ] `muster serve --dry-run` starts no servers
+          Repo: giantswarm/muster
+        assignees: [alice]
+        board: { status: "In Progress ⛏️", kind: "Story 📑", team: "Bumblebee🐝" }
+    pulls:
+      - ref: giantswarm/muster#12
+        author: alice
+        head: a1
+        closes: [giantswarm/roadmap#101]
+        statuses: [{ context: "ci/circleci: go-test", state: success }]
+        reviews: [{ by: bob, state: approved }]
+steps:
+  - id: alice-merges
+    tool: github_pr_merge
+    args: { ref: giantswarm/muster#12, merge_sha: m1, by: alice }
+
+  - id: automation-fails
+    description: The board automation fails on the merge commit
+    tool: github_check_run
+    args: { repo: giantswarm/muster, sha: m1, name: add-to-project, status: completed, conclusion: failure }
+
+  - id: not-red
+    tool: get_change
+    args: { ref: giantswarm/muster#12 }
+    expected:
+      json_path:
+        status.ci.sha: a1
+        status.ci.state: green
+        status.mergeResult.sha: m1
+        status.mergeResult.state: pending
+        status.mergeResult.ignored: [add-to-project]
+        status.wait.on: ci
+        status.wait.ref: "ci:giantswarm/muster@m1"
+        status.wait.state: watching
+
+  - id: required-passes
+    tool: github_status
+    args: { repo: giantswarm/muster, sha: m1, context: "ci/circleci: go-test", state: success }
+
+  - id: result-green
+    tool: get_change
+    args: { ref: giantswarm/muster#12 }
+    expected:
+      json_path:
+        status.ci.sha: a1
+        status.ci.state: green
+        status.mergeResult.sha: m1
+        status.mergeResult.state: green
+        status.mergeResult.relevant: ["ci/circleci: go-test"]
+        status.mergeResult.ignored: [add-to-project]
+        status.wait: null
+
+  - id: item-merged
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      json_path: { status.phase: Merged, status.wait: null }
+
+  - id: no-would-actions
+    tool: events
+    args: { type: shadow.action, since_step: alice-merges }
+    expected:
+      json_path: { count: 0 }

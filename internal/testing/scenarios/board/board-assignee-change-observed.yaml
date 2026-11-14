@@ -1,0 +1,47 @@
+name: board-assignee-change-observed
+concept: board
+tags: [phase1, human-edits]
+description: |
+  Given a ready, unassigned Up Next item that is eligible
+  When a person assigns it to carol, who is not a configured Person (issues.assigned)
+  Then the Item's assignees are [carol] and its eligibility is recomputed to
+  AssignedToNonParticipant, recorded once through the webhook.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        assignees: []
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝" }
+steps:
+  - id: eligible
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      json_path: { status.assignees: null, status.eligible.value: true }
+
+  - id: assigned-to-carol
+    tool: github_issue_edit
+    args: { ref: giantswarm/roadmap#101, assignees: [carol] }
+
+  - id: recomputed
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      json_path:
+        status.assignees: [carol]
+        status.eligible.value: false
+        status.eligible.reasons: [AssignedToNonParticipant]
+        status.shadow.pick: null
+        status.observed.source: webhook
+
+  - id: eligibility-changed-once
+    tool: events
+    args: { item: giantswarm/roadmap#101, type: eligibility.changed, since_step: assigned-to-carol }
+    expected:
+      json_path: { count: 1, rows.0.source: webhook }

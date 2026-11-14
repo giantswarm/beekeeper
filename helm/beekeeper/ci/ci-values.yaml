@@ -1,0 +1,55 @@
+# Production-like values: chart-testing (ct lint) renders the chart with them,
+# check-values-schema validates them, `make helm-template-prod` and the RBAC
+# envtest render them. A deployment sets the same kind of values.
+github:
+  app:
+    secretName: beekeeper-github-app
+webhook:
+  secretName: beekeeper-webhook
+jev:
+  secretName: beekeeper-jev
+
+postgres:
+  cluster: beekeeper-db
+  database: beekeeper
+  receiver:
+    secretName: beekeeper-db-receiver
+
+engine:
+  replicas: 2
+receiver:
+  replicas: 2
+  projectNodeIDs:
+    - PVT_kwDOAexample
+
+podMonitor:
+  labels:
+    release: kube-prometheus-stack
+
+prometheusRule:
+  labels:
+    release: kube-prometheus-stack
+  alertLabels:
+    cluster: example
+    component: beekeeper
+    layer: workload
+  runbookURL: https://example.com/runbooks/beekeeper
+  watchdog:
+    labels:
+      receiver: heartbeat
+
+ciliumNetworkPolicies:
+  enabled: true
+  authenticationMode: required
+  probeEntities:
+    - host
+    - remote-node
+  prometheus:
+    selector:
+      io.kubernetes.pod.namespace: monitoring
+      app.kubernetes.io/name: prometheus
+  gateway:
+    selector:
+      io.kubernetes.pod.namespace: envoy-gateway-system
+  postgres:
+    enabled: true

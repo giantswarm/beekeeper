@@ -1,0 +1,58 @@
+name: board-resync-catches-missed-board-change
+concept: board
+tags: [phase1, resync]
+description: |
+  Given a ready Up Next item assigned to alice
+  When alice moves it to In Progress and GitHub never sends the projects_v2_item
+  webhook (nothing is logged either)
+  Then the engine doesn't see it until the 10-minute board resync, which updates the
+  Item from the filtered query, and records the change as one missed
+  projects_v2_item webhook.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        assignees: [alice]
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝" }
+steps:
+  - id: started-unannounced
+    tool: github_board_set
+    args: { issue: giantswarm/roadmap#101, status: "In Progress ⛏️", deliver: never }
+
+  - id: not-seen-yet
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      json_path: { status.board.status: "Up Next ➡️", status.phase: Ready }
+
+  - id: board-resync
+    tool: clock_advance
+    args: { by: 10m }
+
+  - id: caught-up
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      json_path:
+        status.board.status: "In Progress ⛏️"
+        status.phase: Implementing
+        status.observed.source: resync
+
+  - id: missed-event
+    tool: events
+    args: { item: giantswarm/roadmap#101, type: webhook.missed, since_step: board-resync }
+    expected:
+      json_path: { count: 1, rows.0.source: resync }
+
+  - id: missed-counted-once
+    description: Counted once, whichever of the resync and the freshness probe saw it first
+    tool: metric
+    args: { name: engine_webhook_missed_total, labels: { event: projects_v2_item } }
+    expected:
+      json_path: { value: 1 }

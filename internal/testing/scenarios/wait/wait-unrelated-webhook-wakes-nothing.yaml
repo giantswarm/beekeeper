@@ -1,0 +1,60 @@
+name: wait-unrelated-webhook-wakes-nothing
+concept: wait
+tags: [phase1, wake-index]
+description: |
+  Given a Change waiting on CI for giantswarm/klaus@a1
+  When a status webhook arrives for giantswarm/klaus@f9, a SHA nobody waits on
+  Then the wake index maps it to no waiter: nothing is reconciled, no GitHub call is made,
+  and the waiting Change is unchanged.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        assignees: [alice]
+        board: { status: "In Progress ⛏️", kind: "Story 📑", team: "Bumblebee🐝" }
+    pulls:
+      - ref: giantswarm/klaus#55
+        author: alice
+        head: a1
+        closes: [giantswarm/roadmap#101]
+        checks:
+          - { name: "ci/circleci: go-build", status: completed, conclusion: success }
+          - { name: "ci/circleci: go-test", status: in_progress }
+steps:
+  - id: unrelated-status
+    description: CircleCI reports on a branch commit no Change is at
+    tool: github_status
+    args: { repo: giantswarm/klaus, sha: f9, context: "ci/circleci: go-test", state: success }
+
+  - id: delivery-received
+    tool: metric
+    args: { name: engine_webhook_deliveries_total, labels: { event: status } }
+    expected:
+      json_path: { value: 1 }
+
+  - id: nothing-reconciled
+    tool: reconciles
+    args: { since_step: unrelated-status }
+    expected:
+      json_path: { count: 0 }
+
+  - id: no-github-calls
+    tool: github_calls
+    args: { since_step: unrelated-status }
+    expected:
+      json_path: { count: 0 }
+
+  - id: waiter-unchanged
+    tool: get_change
+    args: { ref: giantswarm/klaus#55 }
+    expected:
+      json_path:
+        status.ci.state: pending
+        status.wait.ref: "ci:giantswarm/klaus@a1"
+        status.wait.state: watching

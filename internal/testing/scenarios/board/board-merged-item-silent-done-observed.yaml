@@ -1,0 +1,83 @@
+name: board-merged-item-silent-done-observed
+concept: board
+tags: [phase1, review]
+description: |
+  Given an item whose PR alice merged, which closed its issue (Merged, so the filtered
+  board query no longer returns it)
+  When someone moves it to Done on the board and GitHub never sends (nor logs) the
+  projects_v2_item webhook
+  Then the next board resync reads the Merged item by its node id (Merged and Validating
+  items are read every resync until the board says Done), observes Done and counts one
+  missed projects_v2_item webhook; the item is retained, no longer in flight, and the
+  board source is fresh again after the probe's gap.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Add a dry-run flag to muster serve
+        body: |
+          ### Acceptance criteria
+          - [ ] `muster serve --dry-run` starts no servers
+          Repo: giantswarm/muster
+        assignees: [alice]
+        board: { status: "In Progress ⛏️", kind: "Story 📑", team: "Bumblebee🐝" }
+    pulls:
+      - ref: giantswarm/muster#12
+        author: alice
+        head: a1
+        closes: [giantswarm/roadmap#101]
+        statuses: [{ context: "ci/circleci: go-test", state: success }]
+        reviews: [{ by: bob, state: approved }]
+steps:
+  - id: alice-merges
+    tool: github_pr_merge
+    args: { ref: giantswarm/muster#12, merge_sha: m1, by: alice }
+
+  - id: merge-green
+    tool: github_status
+    args: { repo: giantswarm/muster, sha: m1, context: "ci/circleci: go-test", state: success }
+
+  - id: merged
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      json_path: { status.phase: Merged, status.issue.state: closed }
+
+  - id: done-silently
+    tool: github_board_set
+    args: { issue: giantswarm/roadmap#101, status: "Done ✅", deliver: never }
+
+  - id: board-resync
+    tool: clock_advance
+    args: { by: 10m }
+
+  - id: done
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      json_path:
+        status.board.status: "Done ✅"
+        status.phase: Done
+        status.observed.source: resync
+
+  - id: missed-counted
+    tool: metric
+    args: { name: engine_webhook_missed_total, labels: { event: projects_v2_item } }
+    expected:
+      json_path: { value: 1 }
+
+  - id: not-in-flight
+    tool: get_team
+    args: { name: bumblebee }
+    expected:
+      json_path: { status.inFlight: 0 }
+
+  - id: board-recovers
+    tool: clock_advance
+    args: { by: 20m }
+
+  - id: board-fresh
+    tool: get_installation
+    expected:
+      json_path: { status.sources.board.state: fresh }

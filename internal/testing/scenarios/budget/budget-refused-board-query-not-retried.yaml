@@ -1,0 +1,78 @@
+name: budget-refused-board-query-not-retried
+concept: budget
+tags: [phase1, review, learning-repeated-refusal]
+description: |
+  Given a fresh board source, and GitHub refusing the team's board query (404)
+  When the 09:10 board resync is refused and an hour passes with nothing changing
+  Then the refusal is recorded once and the query isn't sent again on unchanged inputs:
+  one BoardTeamItems call in the hour, one refusal counted, and the board source stays
+  degraded (board-unreadable) while the team is still decided on what was observed.
+  When GitHub answers again and the App is installed on another repo, the next resync
+  sends the query, and the board source is fresh after a full probe interval without a gap.
+pre_configuration:
+  fixture: base
+  github:
+    repos:
+      - { name: giantswarm/happa, visibility: private, installed: false }
+steps:
+  - id: refuse
+    tool: github_fault
+    args: { kind: http_error, status: 404, match: BoardTeamItems }
+
+  - id: hour
+    tool: clock_advance
+    args: { by: 1h }
+
+  - id: sent-once
+    tool: github_calls
+    args: { since_step: refuse, operation: BoardTeamItems }
+    expected:
+      json_path: { count: 1 }
+
+  - id: refusal-counted-once
+    tool: metric
+    args: { name: engine_refusals_total, labels: { operation: BoardTeamItems } }
+    expected:
+      json_path: { value: 1 }
+
+  - id: board-unreadable
+    tool: get_installation
+    expected:
+      json_path:
+        status.sources.board.state: degraded
+        status.sources.board.reason: board-unreadable
+        status.sources.board.polling: true
+
+  - id: still-decided
+    tool: metric
+    args: { name: engine_invariant_violations, labels: { invariant: leader-decides } }
+    expected:
+      json_path: { value: 0 }
+
+  - id: answers-again
+    tool: github_fault
+    args: { kind: clear }
+
+  - id: repos-change
+    tool: github_installation_repos
+    args: { add: [giantswarm/happa] }
+
+  - id: next-poll
+    description: The board source is degraded, so the board is polled every 5 minutes
+    tool: clock_advance
+    args: { by: 5m }
+
+  - id: sent-again
+    tool: github_calls
+    args: { since_step: answers-again, operation: BoardTeamItems, code: 200 }
+    expected:
+      json_path: { count: 1 }
+
+  - id: probe-interval
+    tool: clock_advance
+    args: { by: 20m }
+
+  - id: board-fresh
+    tool: get_installation
+    expected:
+      json_path: { status.sources.board.state: fresh }

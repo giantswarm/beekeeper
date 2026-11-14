@@ -1,0 +1,101 @@
+name: budget-secondary-rate-limit-honours-retry-after
+concept: budget
+tags: [phase1]
+description: |
+  Given a Change waiting on CI, at 09:04:30
+  When CI completes, the webhook arrives, and the engine's read of the check runs is
+  answered 403 with a secondary rate limit and Retry-After: 60
+  Then a secondary rate limit pauses every REST call, with the installation's token and with
+  the App's JWT alike, until 60 seconds have passed on the engine's clock (the delivery-log
+  check due at 09:05 waits too); at 09:05:30 it retries the read exactly once, it succeeds,
+  and the CI result is seen. The 403 is not a refusal.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        assignees: [alice]
+        board: { status: "In Progress ⛏️", kind: "Story 📑", team: "Bumblebee🐝" }
+    pulls:
+      - ref: giantswarm/klaus#55
+        author: alice
+        head: a1
+        closes: [giantswarm/roadmap#101]
+        checks:
+          - { name: "ci/circleci: go-build", status: completed, conclusion: success }
+          - { name: "ci/circleci: go-test", status: in_progress }
+steps:
+  - id: to-0904-30
+    tool: clock_advance
+    args: { by: 4m30s }
+
+  - id: secondary-limit
+    description: The next read of the check runs is answered 403 with Retry-After 60
+    tool: github_fault
+    args: { kind: secondary_rate_limit, retry_after: 60s, times: 1, match: /repos/giantswarm/klaus/commits/a1/check-runs }
+
+  - id: ci-completes
+    tool: github_check_run
+    args: { repo: giantswarm/klaus, sha: a1, name: "ci/circleci: go-test", status: completed, conclusion: success }
+
+  - id: limited
+    tool: github_calls
+    args: { since_step: ci-completes, path: /repos/giantswarm/klaus/commits/a1/check-runs }
+    expected:
+      json_path: { count: 1, rateLimited: 1 }
+
+  - id: not-seen-yet
+    tool: get_change
+    args: { ref: giantswarm/klaus#55 }
+    expected:
+      json_path: { status.ci.state: pending }
+
+  - id: until-0905-29
+    description: 59 seconds, across the 09:05 delivery-log check
+    tool: clock_advance
+    args: { by: 59s }
+
+  - id: no-rest-before-retry-after
+    tool: github_calls
+    args: { since_step: until-0905-29, api: rest }
+    expected:
+      json_path: { count: 0 }
+
+  - id: delivery-log-waits-too
+    tool: github_calls
+    args: { since_step: until-0905-29, api: app }
+    expected:
+      json_path: { count: 0 }
+
+  - id: retry-after-elapsed
+    tool: clock_advance
+    args: { by: 1s }
+
+  - id: one-retry
+    tool: github_calls
+    args: { since_step: retry-after-elapsed, path: /repos/giantswarm/klaus/commits/a1/check-runs }
+    expected:
+      json_path: { count: 1, rateLimited: 0 }
+
+  - id: ci-seen
+    tool: get_change
+    args: { ref: giantswarm/klaus#55 }
+    expected:
+      json_path: { status.ci.state: green, status.wait.on: review }
+
+  - id: limited-only-once
+    tool: github_calls
+    args: { since_step: ci-completes }
+    expected:
+      json_path: { rateLimited: 1 }
+
+  - id: not-a-refusal
+    tool: events
+    args: { type: refusal, since_step: ci-completes }
+    expected:
+      json_path: { count: 0 }

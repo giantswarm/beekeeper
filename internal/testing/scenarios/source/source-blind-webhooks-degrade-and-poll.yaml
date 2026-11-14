@@ -1,0 +1,124 @@
+name: source-blind-webhooks-degrade-and-poll
+concept: source
+tags: [phase1, learning-blind-watcher, learning-unobserved-not-stalled]
+description: |
+  Given a Change waiting on CI and webhooks that are all failing to reach the engine
+  (GitHub logs every delivery as failed, as when the receiver is unreachable)
+  When CI completes and the 09:05 delivery-log check runs
+  Then the webhooks source is marked degraded (deliveries-failed), the failed delivery's
+  payload names the SHA to re-observe so the green CI is seen at once, its waiters poll with
+  conditional requests from 09:10 (one polling interval later), nothing is declared stalled
+  (no wait goes overdue), and once deliveries succeed again the first clean check with a
+  successful delivery since the gap (09:15) makes the source fresh and polling stops.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        assignees: [alice]
+        board: { status: "In Progress ⛏️", kind: "Story 📑", team: "Bumblebee🐝" }
+    pulls:
+      - ref: giantswarm/klaus#55
+        author: alice
+        head: a1
+        closes: [giantswarm/roadmap#101]
+        checks:
+          - { name: "ci/circleci: go-build", status: completed, conclusion: success }
+          - { name: "ci/circleci: go-test", status: in_progress }
+steps:
+  - id: deliveries-fail
+    description: From now on every delivery fails, and GitHub logs it as failed
+    tool: github_fault
+    args: { kind: deliveries, mode: lost }
+
+  - id: ci-completes
+    tool: github_check_run
+    args: { repo: giantswarm/klaus, sha: a1, name: "ci/circleci: go-test", status: completed, conclusion: success }
+
+  - id: not-seen-yet
+    description: The webhook never arrived, so the engine still waits
+    tool: get_change
+    args: { ref: giantswarm/klaus#55 }
+    expected:
+      json_path: { status.ci.state: pending, status.wait.state: watching }
+
+  - id: delivery-log-check
+    description: The 5-minute delivery-log check runs
+    tool: clock_advance
+    args: { by: 5m }
+
+  - id: degraded
+    tool: get_installation
+    expected:
+      json_path:
+        status.sources.webhooks.state: degraded
+        status.sources.webhooks.reason: deliveries-failed
+
+  - id: degraded-metric
+    tool: metric
+    args: { name: engine_source_degraded, labels: { source: webhooks } }
+    expected:
+      json_path: { value: 1 }
+
+  - id: caught-up-from-the-log
+    description: The failed delivery's payload, read from the log, names the SHA to re-observe
+    tool: get_change
+    args: { ref: giantswarm/klaus#55 }
+    expected:
+      json_path: { status.ci.state: green, status.wait.on: review }
+
+  - id: counted-as-missed
+    tool: metric
+    args: { name: engine_webhook_missed_total, labels: { event: check_run } }
+    expected:
+      json_path: { value: 1 }
+
+  - id: polling-is-cheap
+    description: Polling starts at 09:10 and re-reads conditionally; an unchanged answer is a free 304
+    tool: clock_advance
+    args: { by: 5m }
+
+  - id: polls-were-conditional
+    tool: github_calls
+    args: { since_step: polling-is-cheap, api: rest }
+    expected:
+      json_path: { mutating: 0, modified: 0 }
+      json_path_min: { notModified: 1 }
+
+  - id: polling-active
+    tool: metric
+    args: { name: engine_polling_active, labels: { source: webhooks } }
+    expected:
+      json_path: { value: 1 }
+
+  - id: nothing-overdue
+    description: Blindness is not a stall
+    tool: events
+    args: { type: wait.overdue, since_step: deliveries-fail }
+    expected:
+      json_path: { count: 0 }
+
+  - id: deliveries-recover
+    tool: github_fault
+    args: { kind: clear }
+
+  - id: a-delivery-arrives
+    tool: github_pr_review
+    args: { ref: giantswarm/klaus#55, by: bob, state: approved }
+
+  - id: next-log-check
+    description: 09:15, a clean check interval with a successful delivery since the gap
+    tool: clock_advance
+    args: { by: 5m }
+
+  - id: fresh-again
+    tool: get_installation
+    expected:
+      json_path:
+        status.sources.webhooks.state: fresh
+        status.sources.webhooks.polling: false

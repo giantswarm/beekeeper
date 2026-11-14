@@ -1,0 +1,107 @@
+name: wait-deadline-unchanged-goes-overdue
+concept: wait
+tags: [phase1, deadline, learning-failed-wakeups]
+description: |
+  Given a Change waiting on CI since 09:00 with the default 1h deadline and atDeadline re-observe
+  When the deadline passes and CI is still pending on the head SHA
+  Then the engine re-observes once, finds nothing changed, and the wait becomes overdue; from
+  then on it re-observes after 1m, doubling, capped at overdueBackoffCap (10m): at 10:01,
+  10:03, 10:07, 10:15, 10:25, 10:35, 10:45, 10:55 (8 in the first overdue hour), then every
+  10 minutes (6 in the second), never every minute. Nothing is escalated and no would-action
+  is recorded: phase 1 escalates nothing.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        assignees: [alice]
+        board: { status: "In Progress ⛏️", kind: "Story 📑", team: "Bumblebee🐝" }
+    pulls:
+      - ref: giantswarm/klaus#55
+        author: alice
+        head: a1
+        closes: [giantswarm/roadmap#101]
+        checks:
+          - { name: "ci/circleci: go-build", status: completed, conclusion: success }
+          - { name: "ci/circleci: go-test", status: in_progress }
+steps:
+  - id: watching
+    tool: get_change
+    args: { ref: giantswarm/klaus#55 }
+    expected:
+      json_path:
+        status.wait.on: ci
+        status.wait.deadline: "2026-11-16T10:00:00Z"
+        status.wait.atDeadline: re-observe
+        status.wait.state: watching
+
+  - id: deadline
+    tool: clock_advance
+    args: { by: 1h }
+
+  - id: reobserved-once
+    tool: events
+    args: { change: giantswarm/klaus#55, type: wait.reobserved, since_step: deadline }
+    expected:
+      json_path: { count: 1 }
+
+  - id: overdue
+    tool: get_change
+    args: { ref: giantswarm/klaus#55 }
+    expected:
+      json_path:
+        status.ci.state: pending
+        status.wait.state: overdue
+
+  - id: overdue-row
+    tool: events
+    args: { change: giantswarm/klaus#55, type: wait.overdue, since_step: deadline }
+    expected:
+      json_path: { count: 1, rows.0.at: "2026-11-16T10:00:00Z" }
+
+  - id: first-overdue-hour
+    tool: clock_advance
+    args: { by: 1h }
+
+  - id: backing-off
+    description: Deadline +1m, +3m, +7m, +15m, then every 10m (+25m, +35m, +45m, +55m)
+    tool: events
+    args: { change: giantswarm/klaus#55, type: wait.reobserved, since_step: first-overdue-hour }
+    expected:
+      json_path: { count: 8 }
+
+  - id: second-overdue-hour
+    tool: clock_advance
+    args: { by: 1h }
+
+  - id: capped
+    description: Once capped, exactly one re-observe every 10 minutes (11:05 to 11:55)
+    tool: events
+    args: { change: giantswarm/klaus#55, type: wait.reobserved, since_step: second-overdue-hour }
+    expected:
+      json_path: { count: 6 }
+
+  - id: still-overdue
+    tool: get_change
+    args: { ref: giantswarm/klaus#55 }
+    expected:
+      json_path: { status.wait.state: overdue }
+
+  - id: overdue-once
+    description: The wait went overdue once; the re-observes don't repeat it
+    tool: events
+    args: { change: giantswarm/klaus#55, type: wait.overdue, since_step: deadline }
+    expected:
+      json_path: { count: 1 }
+
+  - id: no-would-action
+    description: A long pipeline is a flow metric, not something to escalate
+    tool: events
+    args: { type: shadow.action, since_step: deadline }
+    expected:
+      json_path: { count: 0 }

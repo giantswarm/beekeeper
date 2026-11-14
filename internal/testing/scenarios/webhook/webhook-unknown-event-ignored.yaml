@@ -1,0 +1,62 @@
+name: webhook-unknown-event-ignored
+concept: webhook
+tags: [phase1]
+description: |
+  Given a Change waiting on CI for head SHA a1
+  When a validly signed `deployment` delivery (an event the engine doesn't subscribe to)
+  naming the same SHA is POSTed
+  Then the receiver answers 2xx and counts it as ignored (event label other), and nothing is
+  processed: no GitHub read, and the waiting Change isn't reconciled.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        assignees: [alice]
+        board: { status: "In Progress ⛏️", kind: "Story 📑", team: "Bumblebee🐝" }
+    pulls:
+      - ref: giantswarm/klaus#55
+        author: alice
+        head: a1
+        closes: [giantswarm/roadmap#101]
+        checks:
+          - { name: "ci/circleci: go-build", status: in_progress }
+          - { name: "ci/circleci: go-test", status: in_progress }
+steps:
+  - id: deployment
+    tool: webhook_post
+    args:
+      event: deployment
+      action: created
+      signature: valid
+      body:
+        deployment: { id: 1, sha: a1, environment: production }
+        repository: { full_name: giantswarm/klaus }
+        installation: { id: 200 }
+    expected:
+      json_path_min: { status_code: 200 }
+      json_path_max: { status_code: 299 }
+
+  - id: counted-ignored
+    description: An event the engine doesn't know is labelled other
+    tool: metric
+    args: { name: engine_webhook_deliveries_total, labels: { event: other, outcome: ignored } }
+    expected:
+      json_path: { value: 1 }
+
+  - id: no-reads
+    tool: github_calls
+    args: { since_step: deployment }
+    expected:
+      json_path: { count: 0 }
+
+  - id: nothing-reconciled
+    tool: reconciles
+    args: { since_step: deployment }
+    expected:
+      json_path: { count: 0 }

@@ -1,0 +1,62 @@
+name: decision-next-shadow-recorded
+concept: decision
+tags: [phase1]
+description: |
+  Given `next?` in mode shadow and two eligible items assigned to alice, #101
+  (Priority 1) and #102 (Priority 2), so only alice has candidates
+  When the engine decides `next?` for alice and JEV prefers #102
+  Then the rule's answer (#101) is chosen and is alice's pick, JEV's answer is
+  recorded next to it, and the disagreement is counted.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        assignees: [alice]
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝", priority: 1 }
+      - ref: giantswarm/roadmap#102
+        title: Count muster tool calls by outcome
+        body: |
+          ### Acceptance criteria
+          - [ ] a counter per tool call outcome
+          Repo: giantswarm/muster
+        assignees: [alice]
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝", priority: 2 }
+  jev:
+    answers: [{ point: "next?", person: alice, answer: giantswarm/roadmap#102, confidence: 0.9 }]
+steps:
+  - id: both-recorded
+    tool: decisions
+    args: { point: "next?" }
+    expected:
+      json_path:
+        count: 1
+        rows.0.subject: alice
+        rows.0.mode: shadow
+        rows.0.rule: giantswarm/roadmap#101
+        rows.0.jev: giantswarm/roadmap#102
+        rows.0.jevConfidence: 0.9
+        rows.0.chosen: giantswarm/roadmap#101
+
+  - id: rule-pick-stands
+    tool: get_person
+    args: { login: alice }
+    expected:
+      json_path: { status.picks: [giantswarm/roadmap#101] }
+
+  - id: jev-choice-not-picked
+    tool: get_item
+    args: { ref: giantswarm/roadmap#102 }
+    expected:
+      json_path: { status.shadow.pick: null }
+
+  - id: disagreement-counted
+    tool: metric
+    args: { name: engine_decisions_total, labels: { point: "next?", mode: shadow, outcome: disagree } }
+    expected:
+      json_path: { value: 1 }

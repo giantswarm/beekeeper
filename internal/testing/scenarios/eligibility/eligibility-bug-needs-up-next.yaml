@@ -1,0 +1,51 @@
+name: eligibility-bug-needs-up-next
+concept: eligibility
+tags: [phase1, bugs]
+description: |
+  Given no item on the board yet
+  When a person files a new Bug for Bumblebee in Inbox
+  Then the bug is classified by bug-severity? (the rule says medium), the only
+  would-action is to set the severity to medium, and the bug is not eligible
+  (NotUpNext) and not moved: a medium bug waits for a person to put it in Up Next.
+pre_configuration:
+  fixture: base
+steps:
+  - id: bug-filed
+    tool: github_issue_create
+    args:
+      ref: giantswarm/roadmap#201
+      title: klaus drops the last message on reconnect
+      body: |
+        After a reconnect the last assistant message is missing.
+        Repo: giantswarm/klaus
+      assignees: []
+      board: { status: "Inbox 📥", kind: "Bug 🐞", team: "Bumblebee🐝" }
+
+  - id: not-eligible
+    tool: get_item
+    args: { ref: giantswarm/roadmap#201 }
+    expected:
+      json_path:
+        status.class: Implementable
+        status.phase: Backlog
+        status.eligible.value: false
+        status.eligible.reasons: [NotUpNext]
+        status.shadow.pick: null
+        status.shadow.actions[type=set-severity].args.severity: medium
+
+  - id: severity-decided
+    tool: decisions
+    args: { point: "bug-severity?", item: giantswarm/roadmap#201 }
+    expected:
+      json_path:
+        count: 1
+        rows.0.rule: medium
+        rows.0.chosen: medium
+        rows.0.mode: shadow
+
+  - id: only-the-severity
+    description: No set-status, no assign, no todo
+    tool: events
+    args: { item: giantswarm/roadmap#201, type: shadow.action }
+    expected:
+      json_path: { count: 1 }

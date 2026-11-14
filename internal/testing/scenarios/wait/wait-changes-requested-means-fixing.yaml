@@ -1,0 +1,105 @@
+name: wait-changes-requested-means-fixing
+concept: wait
+tags: [phase1, wake-index]
+description: |
+  Given a Published item whose PR is green and waits on review
+  When bob submits a "changes requested" review at 09:30, and alice pushes b2 at 10:00
+  Then on the review the Change records review state changes-requested and has no wait (the
+  engine expects nothing of a colleague's fix), and the Item moves to Fixing with no wait of
+  its own; the push still wakes the Change through its pr: ref, and the Change follows the
+  new head and waits on CI for b2 (since 10:00, deadline 11:00), while the open "changes
+  requested" review keeps the Item in Fixing.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        assignees: [alice]
+        board: { status: "In Progress ⛏️", kind: "Story 📑", team: "Bumblebee🐝" }
+    pulls:
+      - ref: giantswarm/klaus#55
+        author: alice
+        head: a1
+        closes: [giantswarm/roadmap#101]
+        checks:
+          - { name: "ci/circleci: go-build", status: completed, conclusion: success }
+          - { name: "ci/circleci: go-test", status: completed, conclusion: success }
+        reviews: []
+steps:
+  - id: later
+    tool: clock_advance
+    args: { by: 30m }
+
+  - id: changes-requested
+    tool: github_pr_review
+    args: { ref: giantswarm/klaus#55, by: bob, state: changes_requested }
+
+  - id: change-records-it
+    tool: get_change
+    args: { ref: giantswarm/klaus#55 }
+    expected:
+      json_path:
+        status.review.state: changes-requested
+        status.wait: null
+
+  - id: item-fixing
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      json_path:
+        status.phase: Fixing
+        status.wait: null
+
+  - id: fixing-takes-a-while
+    tool: clock_advance
+    args: { by: 30m }
+
+  - id: fix-pushed
+    tool: github_pr_push
+    args: { ref: giantswarm/klaus#55, head: b2 }
+
+  - id: waits-on-new-sha
+    tool: get_change
+    args: { ref: giantswarm/klaus#55 }
+    expected:
+      json_path:
+        status.pr.headSha: b2
+        status.ci.sha: b2
+        status.ci.state: pending
+        status.review.state: changes-requested
+        status.wait.on: ci
+        status.wait.ref: "ci:giantswarm/klaus@b2"
+        status.wait.since: "2026-11-16T10:00:00Z"
+        status.wait.deadline: "2026-11-16T11:00:00Z"
+
+  - id: woken-through-the-pr
+    description: No wait held pr:giantswarm/klaus#55; the delivery reached the Change that ref belongs to
+    tool: events
+    args: { change: giantswarm/klaus#55, type: observed, since_step: fix-pushed }
+    expected:
+      json_path: { rows.0.source: webhook }
+      json_path_min: { count: 1 }
+      contains: [pr.headSha]
+
+  - id: ci-wait-started
+    tool: events
+    args: { change: giantswarm/klaus#55, type: wait.started, since_step: fix-pushed }
+    expected:
+      json_path:
+        count: 1
+        rows.0.source: webhook
+        rows.0.data.ref: "ci:giantswarm/klaus@b2"
+
+  - id: still-fixing
+    description: The "changes requested" review is still open after the push
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      json_path:
+        status.phase: Fixing
+        status.wait: null

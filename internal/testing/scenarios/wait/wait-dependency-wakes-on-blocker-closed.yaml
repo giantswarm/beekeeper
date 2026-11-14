@@ -1,0 +1,90 @@
+name: wait-dependency-wakes-on-blocker-closed
+concept: wait
+tags: [phase1, wake-index]
+description: |
+  Given two ready Up Next items, #101 blocked by the open issue #100 and #102 blocked by the
+  open issue #103, each holding a dependency wait on its blocker
+  When #100 is closed
+  Then the issues webhook wakes only #101: its blocker is recorded closed, its dependency
+  wait ends and it becomes eligible; #102 is not reconciled and still waits on #103.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#100
+        title: Settle the retry policy for klaus clients
+        body: Decide the backoff and the retryable status codes.
+        assignees: [bob]
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        assignees: []
+        blockedBy: [giantswarm/roadmap#100]
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝" }
+      - ref: giantswarm/roadmap#102
+        title: Expose klaus session metrics
+        body: |
+          ### Acceptance criteria
+          - [ ] a metric per session state
+          Repo: giantswarm/klaus
+        assignees: []
+        blockedBy: [giantswarm/roadmap#103]
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝" }
+      - ref: giantswarm/roadmap#103
+        title: Name the klaus session states
+        body: Agree on the states a session can be in.
+        assignees: [bob]
+steps:
+  - id: blocked
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      json_path:
+        status.phase: Ready
+        status.eligible.value: false
+        status.eligible.reasons: [BlockedByOpenIssue]
+        status.wait.on: dependency
+        status.wait.ref: "issue:giantswarm/roadmap#100"
+        status.wait.deadline: "2026-11-23T09:00:00Z"
+        status.wait.atDeadline: re-observe
+        status.wait.state: watching
+
+  - id: blocker-closed
+    tool: github_issue_edit
+    args: { ref: giantswarm/roadmap#100, state: closed }
+
+  - id: unblocked
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      json_path:
+        status.blockedBy.0.ref: giantswarm/roadmap#100
+        status.blockedBy.0.state: closed
+        status.eligible.value: true
+        status.wait: null
+
+  - id: woken-by-webhook
+    tool: events
+    args: { item: giantswarm/roadmap#101, type: wait.woken, since_step: blocker-closed }
+    expected:
+      json_path:
+        count: 1
+        rows.0.source: webhook
+        rows.0.data.on: dependency
+
+  - id: other-not-reconciled
+    tool: reconciles
+    args: { item: giantswarm/roadmap#102, since_step: blocker-closed }
+    expected:
+      json_path: { count: 0 }
+
+  - id: other-still-waits
+    tool: get_item
+    args: { ref: giantswarm/roadmap#102 }
+    expected:
+      json_path:
+        status.eligible.value: false
+        status.wait.ref: "issue:giantswarm/roadmap#103"

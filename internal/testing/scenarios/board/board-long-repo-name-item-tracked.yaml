@@ -1,0 +1,56 @@
+name: board-long-repo-name-item-tracked
+concept: board
+tags: [phase1, review]
+description: |
+  Given two Up Next ready items of the team, one an issue in a repo whose name is too
+  long for a Kubernetes label value (more than 63 bytes with its owner)
+  When the engine starts
+  Then both become Ready Items and the team is decided with both: an Item's identity
+  is in its name and annotation, never in a label, so a long repo name stops nothing.
+pre_configuration:
+  fixture: base
+  github:
+    repos:
+      - { name: giantswarm/cluster-api-provider-something-quite-long-for-a-label-value, visibility: public, installed: true }
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        assignees: []
+        createdAt: "2026-11-10T10:00:00Z"
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝", priority: 2 }
+      - ref: giantswarm/cluster-api-provider-something-quite-long-for-a-label-value#5
+        title: Tidy the provider's flags
+        body: |
+          ### Acceptance criteria
+          - [ ] every flag is documented
+        assignees: []
+        createdAt: "2026-11-10T10:00:00Z"
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝", priority: 1 }
+steps:
+  - id: long-tracked
+    tool: get_item
+    args: { ref: giantswarm/cluster-api-provider-something-quite-long-for-a-label-value#5 }
+    expected:
+      json_path:
+        status.phase: Ready
+        status.eligible.value: true
+        status.targetRepos: [giantswarm/cluster-api-provider-something-quite-long-for-a-label-value]
+
+  - id: other-tracked
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      json_path: { status.phase: Ready, status.eligible.value: true }
+
+  - id: team-decided
+    tool: get_team
+    args: { name: bumblebee }
+    expected:
+      json_path:
+        status.picks:
+          - { person: alice, item: giantswarm/cluster-api-provider-something-quite-long-for-a-label-value#5 }
+          - { person: bob, item: giantswarm/roadmap#101 }

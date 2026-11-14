@@ -1,0 +1,113 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: people.beekeeper.giantswarm.io
+spec:
+  group: beekeeper.giantswarm.io
+  names:
+    kind: Person
+    listKind: PersonList
+    plural: people
+    singular: person
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: 'Person is a participant: someone the engine may pick work for.'
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: PersonSpec configures a participant.
+            properties:
+              login:
+                type: string
+              teams:
+                items:
+                  type: string
+                type: array
+              wip:
+                description: WIP counts items and epics.
+                properties:
+                  epics:
+                    type: integer
+                  items:
+                    type: integer
+                required:
+                - epics
+                - items
+                type: object
+            required:
+            - login
+            - wip
+            type: object
+          status:
+            description: PersonStatus is the person's share of the last decision pass.
+            properties:
+              free:
+                description: Free is the limit minus engine WIP.
+                properties:
+                  epics:
+                    type: integer
+                  items:
+                    type: integer
+                required:
+                - epics
+                - items
+                type: object
+              held:
+                items:
+                  description: PersonHeld is an item a gate holds for this person.
+                  properties:
+                    gate:
+                      type: string
+                    item:
+                      type: string
+                  required:
+                  - gate
+                  - item
+                  type: object
+                type: array
+              picks:
+                items:
+                  type: string
+                type: array
+              wip:
+                description: WIP is the engine's own WIP for this person.
+                properties:
+                  epics:
+                    type: integer
+                  items:
+                    type: integer
+                required:
+                - epics
+                - items
+                type: object
+            required:
+            - free
+            - wip
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

@@ -1,0 +1,116 @@
+name: budget-idle-hour-costs-almost-nothing
+concept: budget
+tags: [phase1, learning-api-budget]
+description: |
+  Given a steady team: three In Progress items, two of them with open PRs that are
+  green and waiting on review, and the engine past its startup reads (so it holds an
+  ETag for everything it reads over REST)
+  When an hour passes in which nothing changes on GitHub
+  Then every REST read is conditional and answered 304, so the App's REST remaining
+  doesn't move, and the GraphQL spend is only the safety net's.
+  The bounds, per hour:
+  - REST: 4 Changes resyncs (every 15m) of at most 4 reads per PR (the PR, its head's
+    check runs, its head's statuses, its reviews): at most 4 x 2 x 4 = 32 calls, all 304s.
+  - The delivery log, read with the App's JWT on its own bucket (api app): 12 reads.
+  - GraphQL: 6 board resyncs (every 10m), each one filtered query of at most 2 points
+    (the bound in board-resync-reads-only-team-active-statuses), and 6 board probes
+    of 1 point: 12 queries and at most 6 x 2 + 6 x 1 = 18 points, under 0.4% of the
+    5,000-point hourly budget.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        assignees: [alice]
+        board: { status: "In Progress ⛏️", kind: "Story 📑", team: "Bumblebee🐝" }
+      - ref: giantswarm/roadmap#102
+        title: Report muster tool latency
+        body: |
+          ### Acceptance criteria
+          - [ ] a latency histogram per tool
+          Repo: giantswarm/muster
+        assignees: [bob]
+        board: { status: "In Progress ⛏️", kind: "Story 📑", team: "Bumblebee🐝" }
+      - ref: giantswarm/roadmap#103
+        title: Expose klaus session metrics
+        body: |
+          ### Acceptance criteria
+          - [ ] a metric per session state
+          Repo: giantswarm/klaus
+        assignees: [alice]
+        board: { status: "In Progress ⛏️", kind: "Story 📑", team: "Bumblebee🐝" }
+    pulls:
+      - ref: giantswarm/klaus#55
+        author: alice
+        head: a1
+        closes: [giantswarm/roadmap#101]
+        checks:
+          - { name: "ci/circleci: go-build", status: completed, conclusion: success }
+          - { name: "ci/circleci: go-test", status: completed, conclusion: success }
+      - ref: giantswarm/muster#12
+        author: bob
+        head: c1
+        closes: [giantswarm/roadmap#102]
+        checks:
+          - { name: "ci/circleci: go-test", status: completed, conclusion: success }
+steps:
+  - id: warm-up
+    description: Every periodic read has run at least once with an ETag in hand
+    tool: clock_advance
+    args: { by: 15m }
+
+  - id: pin-rest-window
+    description: >-
+      Other users of the App have spent 1,000 calls and the window resets after the
+      measured hour, so "unchanged" can be checked against a known number
+    tool: github_fault
+    args: { kind: rate_limit, api: rest, remaining: 4000, reset_in: 2h }
+
+  - id: idle-hour
+    tool: clock_advance
+    args: { by: 1h }
+
+  - id: rest-all-free
+    tool: github_calls
+    args: { since_step: idle-hour, api: rest }
+    expected:
+      json_path: { mutating: 0, rateLimited: 0, modified: 0 }
+      json_path_min: { notModified: 8 } # at least one read per PR per resync
+      json_path_max: { rest: 32 }
+
+  - id: delivery-log-every-5m
+    tool: github_calls
+    args: { since_step: idle-hour, api: app, operation: apps/list-webhook-deliveries }
+    expected:
+      json_path: { count: 12, rateLimited: 0 }
+
+  - id: rest-remaining-unchanged
+    description: Any read answered other than 304 would have lowered it
+    tool: get_budget
+    expected:
+      json_path: { status.rest.remaining: 4000, status.deferred.rest: false }
+
+  - id: no-conditional-read-changed
+    description: Nothing changed since startup, so no conditional REST read was answered 200
+    tool: metric
+    args: { name: engine_github_requests_total, labels: { api: rest, conditional: "true", code: "200" } }
+    expected:
+      json_path: { value: 0 }
+
+  - id: graphql-is-the-safety-net
+    tool: github_calls
+    args: { since_step: idle-hour, api: graphql }
+    expected:
+      json_path: { count: 12, rateLimited: 0 }
+      json_path_max: { graphqlPoints: 18 }
+
+  - id: probes-cost-one-point
+    tool: github_calls
+    args: { since_step: idle-hour, api: graphql, operation: BoardProbe }
+    expected:
+      json_path: { count: 6, graphqlPoints: 6 }

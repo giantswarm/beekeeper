@@ -1,0 +1,88 @@
+name: wait-ci-wakes-on-check-run
+concept: wait
+tags: [phase1, wake-index]
+description: |
+  Given an In Progress item whose PR is waiting on CI for its head SHA
+  When GitHub delivers the check_run completed webhook for the last required check
+  Then the Change's ci wait ends through the webhook, only that Change is reconciled,
+  and the event table records the wake with source webhook.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        assignees: [alice]
+        board: { status: "In Progress ⛏️", kind: "Story 📑", team: "Bumblebee🐝" }
+      - ref: giantswarm/roadmap#102
+        title: Expose klaus session metrics
+        body: |
+          ### Acceptance criteria
+          - [ ] a metric per session state
+          Repo: giantswarm/klaus
+        assignees: [bob]
+        board: { status: "In Progress ⛏️", kind: "Story 📑", team: "Bumblebee🐝" }
+    pulls:
+      - ref: giantswarm/klaus#55
+        author: alice
+        head: a1
+        closes: [giantswarm/roadmap#101]
+        checks:
+          - { name: "ci/circleci: go-build", status: completed, conclusion: success }
+          - { name: "ci/circleci: go-test", status: in_progress }
+      - ref: giantswarm/klaus#56
+        author: bob
+        head: b1
+        closes: [giantswarm/roadmap#102]
+        checks:
+          - { name: "ci/circleci: go-test", status: in_progress }
+steps:
+  - id: waiting-on-ci
+    description: The Change waits on CI for its head SHA
+    tool: get_change
+    args: { ref: giantswarm/klaus#55 }
+    expected:
+      json_path:
+        status.ci.state: pending
+        status.wait.on: ci
+        status.wait.ref: "ci:giantswarm/klaus@a1"
+        status.wait.state: watching
+
+  - id: ci-completes
+    description: The last required check completes green and its webhook is delivered
+    tool: github_check_run
+    args: { repo: giantswarm/klaus, sha: a1, name: "ci/circleci: go-test", status: completed, conclusion: success }
+
+  - id: wait-ended
+    tool: get_change
+    args: { ref: giantswarm/klaus#55 }
+    expected:
+      json_path:
+        status.ci.state: green
+        status.wait.on: review # green, and the repo's ruleset requires one approval
+
+  - id: other-change-untouched
+    description: The wake index woke only the Change waiting on that SHA
+    tool: reconciles
+    args: { change: giantswarm/klaus#56, since_step: ci-completes }
+    expected:
+      json_path: { count: 0 }
+
+  - id: woken-by-webhook
+    tool: events
+    args: { change: giantswarm/klaus#55, type: wait.woken, since_step: ci-completes }
+    expected:
+      json_path:
+        count: 1
+        rows.0.source: webhook
+        rows.0.data.on: ci
+
+  - id: no-webhook-missed
+    tool: metric
+    args: { name: engine_webhook_missed_total }
+    expected:
+      json_path: { value: 0 }

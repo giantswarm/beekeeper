@@ -1,70 +1,50 @@
-# beekeeper's ServiceAccount is the only writer of the beekeeper.giantswarm.io
-# resources and their Events; it reads the namespaces to audit a list in the
-# caller's team namespace; in its own namespace it keeps the note counter
-# (rbac-note-counter.yaml). Nothing else.
+# The engine's permissions, all in its own namespace: nothing cluster-wide.
+# Its cache watches this namespace only.
 apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
+kind: Role
 metadata:
-  name: {{ include "beekeeper.name" . }}
+  name: {{ include "beekeeper.engine.name" . }}
+  namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "beekeeper.labels" . | nindent 4 }}
+    {{- include "beekeeper.engine.labels" . | nindent 4 }}
 rules:
+  # Engine-owned state: everything in status, identity in labels.
   - apiGroups: ["beekeeper.giantswarm.io"]
-    resources: ["environments", "holds", "mergelanes", "notes", "rosterentries"]
+    resources: ["items", "changes", "budgets"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Configuration, applied by the deployment (GitOps): the engine only reads it.
   - apiGroups: ["beekeeper.giantswarm.io"]
-    resources: ["environments/status", "holds/status", "mergelanes/status", "notes/status", "rosterentries/status"]
-    verbs: ["get", "update", "patch"]
-  - apiGroups: [""]
-    resources: ["events"]
-    verbs: ["get", "list", "watch", "create"]
-  - apiGroups: [""]
-    resources: ["namespaces"]
+    resources: ["installations", "teams", "people"]
     verbs: ["get", "list", "watch"]
+  - apiGroups: ["beekeeper.giantswarm.io"]
+    resources:
+      - items/status
+      - changes/status
+      - budgets/status
+      - installations/status
+      - teams/status
+      - people/status
+    verbs: ["get", "update", "patch"]
+  # Leader election.
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "create", "update"]
+  - apiGroups: ["", "events.k8s.io"]
+    resources: ["events"]
+    verbs: ["create", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
+kind: RoleBinding
 metadata:
-  name: {{ include "beekeeper.name" . }}
+  name: {{ include "beekeeper.engine.name" . }}
+  namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "beekeeper.labels" . | nindent 4 }}
+    {{- include "beekeeper.engine.labels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: {{ include "beekeeper.name" . }}
+  kind: Role
+  name: {{ include "beekeeper.engine.name" . }}
 subjects:
   - kind: ServiceAccount
-    name: {{ include "beekeeper.name" . }}
+    name: {{ include "beekeeper.engine.name" . }}
     namespace: {{ .Release.Namespace }}
----
-# People and agents read the resources; they write through serve's tools.
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: {{ include "beekeeper.name" . }}-read
-  labels:
-    {{- include "beekeeper.labels" . | nindent 4 }}
-    rbac.authorization.k8s.io/aggregate-to-view: "true"
-rules:
-  - apiGroups: ["beekeeper.giantswarm.io"]
-    resources: ["environments", "holds", "mergelanes", "notes", "rosterentries"]
-    verbs: ["get", "list", "watch"]
-{{- with .Values.rbac.readerGroups }}
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: {{ include "beekeeper.name" $ }}-read
-  labels:
-    {{- include "beekeeper.labels" $ | nindent 4 }}
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: {{ include "beekeeper.name" $ }}-read
-subjects:
-  {{- range . }}
-  - apiGroup: rbac.authorization.k8s.io
-    kind: Group
-    name: {{ . }}
-  {{- end }}
-{{- end }}

@@ -1,0 +1,82 @@
+name: webhook-oversize-rejected
+concept: webhook
+tags: [phase1]
+description: |
+  Given a Change waiting on CI for its head SHA
+  When a validly signed check_run delivery for that SHA is POSTed with a body one byte over 10 MiB
+  Then the receiver answers 413 and counts it as too_large, and nothing is processed:
+  no GitHub read, no reconcile. A body of exactly 10 MiB is still accepted.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        assignees: [alice]
+        board: { status: "In Progress ⛏️", kind: "Story 📑", team: "Bumblebee🐝" }
+    pulls:
+      - ref: giantswarm/klaus#55
+        author: alice
+        head: a1
+        closes: [giantswarm/roadmap#101]
+        checks:
+          - { name: "ci/circleci: go-build", status: in_progress }
+          - { name: "ci/circleci: go-test", status: in_progress }
+steps:
+  - id: oversize
+    tool: webhook_post
+    args:
+      event: check_run
+      action: completed
+      signature: valid
+      size_bytes: 10485761 # 10 MiB + 1
+      body:
+        check_run: { name: "ci/circleci: go-build", head_sha: a1, status: completed, conclusion: success }
+        repository: { full_name: giantswarm/klaus }
+        installation: { id: 200 }
+    expected:
+      json_path: { status_code: 413 }
+
+  - id: counted-too-large
+    tool: metric
+    args: { name: engine_webhook_deliveries_total, labels: { outcome: too_large } }
+    expected:
+      json_path: { value: 1 }
+
+  - id: no-reads
+    tool: github_calls
+    args: { since_step: oversize }
+    expected:
+      json_path: { count: 0 }
+
+  - id: nothing-reconciled
+    tool: reconciles
+    args: { since_step: oversize }
+    expected:
+      json_path: { count: 0 }
+
+  - id: at-the-limit
+    description: Exactly 10 MiB is within the limit
+    tool: webhook_post
+    args:
+      event: check_run
+      action: completed
+      signature: valid
+      size_bytes: 10485760 # 10 MiB
+      body:
+        check_run: { name: "ci/circleci: go-build", head_sha: a1, status: completed, conclusion: success }
+        repository: { full_name: giantswarm/klaus }
+        installation: { id: 200 }
+    expected:
+      json_path_min: { status_code: 200 }
+      json_path_max: { status_code: 299 }
+
+  - id: counted-accepted
+    tool: metric
+    args: { name: engine_webhook_deliveries_total, labels: { outcome: accepted } }
+    expected:
+      json_path: { value: 1 }

@@ -1,0 +1,63 @@
+name: source-board-5xx-degrades-at-first-failed-check
+concept: source
+tags: [phase1, review]
+description: |
+  Given a fresh board source
+  When every BoardProbe and BoardTeamItems call answers 502 from 09:00 on
+  Then the board source degrades (board-unreadable) at the 09:10 checks, the first
+  failed scheduled checks, and polls; the webhooks source stays fresh. When GitHub
+  answers again, the board is resynced and fresh again after a full probe interval
+  without a gap.
+pre_configuration:
+  fixture: base
+steps:
+  - id: fresh
+    tool: get_installation
+    expected:
+      json_path: { status.sources.board.state: fresh }
+
+  - id: probe-fails
+    tool: github_fault
+    args: { kind: http_error, status: 502, match: BoardProbe }
+
+  - id: resync-fails
+    tool: github_fault
+    args: { kind: http_error, status: 502, match: BoardTeamItems }
+
+  - id: checks-fail
+    tool: clock_advance
+    args: { by: 11m }
+
+  - id: degraded
+    tool: get_installation
+    expected:
+      json_path:
+        status.sources.board.state: degraded
+        status.sources.board.reason: board-unreadable
+        status.sources.board.polling: true
+        status.sources.webhooks.state: fresh
+
+  - id: degraded-once
+    tool: events
+    args: { type: source.degraded, since_step: probe-fails }
+    expected:
+      json_path: { count: 1, rows.0.data.source: board, rows.0.data.reason: board-unreadable }
+
+  - id: answers-again
+    tool: github_fault
+    args: { kind: clear }
+
+  - id: recovers
+    tool: clock_advance
+    args: { by: 30m }
+
+  - id: resynced
+    tool: github_calls
+    args: { since_step: answers-again, operation: BoardTeamItems, code: 200 }
+    expected:
+      json_path_min: { count: 1 }
+
+  - id: fresh-again
+    tool: get_installation
+    expected:
+      json_path: { status.sources.board.state: fresh }

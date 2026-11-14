@@ -1,0 +1,98 @@
+name: gate-epic-wip-holds-new-epic
+concept: gate
+tags: [phase1]
+description: |
+  Given alice with a WIP limit of 2 items and 1 epic, two Planned epics she owns
+  (#90 with sub-item #111, Priority 1; #95 with sub-item #121, Priority 2), and a
+  standalone item assigned to her (#102, Priority 3)
+  When the engine picks
+  Then #111 is picked and opens epic #90, which takes her epic slot; #121 would
+  open a second epic, so it is held for her by EpicWIP and skipped, and her next
+  startable item, #102, is picked instead.
+pre_configuration:
+  fixture: base
+  config:
+    people: [{ login: alice, wip: { items: 2, epics: 1 } }]
+  github:
+    issues:
+      - ref: giantswarm/roadmap#90
+        title: Klaus session resilience
+        assignees: [alice]
+        board: { status: "Up Next ➡️", kind: "Epic 🎯", team: "Bumblebee🐝" }
+      - ref: giantswarm/roadmap#111
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        parent: giantswarm/roadmap#90
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝", priority: 1 }
+      - ref: giantswarm/roadmap#95
+        title: Muster observability
+        assignees: [alice]
+        board: { status: "Up Next ➡️", kind: "Epic 🎯", team: "Bumblebee🐝" }
+      - ref: giantswarm/roadmap#121
+        title: Count muster tool calls by outcome
+        body: |
+          ### Acceptance criteria
+          - [ ] a counter per tool call outcome
+          Repo: giantswarm/muster
+        parent: giantswarm/roadmap#95
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝", priority: 2 }
+      - ref: giantswarm/roadmap#102
+        title: Document muster's configuration file
+        body: |
+          ### Acceptance criteria
+          - [ ] every key is documented
+          Repo: giantswarm/muster
+        assignees: [alice]
+        board: { status: "Up Next ➡️", kind: "Task 🗒️", team: "Bumblebee🐝", priority: 3 }
+steps:
+  - id: both-epics-planned
+    tool: list_items
+    args: { team: bumblebee, class: Epic, phase: Planned }
+    expected:
+      json_path: { count: 2 }
+
+  - id: alice
+    tool: get_person
+    args: { login: alice }
+    expected:
+      json_path:
+        status.free: { items: 2, epics: 1 }
+        status.picks: [giantswarm/roadmap#111, giantswarm/roadmap#102]
+        status.held:
+          - { item: giantswarm/roadmap#121, gate: EpicWIP }
+
+  - id: team
+    tool: get_team
+    args: { name: bumblebee }
+    expected:
+      json_path:
+        status.wip.epics: 0
+        status.picks:
+          - { person: alice, item: giantswarm/roadmap#111 }
+          - { person: alice, item: giantswarm/roadmap#102 }
+        status.held:
+          - { person: alice, item: giantswarm/roadmap#121, gate: EpicWIP }
+
+  - id: new-epic-item-held
+    tool: get_item
+    args: { ref: giantswarm/roadmap#121 }
+    expected:
+      json_path:
+        status.owner: alice
+        status.shadow.pick: null
+        status.shadow.heldBy: { person: alice, gate: EpicWIP }
+        status.shadow.actions: null
+
+  - id: next-startable-picked
+    tool: get_item
+    args: { ref: giantswarm/roadmap#102 }
+    expected:
+      json_path:
+        status.shadow.pick: { person: alice, rank: 3 }
+        status.shadow.heldBy: null
+        status.shadow.actions:
+          - { type: set-status, args: { status: "In Progress ⛏️" } }
+          - { type: start-run, args: { purpose: implement } }

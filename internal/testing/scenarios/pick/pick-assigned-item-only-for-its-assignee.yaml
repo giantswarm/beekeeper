@@ -1,0 +1,59 @@
+name: pick-assigned-item-only-for-its-assignee
+concept: pick
+tags: [phase1]
+description: |
+  Given an eligible Up Next item assigned to bob that is first in order, and an
+  unassigned item after it
+  When the engine picks for alice first (login order)
+  Then alice gets the unassigned item, never bob's, even though bob's ranks higher;
+  bob's item is picked for bob, and since it's already his, its would-actions are
+  setting it In Progress and starting the run, with no assign.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        assignees: [bob]
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝", priority: 1 }
+      - ref: giantswarm/roadmap#102
+        title: Count muster tool calls by outcome
+        body: |
+          ### Acceptance criteria
+          - [ ] a counter per tool call outcome
+          Repo: giantswarm/muster
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝", priority: 2 }
+steps:
+  - id: team-picks
+    tool: get_team
+    args: { name: bumblebee }
+    expected:
+      json_path:
+        status.picks:
+          - { person: alice, item: giantswarm/roadmap#102 }
+          - { person: bob, item: giantswarm/roadmap#101 }
+
+  - id: bobs-item-for-bob
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      json_path:
+        status.shadow.pick: { person: bob, rank: 1 }
+        status.shadow.actions:
+          - { type: set-status, args: { status: "In Progress ⛏️" } }
+          - { type: start-run, args: { purpose: implement } }
+
+  - id: alice-gets-the-next
+    tool: get_item
+    args: { ref: giantswarm/roadmap#102 }
+    expected:
+      json_path:
+        status.shadow.pick: { person: alice, rank: 2 }
+        status.shadow.actions:
+          - { type: assign, args: { login: alice } }
+          - { type: set-status, args: { status: "In Progress ⛏️" } }
+          - { type: start-run, args: { purpose: implement } }

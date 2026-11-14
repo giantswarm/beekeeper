@@ -1,0 +1,110 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "beekeeper.receiver.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "beekeeper.receiver.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.receiver.replicas }}
+  selector:
+    matchLabels:
+      {{- include "beekeeper.receiver.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "beekeeper.receiver.labels" . | nindent 8 }}
+        {{- with .Values.receiver.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.receiver.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "beekeeper.receiver.name" . }}
+      # The receiver never talks to the Kubernetes API: no token in the pod.
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- range . }}
+        - name: {{ . }}
+        {{- end }}
+      {{- end }}
+      containers:
+        - name: receiver
+          image: {{ include "beekeeper.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - receiver
+            - --listen-addr=:{{ .Values.receiver.ports.webhook }}
+            - --metrics-addr=:{{ .Values.receiver.ports.metrics }}
+            - --path={{ .Values.receiver.path }}
+            - --max-body-bytes={{ int64 .Values.receiver.maxBodyBytes }}
+            - --max-in-flight-bytes={{ int64 .Values.receiver.maxInFlightBytes }}
+            - --webhook-secret-file=/etc/beekeeper/webhook/secret
+            {{- with .Values.receiver.projectNodeIDs }}
+            - --project-node-ids={{ join "," . }}
+            {{- end }}
+            - --log-level={{ .Values.receiver.logLevel }}
+            {{- range .Values.receiver.extraArgs }}
+            - {{ . | quote }}
+            {{- end }}
+          env:
+            {{- include "beekeeper.podEnv" . | nindent 12 }}
+            {{- include "beekeeper.postgres.env" (dict "root" $ "role" "receiver") | nindent 12 }}
+            {{- with .Values.receiver.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          ports:
+            - name: webhook
+              containerPort: {{ .Values.receiver.ports.webhook }}
+              protocol: TCP
+            - name: metrics
+              containerPort: {{ .Values.receiver.ports.metrics }}
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: metrics
+            periodSeconds: 10
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.receiver.resources | nindent 12 }}
+          volumeMounts:
+            - name: webhook
+              mountPath: /etc/beekeeper/webhook
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: webhook
+          secret:
+            secretName: {{ include "beekeeper.webhook.secretName" . }}
+            items:
+              - key: {{ .Values.webhook.secretKey }}
+                path: secret
+        - name: tmp
+          emptyDir: {}
+      affinity:
+        {{- include "beekeeper.affinity" (dict "root" $ "component" "receiver") | nindent 8 }}
+      {{- with .Values.receiver.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.receiver.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.receiver.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

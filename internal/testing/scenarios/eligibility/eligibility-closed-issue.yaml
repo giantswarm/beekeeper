@@ -1,0 +1,47 @@
+name: eligibility-closed-issue
+concept: eligibility
+tags: [phase1]
+description: |
+  Given a ready Up Next item assigned to alice, picked for her
+  When a person closes the issue, leaving it in Up Next on the board
+  Then the item is not eligible for the single reason Closed, its phase is Done,
+  and alice's pick is dropped.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        assignees: [alice]
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝" }
+steps:
+  - id: picked
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      json_path: { status.eligible.value: true, status.shadow.pick.person: alice }
+
+  - id: closed
+    tool: github_issue_edit
+    args: { ref: giantswarm/roadmap#101, state: closed }
+
+  - id: not-eligible
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      json_path:
+        status.board.status: "Up Next ➡️"
+        status.phase: Done
+        status.eligible.value: false
+        status.eligible.reasons: [Closed]
+        status.shadow.pick: null
+
+  - id: pick-dropped
+    tool: get_person
+    args: { login: alice }
+    expected:
+      json_path: { status.picks: null }

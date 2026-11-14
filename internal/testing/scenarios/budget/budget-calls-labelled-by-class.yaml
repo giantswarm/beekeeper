@@ -1,0 +1,104 @@
+name: budget-calls-labelled-by-class
+concept: budget
+tags: [phase1]
+description: |
+  Given a PR that is green and waiting on review, and other users of the same
+  GitHub App who have brought its REST remaining down to 3,000
+  When the engine's resyncs and freshness checks run for half an hour
+  Then every call is counted in engine_github_requests_total under the observation
+  class with its API (rest, graphql, or app for the delivery log read with the App's JWT),
+  operation (GitHub's REST operation id, or the GraphQL operation name), status code and
+  whether it was conditional, GraphQL points are counted per
+  class, and the Budget shows the remaining and reset time from GitHub's rate-limit
+  headers, not from the engine's own count.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        assignees: [alice]
+        board: { status: "In Progress ⛏️", kind: "Story 📑", team: "Bumblebee🐝" }
+    pulls:
+      - ref: giantswarm/klaus#55
+        author: alice
+        head: a1
+        closes: [giantswarm/roadmap#101]
+        checks:
+          - { name: "ci/circleci: go-build", status: completed, conclusion: success }
+          - { name: "ci/circleci: go-test", status: completed, conclusion: success }
+steps:
+  - id: warm-up
+    tool: clock_advance
+    args: { by: 15m }
+
+  - id: other-users-spend
+    tool: github_fault
+    args: { kind: rate_limit, api: rest, remaining: 3000, reset_in: 1h }
+
+  - id: next-resync
+    tool: clock_advance
+    args: { by: 15m }
+
+  - id: budget-from-headers
+    tool: get_budget
+    expected:
+      json_path:
+        status.rest.limit: 5000
+        status.rest.remaining: 3000
+        status.rest.resetAt: "2026-11-16T10:15:00Z"
+        status.graphql.limit: 5000
+        status.deferred.rest: false
+
+  - id: remaining-metric
+    tool: metric
+    args: { name: engine_github_rate_remaining, labels: { api: rest } }
+    expected:
+      json_path: { value: 3000 }
+
+  - id: pr-read-at-startup
+    tool: metric
+    args:
+      name: engine_github_requests_total
+      labels: { class: observation, api: rest, operation: pulls/get, conditional: "false", code: "200" }
+    expected:
+      json_path: { value: 1 }
+
+  - id: pr-read-by-two-resyncs
+    tool: metric
+    args:
+      name: engine_github_requests_total
+      labels: { class: observation, api: rest, operation: pulls/get, conditional: "true", code: "304" }
+    expected:
+      json_path: { value: 2 }
+
+  - id: delivery-log-reads
+    description: Read with the App's JWT, so labelled api app (09:00 to 09:30, every 5m)
+    tool: metric
+    args:
+      name: engine_github_requests_total
+      labels: { class: observation, api: app, operation: apps/list-webhook-deliveries }
+    expected:
+      json_path: { value: 7 }
+
+  - id: board-probes
+    tool: metric
+    args: { name: engine_github_requests_total, labels: { class: observation, api: graphql, operation: BoardProbe } }
+    expected:
+      json_path_min: { value: 3 }
+
+  - id: board-resyncs
+    tool: metric
+    args: { name: engine_github_requests_total, labels: { class: observation, api: graphql, operation: BoardTeamItems } }
+    expected:
+      json_path_min: { value: 3 }
+
+  - id: points-by-class
+    tool: metric
+    args: { name: engine_github_graphql_points_total, labels: { class: observation } }
+    expected:
+      json_path_min: { value: 6 }

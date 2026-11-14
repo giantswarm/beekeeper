@@ -3,6 +3,25 @@
 
 {{ template "chart.description" . }}
 
+## CRDs
+
+The chart's CustomResourceDefinitions are in `crds/`. Helm installs them with the release but never
+upgrades or deletes them, so a new chart version's schema would not reach the cluster on its own.
+
+With Flux, let the HelmRelease create and replace them on install and on every upgrade:
+
+```yaml
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+spec:
+  install:
+    crds: CreateReplace
+  upgrade:
+    crds: CreateReplace
+```
+
+With plain Helm, apply them before every upgrade: `kubectl apply --server-side -f helm/beekeeper/crds/`.
+
 {{ template "chart.homepageLine" . }}
 
 {{ template "chart.maintainersSection" . }}

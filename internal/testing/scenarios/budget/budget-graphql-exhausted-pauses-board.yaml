@@ -1,0 +1,106 @@
+name: budget-graphql-exhausted-pauses-board
+concept: budget
+tags: [phase1]
+description: |
+  Given an In Progress item with no PR yet (Implementing), and a GraphQL budget that is
+  exhausted until 09:30 (the engine doesn't know yet)
+  When the item is moved to Validation and its projects_v2_item webhook makes the
+  engine read it over GraphQL
+  Then exactly one GraphQL call (BoardItemsByNode) fails as rate limited; a primary rate
+  limit stops that API's bucket, so from then on the engine makes no GraphQL call (no board
+  resync, no probe, no retry) until the reset time on its clock; the board source is
+  degraded with reason budget and the item stays as last observed; the delivery log, on the
+  App's own bucket, carries on. When the reset passes, board reads resume and the item
+  catches up.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        assignees: [alice]
+        board: { status: "In Progress ⛏️", kind: "Story 📑", team: "Bumblebee🐝" }
+steps:
+  - id: graphql-exhausted
+    tool: github_fault
+    args: { kind: rate_limit, api: graphql, remaining: 0, reset_in: 30m }
+
+  - id: board-change
+    tool: github_board_set
+    args: { issue: giantswarm/roadmap#101, status: "Validation ☑️" }
+
+  - id: one-failing-call
+    tool: github_calls
+    args: { since_step: board-change, api: graphql }
+    expected:
+      json_path: { count: 1, rateLimited: 1 }
+
+  - id: it-resolved-the-node
+    tool: github_calls
+    args: { since_step: board-change, api: graphql, operation: BoardItemsByNode }
+    expected:
+      json_path: { count: 1 }
+
+  - id: graphql-deferred
+    tool: get_budget
+    expected:
+      json_path:
+        status.graphql.remaining: 0
+        status.graphql.resetAt: "2026-11-16T09:30:00Z"
+        status.deferred.graphql: true
+        status.deferred.rest: false
+
+  - id: board-degraded
+    tool: get_installation
+    expected:
+      json_path: { status.sources.board.state: degraded, status.sources.board.reason: budget }
+
+  - id: not-caught-up-yet
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      json_path: { status.board.status: "In Progress ⛏️", status.phase: Implementing }
+
+  - id: paused-until-0929
+    description: The board resyncs and probes due at 09:10 and 09:20 fall in here
+    tool: clock_advance
+    args: { by: 29m }
+
+  - id: no-graphql-while-paused
+    tool: github_calls
+    args: { since_step: paused-until-0929, api: graphql }
+    expected:
+      json_path: { count: 0 }
+
+  - id: delivery-log-carries-on
+    description: The delivery-log checks at 09:05, 09:10, 09:15, 09:20 and 09:25
+    tool: github_calls
+    args: { since_step: paused-until-0929, api: app, operation: apps/list-webhook-deliveries }
+    expected:
+      json_path: { count: 5, rateLimited: 0 }
+
+  - id: reset-passes
+    tool: clock_advance
+    args: { by: 1m }
+
+  - id: board-read-resumes
+    tool: github_calls
+    args: { since_step: reset-passes, api: graphql }
+    expected:
+      json_path: { rateLimited: 0 }
+      json_path_min: { count: 1 }
+
+  - id: caught-up
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      json_path: { status.board.status: "Validation ☑️", status.phase: Validating }
+
+  - id: graphql-resumed
+    tool: get_budget
+    expected:
+      json_path: { status.deferred.graphql: false }

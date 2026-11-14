@@ -1,0 +1,60 @@
+name: decision-ready-shadow-records-both
+concept: decision
+tags: [phase1]
+description: |
+  Given `ready?` in mode shadow and a ready item (acceptance criteria and a Repo
+  line), for which JEV answers "not-ready" with confidence 0.8
+  When the engine decides `ready?` for it
+  Then the rule's answer (ready) is chosen, both answers are recorded on the
+  decision, the item stays eligible with no refine todo, and
+  engine_decisions_total{point="ready?",outcome=disagree} is 1.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝" }
+  jev:
+    answers: [{ point: "ready?", item: giantswarm/roadmap#101, answer: not-ready, confidence: 0.8 }]
+steps:
+  - id: both-recorded
+    tool: decisions
+    args: { point: "ready?", item: giantswarm/roadmap#101 }
+    expected:
+      json_path:
+        count: 1
+        rows.0.mode: shadow
+        rows.0.rule: ready
+        rows.0.jev: not-ready
+        rows.0.jevConfidence: 0.8
+        rows.0.jevError: null
+        rows.0.chosen: ready
+
+  - id: rule-stands
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      json_path: { status.acceptanceCriteria: true, status.eligible.value: true }
+
+  - id: no-refine-todo
+    tool: events
+    args: { item: giantswarm/roadmap#101, type: shadow.action }
+    expected:
+      not_contains: [todo, gs-plan]
+
+  - id: disagreement-counted
+    tool: metric
+    args: { name: engine_decisions_total, labels: { point: "ready?", mode: shadow, outcome: disagree } }
+    expected:
+      json_path: { value: 1 }
+
+  - id: not-counted-as-agreement
+    tool: metric
+    args: { name: engine_decisions_total, labels: { point: "ready?", outcome: agree } }
+    expected:
+      json_path: { value: 0 }

@@ -1,0 +1,98 @@
+name: budget-refusal-not-retried-until-inputs-change
+concept: budget
+tags: [phase1, learning-repeated-refusal]
+description: |
+  Given an In Progress item closed by a PR in giantswarm/happa, a private repo the
+  App is not installed on, so reading the PR is answered 404
+  When the engine reads it at startup, and then an hour of board and Changes
+  resyncs pass with nothing changed
+  Then the 404 is recorded once as a refusal with its inputs, shown on the Change while it
+  stands, and never retried on those unchanged inputs; when the repo is added to the
+  installation (an installation_repositories webhook, one of the inputs), the PR is read
+  again, succeeds, the Change no longer shows a refusal, and no new refusal is recorded.
+pre_configuration:
+  fixture: base
+  github:
+    repos:
+      - name: giantswarm/happa
+        visibility: private
+        defaultBranch: main
+        owner: team-bumblebee
+        requiredChecks: ["ci/circleci: go-test"]
+        installed: false # the App is not installed on this repo
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Show klaus sessions in happa
+        body: |
+          ### Acceptance criteria
+          - [ ] a sessions page lists running klaus sessions
+          Repo: giantswarm/happa
+        assignees: [alice]
+        board: { status: "In Progress ⛏️", kind: "Story 📑", team: "Bumblebee🐝" }
+    pulls:
+      - ref: giantswarm/happa#7
+        author: alice
+        head: h1
+        closes: [giantswarm/roadmap#101]
+        checks:
+          - { name: "ci/circleci: go-test", status: completed, conclusion: success }
+steps:
+  - id: refused-at-startup
+    tool: events
+    args: { type: refusal }
+    expected:
+      json_path: { count: 1, rows.0.change: giantswarm/happa#7 }
+
+  - id: refusal-on-the-change
+    tool: get_change
+    args: { ref: giantswarm/happa#7 }
+    expected:
+      json_path:
+        status.refusal.operation: pulls/get
+        status.refusal.code: 404
+        status.refusal.since: "2026-11-16T09:00:00Z"
+
+  - id: refusal-counted
+    tool: metric
+    args: { name: engine_refusals_total }
+    expected:
+      json_path: { value: 1 }
+
+  - id: an-hour-of-resyncs
+    description: Six board resyncs and four Changes resyncs, nothing changed
+    tool: clock_advance
+    args: { by: 1h }
+
+  - id: not-retried
+    tool: github_calls
+    args: { since_step: an-hour-of-resyncs, path: /repos/giantswarm/happa/pulls/7 }
+    expected:
+      json_path: { count: 0 }
+
+  - id: still-one-refusal
+    tool: metric
+    args: { name: engine_refusals_total }
+    expected:
+      json_path: { value: 1 }
+
+  - id: app-installed
+    tool: github_installation_repos
+    args: { add: [giantswarm/happa] }
+
+  - id: read-again
+    tool: github_calls
+    args: { since_step: app-installed, operation: pulls/get, path: /repos/giantswarm/happa/pulls/7 }
+    expected:
+      json_path: { count: 1 }
+
+  - id: change-observed
+    tool: get_change
+    args: { ref: giantswarm/happa#7 }
+    expected:
+      json_path: { status.pr.state: open, status.pr.headSha: h1, status.refusal: null }
+
+  - id: no-new-refusal
+    tool: events
+    args: { type: refusal, since_step: app-installed }
+    expected:
+      json_path: { count: 0 }

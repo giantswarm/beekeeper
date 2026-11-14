@@ -1,0 +1,67 @@
+name: invariant-repeated-refusal-detected
+concept: invariant
+tags: [phase1]
+description: |
+  Given a Change whose PR read is refused with 404, and an engine that forgets its refusals
+  When two Changes resyncs read the PR again with nothing changed in between
+  Then the Change shows the refusal while it stands, the refusal is retried on unchanged
+  inputs, and refusal-not-repeated counts the one Change.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        assignees: [alice]
+        board: { status: "In Progress ⛏️", kind: "Story 📑", team: "Bumblebee🐝" }
+    pulls:
+      - ref: giantswarm/klaus#55
+        author: alice
+        head: a1
+        closes: [giantswarm/roadmap#101]
+        checks:
+          - { name: "ci/circleci: go-build", status: completed, conclusion: success }
+          - { name: "ci/circleci: go-test", status: in_progress }
+expect_violations: [refusal-not-repeated]
+steps:
+  - id: refusals-forgotten
+    tool: engine_fault
+    args: { kind: forget_refusals }
+
+  - id: pr-refused
+    description: From now on every read of the PR answers 404
+    tool: github_fault
+    args: { kind: http_error, status: 404, match: /repos/giantswarm/klaus/pulls/55 }
+
+  - id: first-resync
+    tool: clock_advance
+    args: { by: 15m }
+
+  - id: refused-once
+    tool: events
+    args: { change: giantswarm/klaus#55, type: refusal, since_step: pr-refused }
+    expected:
+      json_path: { count: 1 }
+
+  - id: refusal-on-the-change
+    tool: get_change
+    args: { ref: giantswarm/klaus#55 }
+    expected:
+      json_path:
+        status.refusal.operation: pulls/get
+        status.refusal.code: 404
+        status.refusal.since: "2026-11-16T09:15:00Z"
+
+  - id: second-resync
+    tool: clock_advance
+    args: { by: 15m }
+
+  - id: detected
+    tool: metric
+    args: { name: engine_invariant_violations, labels: { invariant: refusal-not-repeated } }
+    expected:
+      json_path: { value: 1 }

@@ -1,0 +1,282 @@
+# promtool tests of every alert in helm/beekeeper/templates/prometheusrule.yaml,
+# rendered with hack/alerts/values.yaml (make test-alerts). The engine's series
+# carry the job of its PodMonitor, beekeeper/beekeeper-engine, the receiver's
+# beekeeper/beekeeper-receiver.
+rule_files:
+  - rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # A healthy engine and receiver; then an invariant breaks, a reconciler keeps
+  # failing and the board source degrades.
+  - name: healthy, then an invariant, a reconciler and a source go wrong
+    interval: 1m
+    input_series:
+      - series: 'up{namespace="beekeeper", job="beekeeper/beekeeper-engine", pod="engine-a"}'
+        values: '1+0x40'
+      - series: 'up{namespace="beekeeper", job="beekeeper/beekeeper-engine", pod="engine-b"}'
+        values: '1+0x40'
+      - series: 'up{namespace="beekeeper", job="beekeeper/beekeeper-receiver", pod="receiver-a"}'
+        values: '1+0x40'
+      - series: 'leader_election_master_status{namespace="beekeeper", job="beekeeper/beekeeper-engine", pod="engine-a", name="beekeeper-engine"}'
+        values: '1+0x40'
+      # Both replicas count the same violation: one alert, by invariant.
+      - series: 'engine_invariant_violations{namespace="beekeeper", job="beekeeper/beekeeper-engine", pod="engine-a", invariant="wip-has-run-or-wait"}'
+        values: '0 0 2+0x38'
+      - series: 'engine_invariant_violations{namespace="beekeeper", job="beekeeper/beekeeper-engine", pod="engine-b", invariant="wip-has-run-or-wait"}'
+        values: '0 0 2+0x38'
+      - series: 'engine_invariant_violations{namespace="beekeeper", job="beekeeper/beekeeper-engine", pod="engine-a", invariant="leader-decides"}'
+        values: '0+0x40'
+      # Another namespace's engine is none of this release's business.
+      - series: 'engine_invariant_violations{namespace="other", job="other/beekeeper-engine", pod="engine-x", invariant="leader-decides"}'
+        values: '5+0x40'
+      - series: 'engine_reconcile_errors_total{namespace="beekeeper", job="beekeeper/beekeeper-engine", pod="engine-a", controller="item"}'
+        values: '0+1x40'
+      - series: 'engine_reconcile_errors_total{namespace="beekeeper", job="beekeeper/beekeeper-engine", pod="engine-a", controller="change"}'
+        values: '3+0x40'
+      - series: 'engine_source_degraded{namespace="beekeeper", job="beekeeper/beekeeper-engine", pod="engine-a", source="board"}'
+        values: '0 0 1+0x38'
+      - series: 'engine_source_degraded{namespace="beekeeper", job="beekeeper/beekeeper-engine", pod="engine-a", source="webhooks"}'
+        values: '0+0x40'
+      - series: 'engine_webhook_deliveries_total{namespace="beekeeper", job="beekeeper/beekeeper-receiver", pod="receiver-a", event="issues", outcome="accepted"}'
+        values: '0+5x40'
+      - series: 'engine_history_dropped_total{namespace="beekeeper", job="beekeeper/beekeeper-engine", pod="engine-a"}'
+        values: '0+0x40'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: BeekeeperInvariantViolated
+        exp_alerts: []
+      - eval_time: 13m
+        alertname: BeekeeperInvariantViolated
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              cluster: test
+              layer: workload
+              invariant: wip-has-run-or-wait
+            exp_annotations:
+              summary: The engine invariant wip-has-run-or-wait is violated.
+              description: 2 objects have violated the invariant wip-has-run-or-wait for 10 minutes.
+              runbook_url: https://example.com/runbook#beekeeperinvariantviolated
+      - eval_time: 13m
+        alertname: BeekeeperInvariantsMissing
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: BeekeeperReconcileErrors
+        exp_alerts: []
+      - eval_time: 17m
+        alertname: BeekeeperReconcileErrors
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              cluster: test
+              layer: workload
+              controller: item
+            exp_annotations:
+              summary: The engine's item reconciler keeps failing.
+              description: The item reconciler has returned errors for 15 minutes.
+              runbook_url: https://example.com/runbook#beekeeperreconcileerrors
+      - eval_time: 13m
+        alertname: BeekeeperNoLeader
+        exp_alerts: []
+      - eval_time: 13m
+        alertname: BeekeeperEngineDown
+        exp_alerts: []
+      - eval_time: 13m
+        alertname: BeekeeperReceiverDown
+        exp_alerts: []
+      - eval_time: 13m
+        alertname: BeekeeperReceiverUnavailable
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: BeekeeperSourceDegraded
+        exp_alerts: []
+      - eval_time: 33m
+        alertname: BeekeeperSourceDegraded
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              cluster: test
+              layer: workload
+              source: board
+            exp_annotations:
+              summary: The source board is degraded.
+              description: The engine has found board degraded for 30 minutes and polls instead. The Installation's status.sources holds the reason.
+              runbook_url: https://example.com/runbook#beekeepersourcedegraded
+      - eval_time: 13m
+        alertname: BeekeeperHistoryDropped
+        exp_alerts: []
+      - eval_time: 13m
+        alertname: BeekeeperWatchdog
+        exp_alerts:
+          - exp_labels:
+              severity: none
+              heartbeat: "true"
+              cluster: test
+              layer: workload
+            exp_annotations:
+              summary: An engine replica leads (watchdog).
+              description: "Fires while an engine replica leads. Route it to a dead-man's switch: when it stops arriving, the engine or its alerting is down."
+              runbook_url: https://example.com/runbook#beekeeperwatchdog
+
+  # Prometheus scrapes the engine but fails, and finds no receiver at all.
+  - name: engine and receiver down
+    interval: 1m
+    input_series:
+      - series: 'up{namespace="beekeeper", job="beekeeper/beekeeper-engine", pod="engine-a"}'
+        values: '0+0x20'
+      - series: 'up{namespace="beekeeper", job="beekeeper/beekeeper-engine", pod="engine-b"}'
+        values: '0+0x20'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: BeekeeperEngineDown
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: BeekeeperEngineDown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              cluster: test
+              layer: workload
+            exp_annotations:
+              summary: No engine replica is up.
+              description: Prometheus has scraped no engine replica successfully for 10 minutes.
+              runbook_url: https://example.com/runbook#beekeeperenginedown
+      - eval_time: 11m
+        alertname: BeekeeperReceiverDown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              cluster: test
+              layer: workload
+            exp_annotations:
+              summary: No webhook receiver is up.
+              description: "Prometheus has scraped no receiver replica successfully for 10 minutes. GitHub's deliveries fail; the engine finds them in the delivery log and polls."
+              runbook_url: https://example.com/runbook#beekeeperreceiverdown
+      # Down is EngineDown's alert, not these.
+      - eval_time: 11m
+        alertname: BeekeeperNoLeader
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: BeekeeperInvariantsMissing
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: BeekeeperWatchdog
+        exp_alerts: []
+
+  # Both replicas are up, the leader loses its Lease and nobody takes it; and
+  # neither exports the invariants.
+  - name: up without a leader and without invariants
+    interval: 1m
+    input_series:
+      - series: 'up{namespace="beekeeper", job="beekeeper/beekeeper-engine", pod="engine-a"}'
+        values: '1+0x20'
+      - series: 'up{namespace="beekeeper", job="beekeeper/beekeeper-engine", pod="engine-b"}'
+        values: '1+0x20'
+      - series: 'up{namespace="beekeeper", job="beekeeper/beekeeper-receiver", pod="receiver-a"}'
+        values: '1+0x20'
+      - series: 'leader_election_master_status{namespace="beekeeper", job="beekeeper/beekeeper-engine", pod="engine-a", name="beekeeper-engine"}'
+        values: '1 1 1 0+0x17'
+      # Another Lease in the same process does not count.
+      - series: 'leader_election_master_status{namespace="beekeeper", job="beekeeper/beekeeper-engine", pod="engine-b", name="something-else"}'
+        values: '1+0x20'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: BeekeeperNoLeader
+        exp_alerts: []
+      - eval_time: 9m
+        alertname: BeekeeperNoLeader
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              cluster: test
+              layer: workload
+            exp_annotations:
+              summary: No engine replica leads.
+              description: "Engine replicas are up, but none has held the Lease beekeeper-engine for 5 minutes: nothing observes or decides."
+              runbook_url: https://example.com/runbook#beekeepernoleader
+      - eval_time: 9m
+        alertname: BeekeeperWatchdog
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: BeekeeperInvariantsMissing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              cluster: test
+              layer: workload
+              namespace: beekeeper
+              job: beekeeper/beekeeper-engine
+            exp_annotations:
+              summary: The engine exports no invariants.
+              description: An engine replica is up, but none has exported engine_invariant_violations for 10 minutes, so no invariant alert can fire.
+              runbook_url: https://example.com/runbook#beekeeperinvariantsmissing
+
+  # A replica that never led exports no leader series: still no leader.
+  - name: up and never led
+    interval: 1m
+    input_series:
+      - series: 'up{namespace="beekeeper", job="beekeeper/beekeeper-engine", pod="engine-a"}'
+        values: '1+0x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: BeekeeperNoLeader
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              cluster: test
+              layer: workload
+            exp_annotations:
+              summary: No engine replica leads.
+              description: "Engine replicas are up, but none has held the Lease beekeeper-engine for 5 minutes: nothing observes or decides."
+              runbook_url: https://example.com/runbook#beekeepernoleader
+
+  # Postgres is down: the receiver answers 503 and the engine's buffer overflows.
+  - name: receiver answers 503 and history is dropped
+    interval: 1m
+    input_series:
+      - series: 'up{namespace="beekeeper", job="beekeeper/beekeeper-engine", pod="engine-a"}'
+        values: '1+0x30'
+      - series: 'up{namespace="beekeeper", job="beekeeper/beekeeper-receiver", pod="receiver-a"}'
+        values: '1+0x30'
+      - series: 'leader_election_master_status{namespace="beekeeper", job="beekeeper/beekeeper-engine", pod="engine-a", name="beekeeper-engine"}'
+        values: '1+0x30'
+      - series: 'engine_webhook_deliveries_total{namespace="beekeeper", job="beekeeper/beekeeper-receiver", pod="receiver-a", event="issues", outcome="unavailable"}'
+        values: '0+2x30'
+      - series: 'engine_webhook_deliveries_total{namespace="beekeeper", job="beekeeper/beekeeper-receiver", pod="receiver-a", event="issues", outcome="accepted"}'
+        values: '7+0x30'
+      - series: 'engine_history_dropped_total{namespace="beekeeper", job="beekeeper/beekeeper-engine", pod="engine-a"}'
+        values: '0 0 0 5+0x27'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: BeekeeperReceiverUnavailable
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: BeekeeperReceiverUnavailable
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              cluster: test
+              layer: workload
+            exp_annotations:
+              summary: The webhook receiver answers 503.
+              description: "The receiver has answered deliveries 503 for 10 minutes: it failed to store them in the Postgres inbox, or they didn't fit its in-flight body budget (maxInFlightBytes). GitHub logs them as failed deliveries."
+              runbook_url: https://example.com/runbook#beekeeperreceiverunavailable
+      - eval_time: 2m
+        alertname: BeekeeperHistoryDropped
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: BeekeeperHistoryDropped
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              cluster: test
+              layer: workload
+            exp_annotations:
+              summary: The engine dropped history rows.
+              description: "The engine dropped history rows in the last 15 minutes: Postgres was down long enough to fill the in-memory buffer."
+              runbook_url: https://example.com/runbook#beekeeperhistorydropped
+      - eval_time: 25m
+        alertname: BeekeeperHistoryDropped
+        exp_alerts: []

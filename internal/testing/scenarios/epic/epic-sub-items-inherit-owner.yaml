@@ -1,0 +1,44 @@
+name: epic-sub-items-inherit-owner
+concept: epic
+tags: [phase1, pick]
+description: |
+  Given a Bumblebee epic assigned to alice and its ready, unassigned sub-item in
+  Up Next, with alice and bob both free
+  When the engine decides
+  Then the sub-item's owner is alice, it is picked for alice (not bob), and its
+  would-assign names alice.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#90
+        title: Klaus session resilience
+        assignees: [alice]
+        board: { status: "Up Next ➡️", kind: "Epic 🎯", team: "Bumblebee🐝" }
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        assignees: []
+        parent: giantswarm/roadmap#90
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝" }
+steps:
+  - id: inherits-owner
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      json_path:
+        status.assignees: null
+        status.owner: alice
+        status.eligible.value: true
+        status.shadow.pick.person: alice
+        status.shadow.actions[type=assign].args.login: alice
+      not_contains: ["bob"]
+
+  - id: bob-has-no-pick
+    tool: get_person
+    args: { login: bob }
+    expected:
+      json_path: { status.picks: null, status.held: null }

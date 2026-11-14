@@ -1,0 +1,55 @@
+name: webhook-only-one-path-and-method
+concept: webhook
+tags: [phase1]
+description: |
+  Given the receiver, which serves exactly one route: POST /github/webhook
+  When validly signed requests arrive with GET on that path, and with POST on other paths
+  Then GET is answered 405 and the other paths 404, none of them counts as a delivery,
+  and nothing reads from GitHub.
+pre_configuration:
+  fixture: base
+steps:
+  - id: get-on-the-path
+    tool: webhook_post
+    args:
+      method: GET
+      path: /github/webhook
+      event: ping
+      signature: valid
+      body: { zen: "hello", hook_id: 1 }
+    expected:
+      json_path: { status_code: 405 }
+
+  - id: post-with-trailing-slash
+    tool: webhook_post
+    args:
+      method: POST
+      path: /github/webhook/
+      event: ping
+      signature: valid
+      body: { zen: "hello", hook_id: 1 }
+    expected:
+      json_path: { status_code: 404 }
+
+  - id: post-on-root
+    tool: webhook_post
+    args:
+      method: POST
+      path: /
+      event: ping
+      signature: valid
+      body: { zen: "hello", hook_id: 1 }
+    expected:
+      json_path: { status_code: 404 }
+
+  - id: no-deliveries-counted
+    tool: metric
+    args: { name: engine_webhook_deliveries_total }
+    expected:
+      json_path: { value: 0 }
+
+  - id: no-reads
+    tool: github_calls
+    args: { since_step: get-on-the-path }
+    expected:
+      json_path: { count: 0 }

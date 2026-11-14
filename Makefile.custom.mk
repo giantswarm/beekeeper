@@ -1,99 +1,88 @@
-CONTROLLER_GEN_VERSION := v0.21.0
-ENVTEST_VERSION := release-0.25
+##@ Beekeeper
+
+# The test binaries. hack/test-deps.sh fetches each into BEEKEEPER_TEST_DEPS
+# if it is missing, checked against its published checksum.
+# renovate: datasource=github-releases depName=k3s-io/kine
+KINE_VERSION := 0.14.12
+# k8senv's API server.
+# renovate: datasource=github-releases depName=kubernetes/kubernetes
+KUBE_APISERVER_VERSION := 1.37.2
+# setup-envtest's assets for the RBAC tests.
 ENVTEST_K8S_VERSION := 1.37.0
-GOIMPORTS_VERSION := v0.50.0
+# embedded-postgres's Postgres 18 (its V18).
+POSTGRES_VERSION := 18.3.0
+# promtool, for the alert rules' tests.
+# renovate: datasource=github-releases depName=prometheus/prometheus
+PROMETHEUS_VERSION := 3.16.0
+CONTROLLER_GEN_VERSION := v0.21.0
 
-.PHONY: generate-crds
-generate-crds: ## Regenerate the beekeeper.giantswarm.io deepcopy code and CRDs from pkg/apis (config/crd, and the chart's copy in helm/beekeeper/crds), imports as pre-commit's go-imports writes them.
-	go run sigs.k8s.io/controller-tools/cmd/controller-gen@$(CONTROLLER_GEN_VERSION) \
-		object paths=./pkg/apis/... crd:crdVersions=v1 output:crd:dir=./config/crd
-	rm -f helm/beekeeper/crds/*.yaml && cp config/crd/*.yaml helm/beekeeper/crds/
-	go run golang.org/x/tools/cmd/goimports@$(GOIMPORTS_VERSION) -w -local github.com/giantswarm/beekeeper pkg/apis
+BEEKEEPER_TEST_DEPS ?= $(or $(XDG_CACHE_HOME),$(HOME)/.cache)/beekeeper/test-deps
+ENVTEST_ASSETS = $(BEEKEEPER_TEST_DEPS)/envtest/k8s/$(ENVTEST_K8S_VERSION)-$(shell go env GOOS)-$(shell go env GOARCH)
+PROMTOOL = $(BEEKEEPER_TEST_DEPS)/prometheus-$(PROMETHEUS_VERSION)/promtool
 
-.PHONY: check-crds
-check-crds: generate-crds ## Fail when the committed CRDs (config/crd, helm/beekeeper/crds) or deepcopy code are not what pkg/apis generates.
-	git diff --exit-code -- config/crd helm/beekeeper/crds pkg/apis
+export BEEKEEPER_TEST_DEPS KINE_VERSION KUBE_APISERVER_VERSION ENVTEST_K8S_VERSION POSTGRES_VERSION PROMETHEUS_VERSION CONTROLLER_GEN_VERSION
 
-.PHONY: test-envtest
-test-envtest: ## Run the envtest-backed tests of the Kubernetes store and beekeeper serve, and optional mailbox tests (set BEEKEEPER_TEST_DATABASE_URL for Postgres).
-	assets="$$(go run sigs.k8s.io/controller-runtime/tools/setup-envtest@$(ENVTEST_VERSION) use $(ENVTEST_K8S_VERSION) -p path)" && \
-		KUBEBUILDER_ASSETS="$$assets" go test ./internal/state/kube/ ./internal/mailbox/ ./cmd/ -run 'Envtest|Mailbox' -count=1 -v
+.PHONY: test-deps
+test-deps: ## Fetch the test binaries (kine, kube-apiserver, envtest, the embedded Postgres) into BEEKEEPER_TEST_DEPS, each if missing.
+	hack/test-deps.sh kine kube-apiserver envtest postgres
 
-HELM_UNITTEST_VERSION := 1.0.3
-# The release tarball's sha256 per platform, from the release's helm-unittest-checksum.sha: pinned here,
-# so installing the plugin fetches the tarball alone (with retries), never a checksum file at job time.
-HELM_UNITTEST_SHA256_linux-amd64 := 9761f23d9509c98770c026e019e743b524b57010f4bc29175f78d2582ace0633
-HELM_UNITTEST_SHA256_linux-arm64 := 1e645d96b36582cd8b9fbd53240110267f14d80aa01137341251c60438bbe6b0
-HELM_UNITTEST_SHA256_macos-amd64 := 46413a86ded6bfc70cd704ebac16f8d4a0f36712ae399a5d24e32bc44f96985f
-HELM_UNITTEST_SHA256_macos-arm64 := 6a6b67b3f638f015e09c093b67c7609a07101b971a1a6d6a83d1a7f75861a4b2
-HELM_UNITTEST_PLATFORM := $(shell uname -s | sed 's/Linux/linux/;s/Darwin/macos/')-$(shell uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
-HELM_UNITTEST_TGZ := helm-unittest-$(HELM_UNITTEST_PLATFORM)-$(HELM_UNITTEST_VERSION).tgz
+.PHONY: test-deps-versions
+test-deps-versions: ## Print the test binaries' versions (CI keys its cache of BEEKEEPER_TEST_DEPS on them).
+	@echo "kine $(KINE_VERSION) kube-apiserver $(KUBE_APISERVER_VERSION) envtest $(ENVTEST_K8S_VERSION) postgres $(POSTGRES_VERSION) prometheus $(PROMETHEUS_VERSION)"
 
-.PHONY: helm-unittest-install
-helm-unittest-install: ## Install the pinned helm-unittest plugin from its release tarball, verified against the checksum pinned above (no-op when installed).
-	@have=$$(helm plugin list 2>/dev/null | awk '$$1 == "unittest" {print $$2}'); \
-	[ "$$have" = "$(HELM_UNITTEST_VERSION)" ] && exit 0; \
-	[ -z "$$have" ] || helm plugin uninstall unittest || exit 1; \
-	sha="$(HELM_UNITTEST_SHA256_$(HELM_UNITTEST_PLATFORM))"; \
-	test -n "$$sha" || { echo "helm-unittest: no pinned checksum for $(HELM_UNITTEST_PLATFORM)"; exit 1; }; \
-	tmp="$$(mktemp -d)" && trap 'rm -rf "$$tmp"' EXIT; \
-	curl -sSfL --retry 3 --retry-all-errors -o "$$tmp/$(HELM_UNITTEST_TGZ)" \
-		"https://github.com/helm-unittest/helm-unittest/releases/download/v$(HELM_UNITTEST_VERSION)/$(HELM_UNITTEST_TGZ)" && \
-	(cd "$$tmp" && echo "$$sha  $(HELM_UNITTEST_TGZ)" | \
-		if command -v sha256sum >/dev/null 2>&1; then sha256sum -c -; else shasum -a 256 -c -; fi) && \
-	dir="$$(helm env HELM_PLUGINS)/unittest" && mkdir -p "$$dir" && tar -xzf "$$tmp/$(HELM_UNITTEST_TGZ)" -C "$$dir" && \
-	helm plugin list | grep -q '^unittest'
+# `make test` is generated (Makefile.gen.go.mk: go test ./..., with -race where
+# a C toolchain exists; Makefile.gen.app.mk adds helm-test). It is what CI's
+# go-build job runs. The unit tests, the scenarios and the RBAC tests need
+# their binaries first.
+test: test-deps
 
-# The generated helm-test target also requires install-helm-unittest.
-# Run our pinned installer first, so that target sees the exact version
-# already installed and never runs the upstream hook/checksum downloader.
-install-helm-unittest: helm-unittest-install
-
-.PHONY: helm-test
-helm-test: helm-unittest-install ## Lint the chart and run its helm-unittest suites (what CI's chart-test job runs).
-	helm lint helm/beekeeper
-	helm unittest helm/beekeeper
-
-.PHONY: tools-doc
-tools-doc: ## Regenerate docs/tools.md, every tool's description and input schema as a model reads them, from the registered tools.
-	TOOLS_DOC_UPDATE=1 go test -count=1 -run TestToolsDocIsCurrent ./cmd/
-
-.PHONY: test-loop-workflow
-test-loop-workflow: ## Exercise the real supervisor/parser/gate workflow with local Git and GitHub fixtures.
-	env -u BEEKEEPER_TEST_LOOP_BINARY LANG=C.UTF-8 go test -tags=integration ./internal/loopworkflow -count=1 -timeout=12m
-
-.PHONY: test-scenarios
-test-scenarios: ## Run the behavioral scenarios (docs/scenarios.md) against the real binary, each in its own namespace sandbox, and the tests of the scenario clock and of the fake harnesses. Set BEEKEEPER_SCENARIO_FLOW, _TAG, _SHARD or _REPORT.
-	go test -tags scenario ./internal/clock ./internal/scenario/... -count=1 -timeout=15m -v
-
-.PHONY: test-gh-contract
-test-gh-contract: ## On demand: compare the scenarios' fake gh with the real gh on PATH against the same fake GitHub (docs/scenarios-github.md).
-	BEEKEEPER_GH_CONTRACT=1 go test -tags scenario ./internal/scenario/fakegithub -run '^TestContractWithRealGH$$' -count=1 -timeout=5m -v
-
-.PHONY: install-cosign-retry
-install-cosign-retry: ## Retry Rekor's conflict lookup race in the later steps of this CircleCI job.
-	bash .circleci/install-cosign-retry.sh
-
-# The generated go-build job runs make test before it signs the binaries, and
-# align owns that job: this is where the repository can reach its later steps.
-ifeq ($(CIRCLE_JOB),go-build)
-test: install-cosign-retry
+# go-build runs `make test` as root, where Postgres' initdb refuses to run:
+# there each test binary runs as an unprivileged user (hack/run-unprivileged.sh).
+ifeq ($(shell id -u),0)
+test: export GOFLAGS := $(strip $(GOFLAGS) -exec=$(CURDIR)/hack/run-unprivileged.sh)
+test: test-unprivileged
 endif
 
-# The generated go-build release prerequisite invokes make test. Keep the same
-# uncached regression mandatory there, so publication cannot bypass this suite.
-test: test-loop-workflow
+.PHONY: test-unprivileged
+test-unprivileged: test-deps
+	hack/run-unprivileged.sh --setup
 
-.PHONY: browse-upload-live
-browse-upload-live: ## Check browse --file against the installed Claude CLI and connected Chrome.
-	go test -tags browselive -run '^TestBrowseUploadLive$$' -count=1 -timeout=10m ./cmd
+.PHONY: test-race
+test-race: test-deps ## Run every test, the scenarios included, with the race detector (needs a C toolchain): CI's test-loop-workflow.
+	CGO_ENABLED=1 go test -race -count=1 -timeout=20m ./...
 
-PERF_TEST := go test -tags perf ./internal/perfsuite -count=1 -timeout=40m -v
+.PHONY: test-envtest
+test-envtest: test-deps ## Run the RBAC tests: the chart's RBAC against envtest's kube-apiserver.
+	KUBEBUILDER_ASSETS="$(ENVTEST_ASSETS)" go test -count=1 -v ./internal/rbactest/...
 
-.PHONY: test-performance
-test-performance: ## Run the performance budgets (docs/performance.md). CI runs it; outside CI it refuses to run without a cgroup limit.
-	BEEKEEPER_PERF=1 $(PERF_TEST)
+.PHONY: test-large-history
+test-large-history: test-deps ## Replay a generated history of 10,000 decisions.
+	go test -count=1 -timeout=20m -v -run '^TestLargeHistory$$' ./internal/replay
 
-.PHONY: test-performance-local
-test-performance-local: ## Opt-in local run of the performance budgets, inside a cgroup limited to one core and 1 GiB. Never on a desk's coordinator.
-	systemd-run --user --scope --quiet -p CPUQuota=100% -p MemoryMax=1G -- env BEEKEEPER_PERF=1 $(PERF_TEST)
+.PHONY: test-alerts
+test-alerts: ## Test every alert rule of the chart with promtool (fetches promtool into BEEKEEPER_TEST_DEPS if missing).
+	hack/test-deps.sh promtool
+	PROMTOOL="$(PROMTOOL)" hack/test-alerts.sh
+
+.PHONY: helm-template-prod
+helm-template-prod: ## Lint and render the chart with its defaults and with production-like values (helm/beekeeper/ci/ci-values.yaml).
+	helm lint --strict helm/beekeeper
+	helm lint --strict helm/beekeeper --values helm/beekeeper/ci/ci-values.yaml
+	helm template beekeeper helm/beekeeper --namespace beekeeper >/dev/null
+	helm template beekeeper helm/beekeeper --namespace beekeeper --values helm/beekeeper/ci/ci-values.yaml
+
+.PHONY: generate
+generate: ## Regenerate the deepcopy code and the CRDs (config/crd) from api/, and copy the CRDs into the chart.
+	hack/crds.sh generate
+
+.PHONY: check-crds
+check-crds: ## Fail when the deepcopy code, config/crd or the chart's CRDs are not what api/ generates.
+	hack/crds.sh check
+
+.PHONY: chart-docs
+chart-docs: ## Regenerate the chart's values.schema.json and README.md from values.yaml, as pre-commit checks them.
+	hack/chart-docs.sh
+
+.PHONY: catalogue
+catalogue: ## Lint the scenarios and write their catalogue (internal/testing/scenarios/CATALOGUE.md).
+	go run ./internal/testing/scenariolint internal/testing/scenarios

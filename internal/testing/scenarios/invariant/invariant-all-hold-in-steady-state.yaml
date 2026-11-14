@@ -1,0 +1,141 @@
+name: invariant-all-hold-in-steady-state
+concept: invariant
+tags: [phase1]
+description: |
+  Given a busy team with a team cap of 1 item: an item implementing, one with its PR waiting
+  on CI, one whose PR is merged and waiting on the merge-result check, and two Up Next items:
+  the older one picked for alice, the other held for bob by the team cap
+  When half an hour of resyncs and freshness checks pass without a fault
+  Then every invariant of §1.5 is exported (one series each) with value 0, including
+  stage-age-under-p90 and pending-run-placed, which are always 0 in phase 1.
+pre_configuration:
+  fixture: base
+  config:
+    teams: [{ name: bumblebee, cap: { items: 1 } }]
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        assignees: [alice]
+        board: { status: "In Progress ⛏️", kind: "Story 📑", team: "Bumblebee🐝" }
+      - ref: giantswarm/roadmap#102
+        title: Expose klaus session metrics
+        body: |
+          ### Acceptance criteria
+          - [ ] a metric per session state
+          Repo: giantswarm/klaus
+        assignees: [bob]
+        board: { status: "In Progress ⛏️", kind: "Story 📑", team: "Bumblebee🐝" }
+      - ref: giantswarm/roadmap#103
+        title: Document muster tool filters
+        body: |
+          ### Acceptance criteria
+          - [ ] every filter has an example
+          Repo: giantswarm/muster
+        assignees: [alice]
+        board: { status: "In Progress ⛏️", kind: "Task 🗒️", team: "Bumblebee🐝" }
+      - ref: giantswarm/roadmap#104
+        title: Cache muster tool listings
+        body: |
+          ### Acceptance criteria
+          - [ ] a second listing is served from cache
+          Repo: giantswarm/muster
+        assignees: []
+        createdAt: "2026-11-09T10:00:00Z"
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝" }
+      - ref: giantswarm/roadmap#105
+        title: Log klaus session transitions
+        body: |
+          ### Acceptance criteria
+          - [ ] one log line per transition
+          Repo: giantswarm/klaus
+        assignees: []
+        createdAt: "2026-11-10T10:00:00Z"
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝" }
+    pulls:
+      - ref: giantswarm/klaus#55
+        author: alice
+        head: a1
+        closes: [giantswarm/roadmap#101]
+        checks:
+          - { name: "ci/circleci: go-build", status: completed, conclusion: success }
+          - { name: "ci/circleci: go-test", status: in_progress }
+      - ref: giantswarm/klaus#56
+        author: bob
+        head: b1
+        closes: [giantswarm/roadmap#102]
+        checks:
+          - { name: "ci/circleci: go-build", status: completed, conclusion: success }
+          - { name: "ci/circleci: go-test", status: completed, conclusion: success }
+steps:
+  - id: bob-merges
+    tool: github_pr_merge
+    args: { ref: giantswarm/klaus#56, merge_sha: m1, by: bob }
+
+  - id: half-an-hour
+    tool: clock_advance
+    args: { by: 30m }
+
+  - id: merge-result-awaited
+    tool: get_change
+    args: { ref: giantswarm/klaus#56 }
+    expected:
+      json_path: { status.mergeResult.sha: m1, status.wait.on: ci, status.wait.ref: "ci:giantswarm/klaus@m1" }
+
+  - id: picked-and-held
+    tool: get_team
+    args: { name: bumblebee }
+    expected:
+      json_path:
+        status.wip: { items: 0, epics: 0 }
+        status.picks: [{ person: alice, item: giantswarm/roadmap#104 }]
+        status.held: [{ person: bob, item: giantswarm/roadmap#105, gate: TeamCap }]
+
+  - id: wip-has-run-or-wait
+    tool: metric
+    args: { name: engine_invariant_violations, labels: { invariant: wip-has-run-or-wait } }
+    expected: { json_path: { value: 0, series: 1 } }
+
+  - id: wait-within-deadline
+    tool: metric
+    args: { name: engine_invariant_violations, labels: { invariant: wait-within-deadline } }
+    expected: { json_path: { value: 0, series: 1 } }
+
+  - id: stage-age-under-p90
+    tool: metric
+    args: { name: engine_invariant_violations, labels: { invariant: stage-age-under-p90 } }
+    expected: { json_path: { value: 0, series: 1 } }
+
+  - id: refusal-not-repeated
+    tool: metric
+    args: { name: engine_invariant_violations, labels: { invariant: refusal-not-repeated } }
+    expected: { json_path: { value: 0, series: 1 } }
+
+  - id: source-fresh-or-degraded
+    tool: metric
+    args: { name: engine_invariant_violations, labels: { invariant: source-fresh-or-degraded } }
+    expected: { json_path: { value: 0, series: 1 } }
+
+  - id: gate-not-holding-repair
+    tool: metric
+    args: { name: engine_invariant_violations, labels: { invariant: gate-not-holding-repair } }
+    expected: { json_path: { value: 0, series: 1 } }
+
+  - id: pending-run-placed
+    tool: metric
+    args: { name: engine_invariant_violations, labels: { invariant: pending-run-placed } }
+    expected: { json_path: { value: 0, series: 1 } }
+
+  - id: merge-reaches-result-check
+    tool: metric
+    args: { name: engine_invariant_violations, labels: { invariant: merge-reaches-result-check } }
+    expected: { json_path: { value: 0, series: 1 } }
+
+  - id: leader-decides
+    tool: metric
+    args: { name: engine_invariant_violations, labels: { invariant: leader-decides } }
+    expected: { json_path: { value: 0, series: 1 } }

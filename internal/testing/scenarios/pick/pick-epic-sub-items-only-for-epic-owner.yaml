@@ -1,0 +1,80 @@
+name: pick-epic-sub-items-only-for-epic-owner
+concept: pick
+tags: [phase1]
+description: |
+  Given an Active epic owned by alice with two unassigned sub-items in Up Next
+  (#111, Priority 1, and #112, Priority 2), which rank above a standalone item
+  (#102, Priority 1)
+  When the engine picks
+  Then alice's one item of WIP goes to #111; #112 still ranks above #102 but is
+  only for alice, so bob gets #102, never her epic's sub-item, and #112 is neither
+  picked nor held.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#90
+        title: Klaus session resilience
+        assignees: [alice]
+        board: { status: "In Progress ⛏️", kind: "Epic 🎯", team: "Bumblebee🐝" }
+      - ref: giantswarm/roadmap#110
+        title: Reconnect klaus sessions after a gateway restart
+        body: |
+          ### Acceptance criteria
+          - [x] sessions reconnect within 30s
+          Repo: giantswarm/klaus
+        assignees: [alice]
+        state: closed
+        parent: giantswarm/roadmap#90
+        board: { status: "Done ✅", kind: "Story 📑", team: "Bumblebee🐝" }
+      - ref: giantswarm/roadmap#111
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        parent: giantswarm/roadmap#90
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝", priority: 1 }
+      - ref: giantswarm/roadmap#112
+        title: Report klaus session restarts in muster
+        body: |
+          ### Acceptance criteria
+          - [ ] a counter of session restarts per gateway
+          Repo: giantswarm/muster
+        parent: giantswarm/roadmap#90
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝", priority: 2 }
+      - ref: giantswarm/roadmap#102
+        title: Count muster tool calls by outcome
+        body: |
+          ### Acceptance criteria
+          - [ ] a counter per tool call outcome
+          Repo: giantswarm/muster
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝", priority: 1 }
+steps:
+  - id: picks
+    tool: get_team
+    args: { name: bumblebee }
+    expected:
+      json_path:
+        status.picks:
+          - { person: alice, item: giantswarm/roadmap#111 }
+          - { person: bob, item: giantswarm/roadmap#102 }
+        status.held: null
+
+  - id: sub-item-not-given-to-bob
+    description: It ranks above bob's item, yet only the epic's owner may take it
+    tool: get_item
+    args: { ref: giantswarm/roadmap#112 }
+    expected:
+      json_path:
+        status.owner: alice
+        status.eligible.value: true
+        status.shadow.pick: null
+        status.shadow.heldBy: null
+        status.shadow.actions: null
+
+  - id: bob-takes-the-standalone-item
+    tool: get_item
+    args: { ref: giantswarm/roadmap#102 }
+    expected:
+      json_path: { status.shadow.pick: { person: bob, rank: 3 } }

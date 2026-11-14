@@ -1,0 +1,63 @@
+name: board-item-in-team-becomes-item
+concept: board
+tags: [phase1, scope]
+description: |
+  Given an open issue that is not on the board yet
+  When a person adds it to the board as a Bumblebee story in Up Next
+  (projects_v2_item.created)
+  Then the engine resolves the board item, and an Item exists with the issue and
+  board fields, class Implementable, phase Ready, observed through the webhook.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        assignees: []
+steps:
+  - id: not-an-item-yet
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      success: false
+      error_contains: ["not found"]
+
+  - id: added-to-board
+    description: A person adds the issue to the board in the team's Up Next
+    tool: github_board_add
+    args:
+      issue: giantswarm/roadmap#101
+      board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝", priority: 2 }
+
+  - id: item-created
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      json_path:
+        status.issue.repo: giantswarm/roadmap
+        status.issue.number: 101
+        status.issue.title: Retry transient errors in the klaus client
+        status.issue.state: open
+        status.board.status: "Up Next ➡️"
+        status.board.kind: "Story 📑"
+        status.board.team: "Bumblebee🐝"
+        status.board.priority: 2
+        status.class: Implementable
+        status.phase: Ready
+        status.observed.source: webhook
+
+  - id: observed-once-by-webhook
+    tool: events
+    args: { item: giantswarm/roadmap#101, type: observed, since_step: added-to-board }
+    expected:
+      json_path: { count: 1, rows.0.source: webhook }
+
+  - id: not-missed
+    tool: metric
+    args: { name: engine_webhook_missed_total }
+    expected:
+      json_path: { value: 0 }

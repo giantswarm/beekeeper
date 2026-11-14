@@ -1,0 +1,124 @@
+{{- define "beekeeper.alert.labels" -}}
+{{- $labels := merge (dict "severity" .severity) (.extra | default dict) .root.Values.prometheusRule.alertLabels }}
+{{- toYaml $labels }}
+{{- end }}
+
+{{- define "beekeeper.alert.runbook" -}}
+{{- with .root.Values.prometheusRule.runbookURL }}
+{{- printf "runbook_url: %q" (printf "%s#%s" . ($.alert | lower)) | nindent 12 }}
+{{- end }}
+{{- end }}
+
+{{- if .Values.prometheusRule.enabled }}
+{{- $engine := include "beekeeper.promql.engine" . }}
+{{- $receiver := include "beekeeper.promql.receiver" . }}
+{{- $leaseName := include "beekeeper.leaderElectionID" . }}
+{{- $leader := printf "%s, name=%q" $engine $leaseName }}
+{{- $sev := .Values.prometheusRule.severities }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "beekeeper.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "beekeeper.labels" . | nindent 4 }}
+    {{- with .Values.prometheusRule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+# hack/test-alerts.sh renders this template and tests every rule with
+# promtool: it takes the lines below `spec:` as the rule file.
+spec:
+  groups:
+    - name: beekeeper
+      rules:
+        - alert: BeekeeperInvariantViolated
+          expr: max by (invariant) (engine_invariant_violations{ {{ $engine }} }) > 0
+          for: 10m
+          labels:
+            {{- include "beekeeper.alert.labels" (dict "root" $ "severity" $sev.invariantViolated) | nindent 12 }}
+          annotations:
+            summary: {{ `The engine invariant {{ $labels.invariant }} is violated.` | quote }}
+            description: {{ `{{ $value }} objects have violated the invariant {{ $labels.invariant }} for 10 minutes.` | quote }}
+            {{- include "beekeeper.alert.runbook" (dict "root" $ "alert" "BeekeeperInvariantViolated") }}
+        - alert: BeekeeperInvariantsMissing
+          expr: absent(engine_invariant_violations{ {{ $engine }} }) and on() (max(up{ {{ $engine }} }) == 1)
+          for: 10m
+          labels:
+            {{- include "beekeeper.alert.labels" (dict "root" $ "severity" $sev.invariantsMissing) | nindent 12 }}
+          annotations:
+            summary: "The engine exports no invariants."
+            description: "An engine replica is up, but none has exported engine_invariant_violations for 10 minutes, so no invariant alert can fire."
+            {{- include "beekeeper.alert.runbook" (dict "root" $ "alert" "BeekeeperInvariantsMissing") }}
+        - alert: BeekeeperReconcileErrors
+          expr: sum by (controller) (rate(engine_reconcile_errors_total{ {{ $engine }} }[5m])) > 0
+          for: 15m
+          labels:
+            {{- include "beekeeper.alert.labels" (dict "root" $ "severity" $sev.reconcileErrors) | nindent 12 }}
+          annotations:
+            summary: {{ `The engine's {{ $labels.controller }} reconciler keeps failing.` | quote }}
+            description: {{ `The {{ $labels.controller }} reconciler has returned errors for 15 minutes.` | quote }}
+            {{- include "beekeeper.alert.runbook" (dict "root" $ "alert" "BeekeeperReconcileErrors") }}
+        - alert: BeekeeperNoLeader
+          expr: (max(leader_election_master_status{ {{ $leader }} }) or on() vector(0)) < 1 and on() (max(up{ {{ $engine }} }) == 1)
+          for: 5m
+          labels:
+            {{- include "beekeeper.alert.labels" (dict "root" $ "severity" $sev.noLeader) | nindent 12 }}
+          annotations:
+            summary: "No engine replica leads."
+            description: {{ printf "Engine replicas are up, but none has held the Lease %s for 5 minutes: nothing observes or decides." $leaseName | quote }}
+            {{- include "beekeeper.alert.runbook" (dict "root" $ "alert" "BeekeeperNoLeader") }}
+        - alert: BeekeeperEngineDown
+          expr: absent(up{ {{ $engine }} } == 1)
+          for: 10m
+          labels:
+            {{- include "beekeeper.alert.labels" (dict "root" $ "severity" $sev.engineDown) | nindent 12 }}
+          annotations:
+            summary: "No engine replica is up."
+            description: "Prometheus has scraped no engine replica successfully for 10 minutes."
+            {{- include "beekeeper.alert.runbook" (dict "root" $ "alert" "BeekeeperEngineDown") }}
+        - alert: BeekeeperReceiverDown
+          expr: absent(up{ {{ $receiver }} } == 1)
+          for: 10m
+          labels:
+            {{- include "beekeeper.alert.labels" (dict "root" $ "severity" $sev.receiverDown) | nindent 12 }}
+          annotations:
+            summary: "No webhook receiver is up."
+            description: "Prometheus has scraped no receiver replica successfully for 10 minutes. GitHub's deliveries fail; the engine finds them in the delivery log and polls."
+            {{- include "beekeeper.alert.runbook" (dict "root" $ "alert" "BeekeeperReceiverDown") }}
+        - alert: BeekeeperReceiverUnavailable
+          expr: sum(rate(engine_webhook_deliveries_total{ {{ $receiver }}, outcome="unavailable" }[5m])) > 0
+          for: 10m
+          labels:
+            {{- include "beekeeper.alert.labels" (dict "root" $ "severity" $sev.receiverUnavailable) | nindent 12 }}
+          annotations:
+            summary: "The webhook receiver answers 503."
+            description: "The receiver has answered deliveries 503 for 10 minutes: it failed to store them in the Postgres inbox, or they didn't fit its in-flight body budget (maxInFlightBytes). GitHub logs them as failed deliveries."
+            {{- include "beekeeper.alert.runbook" (dict "root" $ "alert" "BeekeeperReceiverUnavailable") }}
+        - alert: BeekeeperSourceDegraded
+          expr: max by (source) (engine_source_degraded{ {{ $engine }} }) > 0
+          for: 30m
+          labels:
+            {{- include "beekeeper.alert.labels" (dict "root" $ "severity" $sev.sourceDegraded) | nindent 12 }}
+          annotations:
+            summary: {{ `The source {{ $labels.source }} is degraded.` | quote }}
+            description: {{ `The engine has found {{ $labels.source }} degraded for 30 minutes and polls instead. The Installation's status.sources holds the reason.` | quote }}
+            {{- include "beekeeper.alert.runbook" (dict "root" $ "alert" "BeekeeperSourceDegraded") }}
+        - alert: BeekeeperHistoryDropped
+          expr: sum(increase(engine_history_dropped_total{ {{ $engine }} }[15m])) > 0
+          labels:
+            {{- include "beekeeper.alert.labels" (dict "root" $ "severity" $sev.historyDropped) | nindent 12 }}
+          annotations:
+            summary: "The engine dropped history rows."
+            description: "The engine dropped history rows in the last 15 minutes: Postgres was down long enough to fill the in-memory buffer."
+            {{- include "beekeeper.alert.runbook" (dict "root" $ "alert" "BeekeeperHistoryDropped") }}
+        {{- if .Values.prometheusRule.watchdog.enabled }}
+        - alert: BeekeeperWatchdog
+          expr: max(leader_election_master_status{ {{ $leader }} }) == 1
+          labels:
+            {{- include "beekeeper.alert.labels" (dict "root" $ "severity" "none" "extra" .Values.prometheusRule.watchdog.labels) | nindent 12 }}
+          annotations:
+            summary: "An engine replica leads (watchdog)."
+            description: "Fires while an engine replica leads. Route it to a dead-man's switch: when it stops arriving, the engine or its alerting is down."
+            {{- include "beekeeper.alert.runbook" (dict "root" $ "alert" "BeekeeperWatchdog") }}
+        {{- end }}
+{{- end }}

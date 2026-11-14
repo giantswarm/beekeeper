@@ -1,0 +1,24 @@
+{{- if .Values.podMonitor.enabled }}
+{{- range $component := list "engine" "receiver" }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  # The job of its series is <namespace>/<name>: the alert rules select by it.
+  name: {{ include (printf "beekeeper.%s.name" $component) $ }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include (printf "beekeeper.%s.labels" $component) $ | nindent 4 }}
+    {{- with $.Values.podMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include (printf "beekeeper.%s.selectorLabels" $component) $ | nindent 6 }}
+  podMetricsEndpoints:
+    - port: metrics
+      path: /metrics
+      interval: {{ $.Values.podMonitor.interval }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,60 @@
+name: eligibility-team-not-opted-in-for-work
+concept: eligibility
+tags: [phase1, configuration]
+description: |
+  Given a ready Up Next item assigned to alice, eligible and picked for her
+  When the configuration is changed so the team opts in to no kinds of work
+  (optIn.work: [])
+  Then the item is still observed but not eligible (TeamNotOptedIn), nobody has a
+  pick, and no further would-action is recorded.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        assignees: [alice]
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝" }
+steps:
+  - id: picked
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      json_path: { status.eligible.value: true, status.shadow.pick.person: alice }
+
+  - id: opted-out
+    tool: config_apply
+    args:
+      teams: [{ name: bumblebee, optIn: { work: [] } }]
+
+  - id: not-opted-in
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      json_path:
+        status.phase: Ready
+        status.eligible.value: false
+        status.eligible.reasons: [TeamNotOptedIn]
+        status.shadow.pick: null
+
+  - id: no-picks
+    tool: get_person
+    args: { login: alice }
+    expected:
+      json_path: { status.picks: null }
+
+  - id: nothing-eligible
+    tool: list_items
+    args: { team: bumblebee, eligible: true }
+    expected:
+      json_path: { count: 0 }
+
+  - id: no-new-would-actions
+    tool: events
+    args: { type: shadow.action, since_step: opted-out }
+    expected:
+      json_path: { count: 0 }

@@ -1,0 +1,131 @@
+name: budget-reserve-defers-observation
+concept: budget
+tags: [phase1, learning-api-budget]
+description: |
+  Given a Change waiting on CI, and other users of the same GitHub App who leave
+  only 900 of the 5,000 REST calls, below the 20% observation reserve, until 09:30
+  When the engine learns this from the rate-limit headers of its next REST read
+  (the 09:15 Changes resync; the delivery log is read on the App's own bucket), and CI
+  then completes and its webhook arrives
+  Then REST observation is deferred until the reset on the engine's clock: the Budget
+  shows it deferred, the wait the webhook woke shows unobserved with reason budget, and no
+  REST call is made; GraphQL and the delivery log, tracked separately, carry on, so the
+  webhooks source stays fresh. When the reset time passes the deferred reads run, the CI
+  result is seen, and the delivered webhook is not counted as missed.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        assignees: [alice]
+        board: { status: "In Progress ⛏️", kind: "Story 📑", team: "Bumblebee🐝" }
+    pulls:
+      - ref: giantswarm/klaus#55
+        author: alice
+        head: a1
+        closes: [giantswarm/roadmap#101]
+        checks:
+          - { name: "ci/circleci: go-build", status: completed, conclusion: success }
+          - { name: "ci/circleci: go-test", status: in_progress }
+steps:
+  - id: other-users-spend
+    tool: github_fault
+    args: { kind: rate_limit, api: rest, remaining: 900, reset_in: 30m }
+
+  - id: engine-learns
+    description: The 09:15 Changes resync's first REST read returns the headers
+    tool: clock_advance
+    args: { by: 15m }
+
+  - id: rest-deferred
+    tool: get_budget
+    expected:
+      json_path:
+        status.rest.resetAt: "2026-11-16T09:30:00Z"
+        status.deferred.rest: true
+        status.deferred.graphql: false
+      json_path_max: { status.rest.remaining: 900 }
+
+  - id: ci-completes
+    description: The webhook arrives; reading the check runs it announces is deferred
+    tool: github_check_run
+    args: { repo: giantswarm/klaus, sha: a1, name: "ci/circleci: go-test", status: completed, conclusion: success }
+
+  - id: wait-unobserved
+    tool: get_change
+    args: { ref: giantswarm/klaus#55 }
+    expected:
+      json_path:
+        status.ci.state: pending
+        status.wait.on: ci
+        status.wait.state: unobserved
+        status.wait.reason: budget
+
+  - id: deferred-until-0929
+    description: The board resync and probe at 09:20 and the delivery-log checks fall in here
+    tool: clock_advance
+    args: { by: 14m }
+
+  - id: no-rest-while-deferred
+    tool: github_calls
+    args: { since_step: ci-completes, api: rest }
+    expected:
+      json_path: { count: 0 }
+
+  - id: board-still-read
+    description: GraphQL is a separate budget; board resyncs and probes go on
+    tool: github_calls
+    args: { since_step: ci-completes, api: graphql }
+    expected:
+      json_path_min: { count: 2 }
+
+  - id: delivery-log-still-read
+    description: The delivery log uses the App's own bucket (09:20 and 09:25)
+    tool: github_calls
+    args: { since_step: ci-completes, api: app, operation: apps/list-webhook-deliveries }
+    expected:
+      json_path: { count: 2 }
+
+  - id: webhooks-fresh
+    tool: get_installation
+    expected:
+      json_path: { status.sources.webhooks.state: fresh }
+
+  - id: ci-not-seen-yet
+    tool: get_change
+    args: { ref: giantswarm/klaus#55 }
+    expected:
+      json_path: { status.ci.state: pending, status.wait.state: unobserved }
+
+  - id: reset-passes
+    tool: clock_advance
+    args: { by: 1m }
+
+  - id: observation-resumes
+    tool: get_budget
+    expected:
+      json_path: { status.deferred.rest: false }
+      json_path_min: { status.rest.remaining: 4990 }
+
+  - id: deferred-reads-ran
+    tool: github_calls
+    args: { since_step: reset-passes, method: GET, path: /repos/giantswarm/klaus/commits/a1/check-runs }
+    expected:
+      json_path_min: { count: 1 }
+
+  - id: ci-seen
+    tool: get_change
+    args: { ref: giantswarm/klaus#55 }
+    expected:
+      json_path: { status.ci.state: green, status.wait.on: review, status.wait.state: watching }
+
+  - id: delivered-webhook-not-missed
+    tool: metric
+    args: { name: engine_webhook_missed_total }
+    expected:
+      json_path: { value: 0 }

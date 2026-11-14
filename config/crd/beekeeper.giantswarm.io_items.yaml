@@ -1,0 +1,352 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: items.beekeeper.giantswarm.io
+spec:
+  group: beekeeper.giantswarm.io
+  names:
+    kind: Item
+    listKind: ItemList
+    plural: items
+    singular: item
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.class
+      name: Class
+      type: string
+    - jsonPath: .status.eligible.value
+      name: Eligible
+      type: boolean
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Item is a tracked board item.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: 'ItemSpec is empty: Items are engine-owned.'
+            type: object
+          status:
+            description: ItemStatus is everything the engine observed and decided
+              about a board item.
+            properties:
+              acceptanceCriteria:
+                type: boolean
+              assignees:
+                items:
+                  type: string
+                type: array
+              blockedBy:
+                items:
+                  description: Blocker is an issue that blocks this item.
+                  properties:
+                    ref:
+                      type: string
+                    state:
+                      type: string
+                  required:
+                  - ref
+                  - state
+                  type: object
+                type: array
+              blockedByTotal:
+                type: integer
+              board:
+                description: ItemBoard holds the board fields of the item.
+                properties:
+                  kind:
+                    type: string
+                  nodeId:
+                    description: NodeID is the board item's GraphQL node id (PVTI_…).
+                    type: string
+                  priority:
+                    type: integer
+                  status:
+                    type: string
+                  team:
+                    type: string
+                  updatedAt:
+                    description: UpdatedAt is the board item's last update as GitHub
+                      reports it.
+                    format: date-time
+                    type: string
+                type: object
+              changes:
+                description: Changes are the PRs that close the item.
+                items:
+                  type: string
+                type: array
+              class:
+                type: string
+              eligible:
+                description: Eligibility says whether the engine may start the item
+                  (design §6.1).
+                properties:
+                  reasons:
+                    items:
+                      type: string
+                    type: array
+                  value:
+                    type: boolean
+                required:
+                - value
+                type: object
+              footprint:
+                items:
+                  type: string
+                type: array
+              inScope:
+                description: InScope is false for items read only for their links
+                  (e.g. a blocker on another team).
+                type: boolean
+              issue:
+                description: ItemIssue is the issue behind a board item.
+                properties:
+                  body:
+                    type: string
+                  createdAt:
+                    format: date-time
+                    type: string
+                  labels:
+                    items:
+                      type: string
+                    type: array
+                  nodeId:
+                    description: NodeID is the issue's GraphQL node id.
+                    type: string
+                  number:
+                    type: integer
+                  repo:
+                    type: string
+                  state:
+                    description: State is open, closed or closed_not_planned.
+                    type: string
+                  title:
+                    type: string
+                required:
+                - number
+                - repo
+                - state
+                - title
+                type: object
+              leftAt:
+                description: LeftAt is when the item left the tracked set by its status;
+                  it is deleted after itemRetention.
+                format: date-time
+                type: string
+              observed:
+                description: Observed is the last observed change and its source.
+                properties:
+                  at:
+                    format: date-time
+                    type: string
+                  source:
+                    type: string
+                required:
+                - at
+                - source
+                type: object
+              owner:
+                description: 'Owner is the participant the item belongs to: its assignee,
+                  or the epic''s owner for sub-items.'
+                type: string
+              parent:
+                type: string
+              phase:
+                type: string
+              refusal:
+                description: |-
+                  Refusal is a read GitHub refused (404, 403 without rate limit, 410, 422). It is not retried until its
+                  inputs change.
+                properties:
+                  code:
+                    type: integer
+                  inputs:
+                    description: |-
+                      Inputs is a hash of what would change the answer (installation repos, the object's last webhook,
+                      configuration); the read is retried only when it differs.
+                    type: string
+                  operation:
+                    type: string
+                  retries:
+                    description: Retries counts reads made with unchanged inputs (the
+                      refusal-not-repeated invariant).
+                    type: integer
+                  since:
+                    format: date-time
+                    type: string
+                required:
+                - code
+                - operation
+                - since
+                type: object
+              shadow:
+                description: Shadow holds what the engine would do with the item.
+                properties:
+                  actions:
+                    items:
+                      description: ShadowAction is an action the engine would take.
+                      properties:
+                        args:
+                          additionalProperties:
+                            type: string
+                          type: object
+                        key:
+                          type: string
+                        type:
+                          type: string
+                      required:
+                      - key
+                      - type
+                      type: object
+                    type: array
+                  heldBy:
+                    description: ShadowHeld is the gate that holds the item for a
+                      person.
+                    properties:
+                      detail:
+                        type: string
+                      gate:
+                        type: string
+                      person:
+                        type: string
+                    required:
+                    - gate
+                    - person
+                    type: object
+                  pick:
+                    description: ShadowPick is the pick the engine would make.
+                    properties:
+                      person:
+                        type: string
+                      rank:
+                        type: integer
+                    required:
+                    - person
+                    - rank
+                    type: object
+                  rank:
+                    description: Rank is the item's place in the team's order (1-based),
+                      when it is eligible.
+                    type: integer
+                  ready:
+                    description: Ready is the ready? rule's answer, when asked.
+                    type: string
+                  severity:
+                    description: Severity is the bug-severity? answer, for bugs.
+                    type: string
+                type: object
+              subIssues:
+                items:
+                  description: SubIssue is an epic's sub-issue with its state and
+                    board status.
+                  properties:
+                    phase:
+                      description: Phase is the sub-issue's phase when it is an Item,
+                        else derived from its status and state.
+                      type: string
+                    ref:
+                      type: string
+                    state:
+                      type: string
+                    status:
+                      type: string
+                  required:
+                  - ref
+                  - state
+                  type: object
+                type: array
+              subIssuesTotal:
+                description: |-
+                  SubIssuesTotal and BlockedByTotal are GitHub's exact counts, set only when they exceed the lists
+                  above (the read truncates them): an epic with sub-issues the engine hasn't seen isn't Done, and an
+                  item with blockers it hasn't seen isn't unblocked.
+                type: integer
+              subItems:
+                items:
+                  type: string
+                type: array
+              targetRepos:
+                description: TargetRepos are the repos the work lands in.
+                items:
+                  type: string
+                type: array
+              wait:
+                description: Wait is what an Item or Change expects to observe next
+                  (design §11).
+                properties:
+                  atDeadline:
+                    type: string
+                  backoff:
+                    description: Backoff is the current overdue or retry backoff.
+                    type: string
+                  deadline:
+                    description: Deadline is when the engine re-observes once.
+                    format: date-time
+                    type: string
+                  deadlineHandled:
+                    description: DeadlineHandled is true once the deadline's single
+                      re-observe has been made.
+                    type: boolean
+                  nextCheck:
+                    description: |-
+                      NextCheck is when the engine next re-observes: the deadline while watching, the overdue backoff
+                      while overdue, the transient retry while unobserved.
+                    format: date-time
+                    type: string
+                  "on":
+                    description: On is dependency, ci or review.
+                    type: string
+                  reason:
+                    description: 'Reason says why the wait is not watching: budget,
+                      source-degraded or http-<code>.'
+                    type: string
+                  ref:
+                    description: 'Ref is the wake ref: issue:<ref>, ci:<repo>@<sha>
+                      or pr:<ref>.'
+                    type: string
+                  since:
+                    format: date-time
+                    type: string
+                  state:
+                    description: State is watching, overdue or unobserved.
+                    type: string
+                required:
+                - atDeadline
+                - deadline
+                - "on"
+                - ref
+                - since
+                - state
+                type: object
+            required:
+            - acceptanceCriteria
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

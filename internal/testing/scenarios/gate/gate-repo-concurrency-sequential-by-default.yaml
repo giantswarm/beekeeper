@@ -1,0 +1,79 @@
+name: gate-repo-concurrency-sequential-by-default
+concept: gate
+tags: [phase1]
+description: |
+  Given three eligible unassigned items, none naming a footprint: #101 and #102 in
+  giantswarm/klaus (Priority 1 and 2) and #103 in giantswarm/muster (Priority 3)
+  When the engine picks #101 for alice, which takes klaus, and then picks for bob
+  Then `parallel-safe?` is decided "no" for #102 by the rule (sequential per repo by
+  default) and recorded; #102 is held for bob by RepoConcurrency and skipped, and
+  bob's next startable item, #103, is picked instead.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝", priority: 1 }
+      - ref: giantswarm/roadmap#102
+        title: Expose klaus session metrics
+        body: |
+          ### Acceptance criteria
+          - [ ] a gauge per session state
+          Repo: giantswarm/klaus
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝", priority: 2 }
+      - ref: giantswarm/roadmap#103
+        title: Count muster tool calls by outcome
+        body: |
+          ### Acceptance criteria
+          - [ ] a counter per tool call outcome
+          Repo: giantswarm/muster
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝", priority: 3 }
+steps:
+  - id: decided-no
+    tool: decisions
+    args: { point: "parallel-safe?", item: giantswarm/roadmap#102 }
+    expected:
+      json_path:
+        count: 1
+        rows.0.other: giantswarm/roadmap#101
+        rows.0.mode: shadow
+        rows.0.rule: "no"
+        rows.0.chosen: "no"
+
+  - id: held-for-bob
+    tool: get_item
+    args: { ref: giantswarm/roadmap#102 }
+    expected:
+      json_path:
+        status.targetRepos: [giantswarm/klaus]
+        status.footprint: null
+        status.shadow.pick: null
+        status.shadow.heldBy: { person: bob, gate: RepoConcurrency }
+        status.shadow.actions: null
+
+  - id: next-startable-picked
+    tool: get_item
+    args: { ref: giantswarm/roadmap#103 }
+    expected:
+      json_path:
+        status.shadow.pick: { person: bob, rank: 3 }
+        status.shadow.actions:
+          - { type: assign, args: { login: bob } }
+          - { type: set-status, args: { status: "In Progress ⛏️" } }
+          - { type: start-run, args: { purpose: implement } }
+
+  - id: team
+    tool: get_team
+    args: { name: bumblebee }
+    expected:
+      json_path:
+        status.picks:
+          - { person: alice, item: giantswarm/roadmap#101 }
+          - { person: bob, item: giantswarm/roadmap#103 }
+        status.held:
+          - { person: bob, item: giantswarm/roadmap#102, gate: RepoConcurrency }

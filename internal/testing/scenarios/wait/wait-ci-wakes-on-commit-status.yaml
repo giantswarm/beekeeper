@@ -1,0 +1,68 @@
+name: wait-ci-wakes-on-commit-status
+concept: wait
+tags: [phase1, wake-index]
+description: |
+  Given an In Progress item whose PR waits on CI for its head SHA, where CircleCI reports
+  through commit statuses (one required context green, the other pending)
+  When GitHub delivers the status webhook that turns the last required context green
+  Then the Change's ci wait is woken by that webhook and ends: CI is green and the Change
+  now waits on review.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        assignees: [alice]
+        board: { status: "In Progress ⛏️", kind: "Story 📑", team: "Bumblebee🐝" }
+    pulls:
+      - ref: giantswarm/klaus#55
+        author: alice
+        head: a1
+        closes: [giantswarm/roadmap#101]
+        statuses:
+          - { context: "ci/circleci: go-build", state: success }
+          - { context: "ci/circleci: go-test", state: pending }
+steps:
+  - id: waiting-on-ci
+    description: The Change waits on CI for its head SHA
+    tool: get_change
+    args: { ref: giantswarm/klaus#55 }
+    expected:
+      json_path:
+        status.ci.state: pending
+        status.wait.on: ci
+        status.wait.ref: "ci:giantswarm/klaus@a1"
+        status.wait.state: watching
+
+  - id: status-green
+    description: CircleCI posts the success status for the last required context
+    tool: github_status
+    args: { repo: giantswarm/klaus, sha: a1, context: "ci/circleci: go-test", state: success }
+
+  - id: wait-ended
+    tool: get_change
+    args: { ref: giantswarm/klaus#55 }
+    expected:
+      json_path:
+        status.ci.state: green
+        status.wait.on: review
+
+  - id: woken-by-webhook
+    tool: events
+    args: { change: giantswarm/klaus#55, type: wait.woken, since_step: status-green }
+    expected:
+      json_path:
+        count: 1
+        rows.0.source: webhook
+        rows.0.data.on: ci
+
+  - id: wake-counted
+    tool: metric
+    args: { name: engine_wait_wakes_total, labels: { on: ci, trigger: webhook } }
+    expected:
+      json_path: { value: 1 }

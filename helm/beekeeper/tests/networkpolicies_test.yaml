@@ -1,0 +1,136 @@
+suite: network policies
+templates:
+  - ciliumnetworkpolicies.yaml
+release:
+  name: beekeeper
+  namespace: beekeeper
+tests:
+  - it: renders none by default
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders the engine's, the receiver's and Postgres' policies
+    set:
+      ciliumNetworkPolicies.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 3
+      - isKind:
+          of: CiliumNetworkPolicy
+      - equal:
+          path: metadata.name
+          value: beekeeper-db
+        documentIndex: 2
+
+  - it: lets Prometheus scrape the engine with mutual authentication, and the kubelet probe it
+    set:
+      ciliumNetworkPolicies.enabled: true
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: spec.ingress
+          value:
+            - fromEndpoints:
+                - matchLabels:
+                    io.kubernetes.pod.namespace: monitoring
+                    app.kubernetes.io/name: prometheus
+              authentication:
+                mode: required
+              toPorts:
+                - ports:
+                    - port: "8080"
+                      protocol: TCP
+            - fromEntities: [host]
+              toPorts:
+                - ports:
+                    - port: "8081"
+                      protocol: TCP
+
+  - it: lets the engine reach the API server, GitHub, JEV and Postgres
+    set:
+      ciliumNetworkPolicies.enabled: true
+    documentIndex: 0
+    asserts:
+      - contains:
+          path: spec.egress
+          content:
+            toEntities: [kube-apiserver]
+      - contains:
+          path: spec.egress
+          content:
+            toFQDNs:
+              - matchName: api.github.com
+              - matchName: api.typesafe.ai
+            toPorts:
+              - ports:
+                  - port: "443"
+                    protocol: TCP
+      - contains:
+          path: spec.egress
+          content:
+            toEndpoints:
+              - matchLabels:
+                  cnpg.io/cluster: beekeeper-db
+            toPorts:
+              - ports:
+                  - port: "5432"
+                    protocol: TCP
+
+  - it: lets only the gateway reach the receiver's webhook port, and nothing reach out but DNS and Postgres
+    set:
+      ciliumNetworkPolicies.enabled: true
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: spec.ingress[0]
+          value:
+            fromEndpoints:
+              - matchLabels:
+                  io.kubernetes.pod.namespace: envoy-gateway-system
+            authentication:
+              mode: required
+            toPorts:
+              - ports:
+                  - port: "8080"
+                    protocol: TCP
+      - lengthEqual:
+          path: spec.egress
+          count: 2
+      - notContains:
+          path: spec.egress
+          content:
+            toEntities: [kube-apiserver]
+
+  - it: drops a rule whose selector is unset, and the authentication when its mode is empty
+    set:
+      ciliumNetworkPolicies.enabled: true
+      ciliumNetworkPolicies.authenticationMode: ""
+      ciliumNetworkPolicies.gateway.selector: null
+    documentIndex: 1
+    asserts:
+      - lengthEqual:
+          path: spec.ingress
+          count: 2
+      - notExists:
+          path: spec.ingress[0].authentication
+
+  - it: leaves Postgres' policy to the deployment when asked
+    set:
+      ciliumNetworkPolicies.enabled: true
+      ciliumNetworkPolicies.postgres.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 2
+
+  - it: selects Postgres by the values' labels
+    set:
+      ciliumNetworkPolicies.enabled: true
+      ciliumNetworkPolicies.postgres.selector:
+        app: postgres
+    documentIndex: 2
+    asserts:
+      - equal:
+          path: spec.endpointSelector.matchLabels
+          value:
+            app: postgres

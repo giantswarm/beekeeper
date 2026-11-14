@@ -1,0 +1,74 @@
+name: decision-jev-asked-once-per-inputs
+concept: decision
+tags: [phase1]
+description: |
+  Given two ready items whose `ready?` JEV was asked once each at startup
+  When the board and change resyncs run, and webhooks arrive that don't touch the
+  inputs of `ready?` (a Priority change, an assignment)
+  Then JEV is not asked again; and when a person edits #101's body (new inputs),
+  JEV is asked once more, for #101 only, and a second `ready?` decision is recorded.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝" }
+      - ref: giantswarm/roadmap#102
+        title: Count muster tool calls by outcome
+        body: |
+          ### Acceptance criteria
+          - [ ] a counter per tool call outcome
+          Repo: giantswarm/muster
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝" }
+steps:
+  - id: asked-at-startup
+    tool: jev_calls
+    args: { point: "ready?" }
+    expected:
+      json_path: { count: 2 }
+
+  - id: resyncs
+    description: Covers one board resync (10m) and one change resync (15m)
+    tool: clock_advance
+    args: { by: 15m }
+
+  - id: priority-webhook
+    tool: github_board_set
+    args: { issue: giantswarm/roadmap#102, priority: 1 }
+
+  - id: assignment-webhook
+    tool: github_issue_edit
+    args: { ref: giantswarm/roadmap#101, assignees: [alice] }
+
+  - id: not-asked-again
+    tool: jev_calls
+    args: { point: "ready?", since_step: resyncs }
+    expected:
+      json_path: { count: 0 }
+
+  - id: body-edited
+    tool: github_issue_edit
+    args:
+      ref: giantswarm/roadmap#101
+      body: |
+        ### Acceptance criteria
+        - [ ] retries 5xx up to three times
+        - [ ] gives up after 30s in total
+        Repo: giantswarm/klaus
+
+  - id: asked-for-new-inputs
+    tool: jev_calls
+    args: { point: "ready?", since_step: body-edited }
+    expected:
+      json_path: { count: 1, requests.0.item: giantswarm/roadmap#101 }
+
+  - id: two-decisions
+    tool: decisions
+    args: { point: "ready?", item: giantswarm/roadmap#101 }
+    expected:
+      json_path: { count: 2 }

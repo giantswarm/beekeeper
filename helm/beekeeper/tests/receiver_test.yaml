@@ -1,0 +1,110 @@
+suite: receiver
+templates:
+  - receiver-deployment.yaml
+  - receiver-service.yaml
+release:
+  name: beekeeper
+  namespace: beekeeper
+tests:
+  - it: runs two receivers that take only POSTs to the webhook path
+    template: receiver-deployment.yaml
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 2
+      - equal:
+          path: spec.template.spec.containers[0].args
+          value:
+            - receiver
+            - --listen-addr=:8080
+            - --metrics-addr=:8081
+            - --path=/github/webhook
+            - --max-body-bytes=10485760
+            - --max-in-flight-bytes=41943040
+            - --webhook-secret-file=/etc/beekeeper/webhook/secret
+            - --log-level=info
+
+  - it: ignores other boards' deliveries when the values name the board's node ids
+    template: receiver-deployment.yaml
+    set:
+      receiver.projectNodeIDs: [PVT_a, PVT_b]
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --project-node-ids=PVT_a,PVT_b
+
+  - it: mounts no ServiceAccount token
+    template: receiver-deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: beekeeper-receiver
+      - equal:
+          path: spec.template.spec.automountServiceAccountToken
+          value: false
+
+  - it: connects to Postgres as the role receiver, from its own Secret
+    template: receiver-deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: PGUSER
+            valueFrom:
+              secretKeyRef:
+                name: beekeeper-db-receiver
+                key: username
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: PGPASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: beekeeper-db-receiver
+                key: password
+
+  - it: checks signatures with the webhook secret from its Secret file
+    template: receiver-deployment.yaml
+    set:
+      webhook.secretName: hooks
+      webhook.secretKey: hmac
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: webhook
+            secret:
+              secretName: hooks
+              items:
+                - key: hmac
+                  path: secret
+
+  - it: serves health and metrics on a port of their own
+    template: receiver-deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.port
+          value: metrics
+      - equal:
+          path: spec.template.spec.containers[0].ports[1]
+          value:
+            name: metrics
+            containerPort: 8081
+            protocol: TCP
+
+  - it: exposes only the webhook port in its Service
+    template: receiver-service.yaml
+    asserts:
+      - equal:
+          path: spec.ports
+          value:
+            - name: webhook
+              port: 8080
+              targetPort: webhook
+              protocol: TCP
+      - equal:
+          path: spec.selector
+          value:
+            app.kubernetes.io/name: beekeeper
+            app.kubernetes.io/instance: beekeeper
+            app.kubernetes.io/component: receiver

@@ -1,0 +1,112 @@
+name: budget-5xx-backs-off-on-engine-clock
+concept: budget
+tags: [phase1, learning-failed-wakeups]
+description: |
+  Given a Change waiting on CI
+  When CI completes, the webhook arrives, and GitHub answers the next three reads of
+  the check runs with 502
+  Then the engine never retries at once: each retry is a timer on the engine's
+  clock, and the gaps grow (10s, doubling, capped at 5m, no jitter in tests): the
+  reads happen at 09:00:00 (502), 09:00:10 (502), 09:00:30 (502) and 09:01:10, which
+  succeeds. Four reads in all; a 5xx is transient, so it is not recorded as a refusal.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        assignees: [alice]
+        board: { status: "In Progress ⛏️", kind: "Story 📑", team: "Bumblebee🐝" }
+    pulls:
+      - ref: giantswarm/klaus#55
+        author: alice
+        head: a1
+        closes: [giantswarm/roadmap#101]
+        checks:
+          - { name: "ci/circleci: go-build", status: completed, conclusion: success }
+          - { name: "ci/circleci: go-test", status: in_progress }
+steps:
+  - id: github-flaky
+    tool: github_fault
+    args: { kind: http_error, status: 502, times: 3, match: /repos/giantswarm/klaus/commits/a1/check-runs }
+
+  - id: ci-completes
+    tool: github_check_run
+    args: { repo: giantswarm/klaus, sha: a1, name: "ci/circleci: go-test", status: completed, conclusion: success }
+
+  - id: no-tight-loop
+    description: The engine settled after one failed read; nothing retried without the clock moving
+    tool: github_calls
+    args: { since_step: ci-completes, path: /repos/giantswarm/klaus/commits/a1/check-runs }
+    expected:
+      json_path: { count: 1 }
+
+  - id: to-0900-09
+    tool: clock_advance
+    args: { by: 9s }
+
+  - id: nothing-before-10s
+    tool: github_calls
+    args: { since_step: ci-completes, path: /repos/giantswarm/klaus/commits/a1/check-runs }
+    expected:
+      json_path: { count: 1 }
+
+  - id: to-0900-29
+    tool: clock_advance
+    args: { by: 20s }
+
+  - id: first-retry-only
+    description: One retry at 10s; the next is not due before 30s
+    tool: github_calls
+    args: { since_step: ci-completes, path: /repos/giantswarm/klaus/commits/a1/check-runs }
+    expected:
+      json_path: { count: 2 }
+
+  - id: to-0901-09
+    tool: clock_advance
+    args: { by: 40s }
+
+  - id: second-retry-only
+    description: One retry at 30s; the next is not due before 70s
+    tool: github_calls
+    args: { since_step: ci-completes, path: /repos/giantswarm/klaus/commits/a1/check-runs }
+    expected:
+      json_path: { count: 3 }
+
+  - id: not-seen-yet
+    tool: get_change
+    args: { ref: giantswarm/klaus#55 }
+    expected:
+      json_path: { status.ci.state: pending }
+
+  - id: to-0901-10
+    tool: clock_advance
+    args: { by: 1s }
+
+  - id: third-retry-succeeds
+    tool: github_calls
+    args: { since_step: ci-completes, path: /repos/giantswarm/klaus/commits/a1/check-runs }
+    expected:
+      json_path: { count: 4 }
+
+  - id: ci-seen
+    tool: get_change
+    args: { ref: giantswarm/klaus#55 }
+    expected:
+      json_path: { status.ci.state: green, status.wait.on: review }
+
+  - id: three-502s
+    tool: metric
+    args: { name: engine_github_requests_total, labels: { api: rest, code: "502" } }
+    expected:
+      json_path: { value: 3 }
+
+  - id: not-a-refusal
+    tool: events
+    args: { type: refusal }
+    expected:
+      json_path: { count: 0 }

@@ -1,0 +1,91 @@
+name: webhook-payload-not-trusted
+concept: webhook
+tags: [phase1]
+description: |
+  Given a ready, unassigned Story of the team that is in Backlog on the board, so it isn't an
+  Item
+  When a validly signed projects_v2_item delivery claims its Status changed to Up Next,
+  while GitHub still says Backlog
+  Then the delivery is accepted and only wakes the engine: it resolves the node id by reading
+  the board item from GitHub, sees it in Backlog (out of scope) and drops it, so no Item is
+  created, no ready? decision is made and nothing is picked.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        assignees: []
+        board: { status: "Backlog 📦", kind: "Story 📑", team: "Bumblebee🐝" }
+steps:
+  - id: not-an-item
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      success: false
+      error_contains: ["not found"]
+
+  - id: lying-delivery
+    description: The payload says Up Next; node ids follow the fake's scheme for project 273 and #101
+    tool: webhook_post
+    args:
+      event: projects_v2_item
+      action: edited
+      signature: valid
+      body:
+        projects_v2_item:
+          node_id: "PVTI_giantswarm_273_giantswarm/roadmap#101"
+          project_node_id: PVT_giantswarm_273
+          content_node_id: "I_giantswarm/roadmap#101"
+          content_type: Issue
+        changes:
+          field_value:
+            field_type: single_select
+            field_name: Status
+            to: { name: "Up Next ➡️" }
+        organization: { login: giantswarm }
+        installation: { id: 200 }
+    expected:
+      json_path_min: { status_code: 200 }
+      json_path_max: { status_code: 299 }
+
+  - id: counted-accepted
+    tool: metric
+    args: { name: engine_webhook_deliveries_total, labels: { event: projects_v2_item, outcome: accepted } }
+    expected:
+      json_path: { value: 1 }
+
+  - id: read-from-github
+    tool: github_calls
+    args: { since_step: lying-delivery, api: graphql, operation: BoardItemsByNode }
+    expected:
+      json_path_min: { count: 1 }
+
+  - id: still-not-an-item
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      success: false
+      error_contains: ["not found"]
+
+  - id: no-items
+    tool: list_items
+    args: { team: bumblebee }
+    expected:
+      json_path: { count: 0 }
+
+  - id: not-decided
+    tool: decisions
+    args: { point: "ready?", since_step: lying-delivery }
+    expected:
+      json_path: { count: 0 }
+
+  - id: not-picked
+    tool: events
+    args: { type: shadow.pick, since_step: lying-delivery }
+    expected:
+      json_path: { count: 0 }

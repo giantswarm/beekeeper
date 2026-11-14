@@ -1,0 +1,37 @@
+name: eligibility-issue-in-code-repo-has-target
+concept: eligibility
+tags: [phase1, ready]
+description: |
+  Given an Up Next issue that lives in giantswarm/klaus (a code repo) with
+  acceptance criteria and no Repo line
+  When the engine observes it
+  Then its target repo is the repo it lives in, ready? decides "ready", and the
+  item is eligible.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/klaus#40
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+        assignees: []
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝" }
+steps:
+  - id: has-target
+    tool: get_item
+    args: { ref: giantswarm/klaus#40 }
+    expected:
+      json_path:
+        status.issue.repo: giantswarm/klaus
+        status.targetRepos: [giantswarm/klaus]
+        status.acceptanceCriteria: true
+        status.eligible.value: true
+        status.eligible.reasons: null
+
+  - id: decided-ready
+    tool: decisions
+    args: { point: "ready?", item: giantswarm/klaus#40 }
+    expected:
+      json_path: { count: 1, rows.0.rule: ready, rows.0.chosen: ready }

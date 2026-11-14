@@ -1,0 +1,93 @@
+name: leader-handover-continues-deciding
+concept: leader
+tags: [phase1, learning-self-update-stall]
+description: |
+  Given two engine replicas, engine-0 leading and engine-1 standing by, an Up Next item in
+  giantswarm/klaus picked for alice, and bob's ready item for giantswarm/muster in Backlog
+  (not yet an Item; another repo, so alice's pick doesn't hold it)
+  When the leader dies (as in an upgrade that goes wrong) and, during the handover,
+  a person moves bob's item to Up Next
+  Then engine-1 takes the lead within seconds, processes the delivery that arrived while no
+  replica led, and decides: bob's item becomes an Item and is picked for him, alice's item
+  keeps its state and pick, nothing already recorded for it is recorded again, and the dead
+  leader writes nothing more.
+pre_configuration:
+  fixture: base
+  engine: { replicas: 2 }
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        assignees: [alice]
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝" }
+      - ref: giantswarm/roadmap#102
+        title: Report muster tool latency
+        body: |
+          ### Acceptance criteria
+          - [ ] a latency histogram per tool
+          Repo: giantswarm/muster
+        assignees: [bob]
+        board: { status: "Backlog 📦", kind: "Story 📑", team: "Bumblebee🐝" }
+steps:
+  - id: picked-for-alice
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      json_path: { status.phase: Ready, status.shadow.pick.person: alice }
+
+  - id: engine-0-leads
+    tool: get_installation
+    expected:
+      json_path: { status.leader: engine-0 }
+
+  - id: kill
+    tool: engine_fault
+    args: { kind: kill_leader }
+
+  - id: bob-up-next
+    tool: github_board_set
+    args: { issue: giantswarm/roadmap#102, status: "Up Next ➡️" }
+
+  - id: standby-decides
+    description: Leader election runs on real time; the handover takes seconds
+    tool: get_item
+    args: { ref: giantswarm/roadmap#102 }
+    expected:
+      wait_for_state: 10s
+      json_path:
+        status.phase: Ready
+        status.eligible.value: true
+        status.shadow.pick.person: bob
+
+  - id: engine-1-leads
+    tool: get_installation
+    expected:
+      json_path: { status.leader: engine-1 }
+
+  - id: alice-unchanged
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      json_path: { status.phase: Ready, status.shadow.pick.person: alice }
+
+  - id: pick-not-recorded-again
+    tool: events
+    args: { item: giantswarm/roadmap#101, type: shadow.pick, since_step: kill }
+    expected:
+      json_path: { count: 0 }
+
+  - id: actions-not-recorded-again
+    tool: events
+    args: { item: giantswarm/roadmap#101, type: shadow.action, since_step: kill }
+    expected:
+      json_path: { count: 0 }
+
+  - id: dead-leader-wrote-nothing
+    tool: object_writes
+    args: { replica: engine-0, since_step: kill }
+    expected:
+      json_path: { count: 0 }

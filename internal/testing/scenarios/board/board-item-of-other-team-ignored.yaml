@@ -1,0 +1,63 @@
+name: board-item-of-other-team-ignored
+concept: board
+tags: [phase1, scope, learning-api-budget]
+description: |
+  Given an open issue that is not on the board yet
+  When a person adds it to the board for team Atlas, which is not configured
+  Then no Item is created, the engine spends only the one read that resolves the
+  board item's node id, and later webhooks for that issue cost no reads at all.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#201
+        title: Rotate the Atlas dashboards' service accounts
+        body: |
+          ### Acceptance criteria
+          - [ ] no static tokens left
+          Repo: giantswarm/klaus
+        assignees: []
+steps:
+  - id: added-for-atlas
+    tool: github_board_add
+    args:
+      issue: giantswarm/roadmap#201
+      board: { status: "Up Next ➡️", kind: "Story 📑", team: "Atlas 🗺️" }
+
+  - id: no-item
+    tool: get_item
+    args: { ref: giantswarm/roadmap#201 }
+    expected:
+      success: false
+      error_contains: ["not found"]
+
+  - id: only-the-node-was-resolved
+    description: One GraphQL read of the board item tells the team; nothing else is read
+    tool: github_calls
+    args: { since_step: added-for-atlas }
+    expected:
+      json_path: { rest: 0 }
+      json_path_max: { graphql: 1 }
+
+  - id: nothing-recorded
+    tool: events
+    args: { item: giantswarm/roadmap#201 }
+    expected:
+      json_path: { count: 0 }
+
+  - id: issue-edited
+    description: An issues webhook for an issue outside the team's scope
+    tool: github_issue_edit
+    args: { ref: giantswarm/roadmap#201, title: Rotate the Atlas service accounts }
+
+  - id: no-follow-up-reads
+    tool: github_calls
+    args: { since_step: issue-edited }
+    expected:
+      json_path: { count: 0 }
+
+  - id: still-no-team-items
+    tool: list_items
+    args: { team: bumblebee }
+    expected:
+      json_path: { count: 0 }

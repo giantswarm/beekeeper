@@ -1,0 +1,102 @@
+name: budget-startup-cost-bounded
+concept: budget
+tags: [phase1, learning-api-budget]
+description: |
+  Given a team with 20 items on the board, 10 In Progress with an open PR each (5 in
+  giantswarm/klaus, 5 in giantswarm/muster) and 10 in Up Next
+  When the engine starts and makes its initial sync
+  Then every item and PR is observed, and the sync costs at most:
+  - GraphQL: 3 queries and 4 points: the board schema check (1 point), one page of
+    the filtered board query (at most 2 points, as in board-startup-initial-sync;
+    20 items fit in one page of 100, and GitHub prices a query by its shape, not by
+    the items returned) and at most one probe (1 point).
+  - REST: 43 calls: 4 per PR (the PR, its head's check runs, its head's statuses,
+    its reviews) for 40, plus at most 3 installation-wide reads (the installation's
+    repositories and the merge rules of the two code repos).
+  - The delivery log, read with the App's JWT on its own bucket: 1 call.
+  Issues come with the board query: there is no REST read per issue.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - { ref: giantswarm/roadmap#201, title: "Item 201", body: "### Acceptance criteria\n- [ ] done\nRepo: giantswarm/klaus\n", assignees: [alice], board: { status: "In Progress ⛏️", kind: "Story 📑", team: "Bumblebee🐝" } }
+      - { ref: giantswarm/roadmap#202, title: "Item 202", body: "### Acceptance criteria\n- [ ] done\nRepo: giantswarm/klaus\n", assignees: [bob], board: { status: "In Progress ⛏️", kind: "Story 📑", team: "Bumblebee🐝" } }
+      - { ref: giantswarm/roadmap#203, title: "Item 203", body: "### Acceptance criteria\n- [ ] done\nRepo: giantswarm/klaus\n", assignees: [alice], board: { status: "In Progress ⛏️", kind: "Story 📑", team: "Bumblebee🐝" } }
+      - { ref: giantswarm/roadmap#204, title: "Item 204", body: "### Acceptance criteria\n- [ ] done\nRepo: giantswarm/klaus\n", assignees: [bob], board: { status: "In Progress ⛏️", kind: "Story 📑", team: "Bumblebee🐝" } }
+      - { ref: giantswarm/roadmap#205, title: "Item 205", body: "### Acceptance criteria\n- [ ] done\nRepo: giantswarm/klaus\n", assignees: [alice], board: { status: "In Progress ⛏️", kind: "Story 📑", team: "Bumblebee🐝" } }
+      - { ref: giantswarm/roadmap#206, title: "Item 206", body: "### Acceptance criteria\n- [ ] done\nRepo: giantswarm/muster\n", assignees: [bob], board: { status: "In Progress ⛏️", kind: "Story 📑", team: "Bumblebee🐝" } }
+      - { ref: giantswarm/roadmap#207, title: "Item 207", body: "### Acceptance criteria\n- [ ] done\nRepo: giantswarm/muster\n", assignees: [alice], board: { status: "In Progress ⛏️", kind: "Story 📑", team: "Bumblebee🐝" } }
+      - { ref: giantswarm/roadmap#208, title: "Item 208", body: "### Acceptance criteria\n- [ ] done\nRepo: giantswarm/muster\n", assignees: [bob], board: { status: "In Progress ⛏️", kind: "Story 📑", team: "Bumblebee🐝" } }
+      - { ref: giantswarm/roadmap#209, title: "Item 209", body: "### Acceptance criteria\n- [ ] done\nRepo: giantswarm/muster\n", assignees: [alice], board: { status: "In Progress ⛏️", kind: "Story 📑", team: "Bumblebee🐝" } }
+      - { ref: giantswarm/roadmap#210, title: "Item 210", body: "### Acceptance criteria\n- [ ] done\nRepo: giantswarm/muster\n", assignees: [bob], board: { status: "In Progress ⛏️", kind: "Story 📑", team: "Bumblebee🐝" } }
+      - { ref: giantswarm/roadmap#211, title: "Item 211", body: "### Acceptance criteria\n- [ ] done\nRepo: giantswarm/klaus\n", assignees: [], board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝" } }
+      - { ref: giantswarm/roadmap#212, title: "Item 212", body: "### Acceptance criteria\n- [ ] done\nRepo: giantswarm/klaus\n", assignees: [], board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝" } }
+      - { ref: giantswarm/roadmap#213, title: "Item 213", body: "### Acceptance criteria\n- [ ] done\nRepo: giantswarm/klaus\n", assignees: [], board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝" } }
+      - { ref: giantswarm/roadmap#214, title: "Item 214", body: "### Acceptance criteria\n- [ ] done\nRepo: giantswarm/klaus\n", assignees: [], board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝" } }
+      - { ref: giantswarm/roadmap#215, title: "Item 215", body: "### Acceptance criteria\n- [ ] done\nRepo: giantswarm/klaus\n", assignees: [], board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝" } }
+      - { ref: giantswarm/roadmap#216, title: "Item 216", body: "### Acceptance criteria\n- [ ] done\nRepo: giantswarm/muster\n", assignees: [], board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝" } }
+      - { ref: giantswarm/roadmap#217, title: "Item 217", body: "### Acceptance criteria\n- [ ] done\nRepo: giantswarm/muster\n", assignees: [], board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝" } }
+      - { ref: giantswarm/roadmap#218, title: "Item 218", body: "### Acceptance criteria\n- [ ] done\nRepo: giantswarm/muster\n", assignees: [], board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝" } }
+      - { ref: giantswarm/roadmap#219, title: "Item 219", body: "### Acceptance criteria\n- [ ] done\nRepo: giantswarm/muster\n", assignees: [], board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝" } }
+      - { ref: giantswarm/roadmap#220, title: "Item 220", body: "### Acceptance criteria\n- [ ] done\nRepo: giantswarm/muster\n", assignees: [], board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝" } }
+    pulls:
+      - { ref: giantswarm/klaus#301, author: alice, head: h301, closes: [giantswarm/roadmap#201], checks: [{ name: "ci/circleci: go-test", status: in_progress }] }
+      - { ref: giantswarm/klaus#302, author: bob, head: h302, closes: [giantswarm/roadmap#202], checks: [{ name: "ci/circleci: go-test", status: in_progress }] }
+      - { ref: giantswarm/klaus#303, author: alice, head: h303, closes: [giantswarm/roadmap#203], checks: [{ name: "ci/circleci: go-test", status: in_progress }] }
+      - { ref: giantswarm/klaus#304, author: bob, head: h304, closes: [giantswarm/roadmap#204], checks: [{ name: "ci/circleci: go-test", status: in_progress }] }
+      - { ref: giantswarm/klaus#305, author: alice, head: h305, closes: [giantswarm/roadmap#205], checks: [{ name: "ci/circleci: go-test", status: in_progress }] }
+      - { ref: giantswarm/muster#401, author: bob, head: h401, closes: [giantswarm/roadmap#206], checks: [{ name: "ci/circleci: go-test", status: in_progress }] }
+      - { ref: giantswarm/muster#402, author: alice, head: h402, closes: [giantswarm/roadmap#207], checks: [{ name: "ci/circleci: go-test", status: in_progress }] }
+      - { ref: giantswarm/muster#403, author: bob, head: h403, closes: [giantswarm/roadmap#208], checks: [{ name: "ci/circleci: go-test", status: in_progress }] }
+      - { ref: giantswarm/muster#404, author: alice, head: h404, closes: [giantswarm/roadmap#209], checks: [{ name: "ci/circleci: go-test", status: in_progress }] }
+      - { ref: giantswarm/muster#405, author: bob, head: h405, closes: [giantswarm/roadmap#210], checks: [{ name: "ci/circleci: go-test", status: in_progress }] }
+steps:
+  - id: all-observed
+    tool: list_items
+    args: { team: bumblebee }
+    expected:
+      json_path: { count: 20 }
+
+  - id: last-pr-observed
+    tool: get_change
+    args: { ref: giantswarm/muster#405 }
+    expected:
+      json_path: { status.pr.headSha: h405, status.observed.source: startup }
+
+  - id: graphql-bounded
+    tool: github_calls
+    args: { api: graphql }
+    expected:
+      json_path: { rateLimited: 0 }
+      json_path_max: { count: 3, graphqlPoints: 4 }
+
+  - id: one-board-page
+    tool: github_calls
+    args: { api: graphql, operation: BoardTeamItems }
+    expected:
+      json_path: { count: 1 }
+
+  - id: rest-bounded
+    tool: github_calls
+    args: { api: rest }
+    expected:
+      json_path: { rateLimited: 0 }
+      json_path_max: { count: 43 }
+
+  - id: one-delivery-log-read
+    tool: github_calls
+    args: { api: app, operation: apps/list-webhook-deliveries }
+    expected:
+      json_path: { count: 1, rateLimited: 0 }
+
+  - id: no-rest-read-per-issue
+    tool: github_calls
+    args: { api: rest, path: "/repos/giantswarm/roadmap/issues/*" }
+    expected:
+      json_path: { count: 0 }
+
+  - id: budget-agrees
+    description: The Budget, from the headers, shows the same spend
+    tool: get_budget
+    expected:
+      json_path_min: { status.rest.remaining: 4957, status.graphql.remaining: 4996 }

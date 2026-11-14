@@ -1,0 +1,84 @@
+name: shadow-would-actions-recorded-once
+concept: shadow
+tags: [phase1]
+description: |
+  Given an Up Next item picked for alice and an Up Next item of bob's that isn't ready,
+  whose would-actions are recorded (set-status and start-run for alice's pick, already
+  assigned to her, and bob's refinement todo)
+  When the items are reconciled again and again: an edit that changes nothing the decisions
+  depend on, an unrelated check_run webhook, and an hour of board and Changes resyncs
+  Then no shadow.action event is recorded again: each action key is in the event table once,
+  and bob's item still carries exactly one todo.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        assignees: [alice]
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝" }
+      - ref: giantswarm/roadmap#102
+        title: Something about klaus sessions
+        body: |
+          We should look at sessions at some point.
+        assignees: [bob]
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝" }
+steps:
+  - id: todo-recorded
+    tool: events
+    args: { item: giantswarm/roadmap#102, type: shadow.action }
+    expected:
+      json_path:
+        count: 1
+        rows.0.data.type: todo
+        rows.0.data.args.to: bob
+
+  - id: pick-recorded
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      json_path:
+        status.shadow.pick.person: alice
+        status.shadow.actions[type=start-run].args.purpose: implement
+
+  - id: pick-actions-recorded
+    tool: events
+    args: { item: giantswarm/roadmap#101, type: shadow.action }
+    expected:
+      json_path: { count: 2 }
+
+  - id: title-edited
+    description: Still not ready, so the todo is the same action
+    tool: github_issue_edit
+    args: { ref: giantswarm/roadmap#102, title: Look at klaus sessions }
+
+  - id: unrelated-ci
+    tool: github_check_run
+    args: { repo: giantswarm/muster, sha: z9, name: "ci/circleci: go-test", status: completed, conclusion: success }
+
+  - id: an-hour-of-resyncs
+    tool: clock_advance
+    args: { by: 1h }
+
+  - id: reconciled-again
+    tool: reconciles
+    args: { item: giantswarm/roadmap#102, since_step: title-edited }
+    expected:
+      json_path_min: { count: 1 }
+
+  - id: nothing-recorded-again
+    tool: events
+    args: { type: shadow.action, since_step: title-edited }
+    expected:
+      json_path: { count: 0 }
+
+  - id: still-one-todo
+    tool: get_item
+    args: { ref: giantswarm/roadmap#102 }
+    expected:
+      json_path:
+        status.shadow.actions: [{ type: todo }]

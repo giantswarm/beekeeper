@@ -1,0 +1,45 @@
+name: invariant-source-without-verdict-detected
+concept: invariant
+tags: [phase1]
+description: |
+  Given both sources checked and fresh at 09:10, and freshness checks that stop running then
+  When 21 minutes pass, so each verdict is older than twice its check interval (2 × 5m for
+  the delivery log, 2 × 10m for the board probe)
+  Then source-fresh-or-degraded counts both sources (2), although they still show their last
+  verdict (fresh): a verdict nobody renews is no verdict.
+pre_configuration:
+  fixture: base
+expect_violations: [source-fresh-or-degraded]
+steps:
+  - id: checks-run
+    description: The delivery-log check (5m) and the board probe (10m) have each run
+    tool: clock_advance
+    args: { by: 10m }
+
+  - id: fresh
+    tool: get_installation
+    expected:
+      json_path:
+        status.sources.webhooks.state: fresh
+        status.sources.board.state: fresh
+
+  - id: checks-stop
+    tool: engine_fault
+    args: { kind: stop_freshness }
+
+  - id: twenty-one-minutes
+    tool: clock_advance
+    args: { by: 21m }
+
+  - id: detected
+    tool: metric
+    args: { name: engine_invariant_violations, labels: { invariant: source-fresh-or-degraded } }
+    expected:
+      json_path: { value: 2 }
+
+  - id: stale-verdict-looks-fine
+    tool: get_installation
+    expected:
+      json_path:
+        status.sources.webhooks.state: fresh
+        status.sources.board.state: fresh

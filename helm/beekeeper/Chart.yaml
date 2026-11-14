@@ -1,6 +1,8 @@
 apiVersion: v2
 name: beekeeper
-description: beekeeper serve, the central instance - leases, holds, merge lanes, notes and the agent roster as MCP tools behind muster, over beekeeper.giantswarm.io resources
+description: >-
+  The beekeeper engine - observes a GitHub project board and its pull requests, decides deterministically
+  and records every decision; a separate webhook receiver feeds it through a Postgres inbox
 type: application
 version: 0.1.0
 appVersion: "0.1.0"
@@ -9,9 +11,9 @@ icon: https://s.giantswarm.io/app-icons/giantswarm/1/light.svg
 sources:
   - https://github.com/giantswarm/beekeeper
 keywords:
-  - mcp
-  - ai-agents
-  - coordination
+  - github
+  - controller
+  - automation
 maintainers:
   - name: Giant Swarm
     email: team-bumblebee@giantswarm.io

@@ -1,0 +1,156 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "beekeeper.engine.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "beekeeper.engine.labels" . | nindent 4 }}
+spec:
+  # One replica leads and decides; the others stand by and serve metrics.
+  replicas: {{ .Values.engine.replicas }}
+  selector:
+    matchLabels:
+      {{- include "beekeeper.engine.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "beekeeper.engine.labels" . | nindent 8 }}
+        {{- with .Values.engine.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.engine.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "beekeeper.engine.name" . }}
+      # The engine talks to the Kubernetes API (its objects, the leader Lease,
+      # events). Explicit, because admission policies may turn the default off.
+      automountServiceAccountToken: true
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- range . }}
+        - name: {{ . }}
+        {{- end }}
+      {{- end }}
+      initContainers:
+        # Applies the embedded migrations as the database's owner, then grants
+        # the roles engine and receiver their privileges (every time).
+        - name: migrate
+          image: {{ include "beekeeper.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - migrate
+          env:
+            {{- include "beekeeper.postgres.env" (dict "root" $ "role" "engine") | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.engine.migrate.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      containers:
+        - name: engine
+          image: {{ include "beekeeper.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - engine
+            - --namespace=$(POD_NAMESPACE)
+            - --replica=$(POD_NAME)
+            - --metrics-addr=:{{ .Values.engine.ports.metrics }}
+            - --health-addr=:{{ .Values.engine.ports.health }}
+            - --leader-elect=true
+            - --leader-election-id={{ include "beekeeper.leaderElectionID" . }}
+            - --log-level={{ .Values.engine.logLevel }}
+            - --github-api-url={{ .Values.github.apiURL }}
+            - --github-app-id=$(GITHUB_APP_ID)
+            - --github-installation-id=$(GITHUB_INSTALLATION_ID)
+            - --github-private-key-file=/etc/beekeeper/github-app/private-key.pem
+            {{- if .Values.jev.enabled }}
+            - --jev-key-file=/etc/beekeeper/jev/key
+            {{- end }}
+            {{- range .Values.engine.extraArgs }}
+            - {{ . | quote }}
+            {{- end }}
+          env:
+            {{- include "beekeeper.podEnv" . | nindent 12 }}
+            - name: GITHUB_APP_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "beekeeper.githubApp.secretName" . }}
+                  key: {{ .Values.github.app.appIDKey }}
+            - name: GITHUB_INSTALLATION_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "beekeeper.githubApp.secretName" . }}
+                  key: {{ .Values.github.app.installationIDKey }}
+            {{- include "beekeeper.postgres.env" (dict "root" $ "role" "engine") | nindent 12 }}
+            {{- with .Values.engine.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          ports:
+            - name: metrics
+              containerPort: {{ .Values.engine.ports.metrics }}
+              protocol: TCP
+            - name: health
+              containerPort: {{ .Values.engine.ports.health }}
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            periodSeconds: 10
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.engine.resources | nindent 12 }}
+          volumeMounts:
+            - name: github-app
+              mountPath: /etc/beekeeper/github-app
+              readOnly: true
+            {{- if .Values.jev.enabled }}
+            - name: jev
+              mountPath: /etc/beekeeper/jev
+              readOnly: true
+            {{- end }}
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: github-app
+          secret:
+            secretName: {{ include "beekeeper.githubApp.secretName" . }}
+            items:
+              - key: {{ .Values.github.app.privateKeyKey }}
+                path: private-key.pem
+        {{- if .Values.jev.enabled }}
+        - name: jev
+          secret:
+            secretName: {{ include "beekeeper.jev.secretName" . }}
+            items:
+              - key: {{ .Values.jev.secretKey }}
+                path: key
+        {{- end }}
+        - name: tmp
+          emptyDir: {}
+      affinity:
+        {{- include "beekeeper.affinity" (dict "root" $ "component" "engine") | nindent 8 }}
+      {{- with .Values.engine.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.engine.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.engine.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

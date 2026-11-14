@@ -1,0 +1,61 @@
+name: decision-bug-severity-shadow
+concept: decision
+tags: [phase1]
+description: |
+  Given `bug-severity?` in mode shadow and JEV that will classify the next bug as
+  critical
+  When a new Bug is created in the team's Inbox
+  Then the rule's answer (medium) is chosen and JEV's (critical) recorded next to
+  it, the only would-action is writing severity medium, and the bug is not moved to
+  Up Next: it stays in the Inbox, not eligible.
+pre_configuration:
+  fixture: base
+steps:
+  - id: jev-says-critical
+    tool: jev_set
+    args: { point: "bug-severity?", item: giantswarm/roadmap#130, answer: critical, confidence: 0.9 }
+
+  - id: bug-created
+    tool: github_issue_create
+    args:
+      ref: giantswarm/roadmap#130
+      title: klaus drops sessions when the gateway restarts
+      body: |
+        Sessions end with "connection reset" after a gateway rollout.
+        Repo: giantswarm/klaus
+      board: { status: "Inbox 📥", kind: "Bug 🐞", team: "Bumblebee🐝" }
+
+  - id: rule-chosen
+    tool: decisions
+    args: { point: "bug-severity?", item: giantswarm/roadmap#130 }
+    expected:
+      json_path:
+        count: 1
+        rows.0.mode: shadow
+        rows.0.rule: medium
+        rows.0.jev: critical
+        rows.0.chosen: medium
+
+  - id: would-set-medium
+    tool: get_item
+    args: { ref: giantswarm/roadmap#130 }
+    expected:
+      json_path:
+        status.board.status: "Inbox 📥"
+        status.phase: Backlog
+        status.eligible.value: false
+        status.shadow.pick: null
+        status.shadow.actions:
+          - { type: set-severity, args: { severity: medium } }
+
+  - id: one-would-action
+    tool: events
+    args: { item: giantswarm/roadmap#130, type: shadow.action }
+    expected:
+      json_path: { count: 1, rows.0.source: webhook }
+
+  - id: disagreement-counted
+    tool: metric
+    args: { name: engine_decisions_total, labels: { point: "bug-severity?", outcome: disagree } }
+    expected:
+      json_path: { value: 1 }

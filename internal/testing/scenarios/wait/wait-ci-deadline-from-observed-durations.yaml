@@ -1,0 +1,64 @@
+name: wait-ci-deadline-from-observed-durations
+concept: wait
+tags: [phase1, deadline]
+description: |
+  Given observed pipeline durations of 20m, 25m and 30m for giantswarm/klaus (as many as
+  minHistory requires) and a PR there waiting on CI since 09:00
+  When the engine sets the ci wait's deadline
+  Then the deadline is deadlineFactor × p90 = 3 × 30m (p90 by nearest rank) = 90m after since,
+  not the 1h defaultDeadline: nothing fires at 10:29, the deadline fires at 10:30.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        assignees: [alice]
+        board: { status: "In Progress ⛏️", kind: "Story 📑", team: "Bumblebee🐝" }
+    pulls:
+      - ref: giantswarm/klaus#55
+        author: alice
+        head: a1
+        closes: [giantswarm/roadmap#101]
+        checks:
+          - { name: "ci/circleci: go-build", status: in_progress }
+          - { name: "ci/circleci: go-test", status: in_progress }
+  history:
+    ci: [{ repo: giantswarm/klaus, durations: [20m, 25m, 30m] }]
+steps:
+  - id: deadline-from-history
+    tool: get_change
+    args: { ref: giantswarm/klaus#55 }
+    expected:
+      json_path:
+        status.wait.on: ci
+        status.wait.since: "2026-11-16T09:00:00Z"
+        status.wait.deadline: "2026-11-16T10:30:00Z"
+        status.wait.atDeadline: re-observe
+
+  - id: past-default-deadline
+    description: 10:29, well past the 1h default
+    tool: clock_advance
+    args: { by: 89m }
+
+  - id: not-yet
+    tool: events
+    args: { change: giantswarm/klaus#55, type: wait.deadline, since_step: past-default-deadline }
+    expected:
+      json_path: { count: 0 }
+
+  - id: reach-deadline
+    tool: clock_advance
+    args: { by: 1m }
+
+  - id: deadline-fired
+    tool: events
+    args: { change: giantswarm/klaus#55, type: wait.deadline, since_step: reach-deadline }
+    expected:
+      json_path:
+        count: 1
+        rows.0.at: "2026-11-16T10:30:00Z"

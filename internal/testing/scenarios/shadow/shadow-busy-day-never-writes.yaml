@@ -1,0 +1,156 @@
+name: shadow-busy-day-never-writes
+concept: shadow
+tags: [phase1]
+description: |
+  Given a team's Monday morning: an Up Next item picked for alice, an item of bob's that isn't
+  ready, a new bug in the Inbox, and bob's PR waiting on CI
+  When the working day runs to 17:00: the engine would start alice's item (set its status,
+  start an implement run), send bob a todo and set the bug's severity, bob's pipeline runs
+  past its deadline and goes overdue, and meanwhile alice starts her item and opens a PR,
+  bob's CI goes green, alice approves, bob merges and main goes green
+  Then all would-actions are recorded and none is executed: no mutating REST call and no
+  GraphQL mutation all day, and every POST to GitHub is a GraphQL query or the minting
+  of an installation token.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        assignees: [alice]
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝", priority: 1 }
+      - ref: giantswarm/roadmap#102
+        title: Something about klaus sessions
+        body: |
+          We should look at sessions at some point.
+        assignees: [bob]
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝" }
+      - ref: giantswarm/roadmap#103
+        title: Expose klaus session metrics
+        body: |
+          ### Acceptance criteria
+          - [ ] a metric per session state
+          Repo: giantswarm/klaus
+        assignees: [bob]
+        board: { status: "In Progress ⛏️", kind: "Story 📑", team: "Bumblebee🐝" }
+      - ref: giantswarm/roadmap#104
+        title: muster drops the last tool of a listing
+        body: |
+          The last tool of every listing is missing.
+          Repo: giantswarm/muster
+        assignees: []
+        board: { status: "Inbox 📥", kind: "Bug 🐞", team: "Bumblebee🐝" }
+    pulls:
+      - ref: giantswarm/klaus#56
+        author: bob
+        head: b1
+        closes: [giantswarm/roadmap#103]
+        checks:
+          - { name: "ci/circleci: go-build", status: completed, conclusion: success }
+          - { name: "ci/circleci: go-test", status: in_progress }
+steps:
+  - id: would-start
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      json_path:
+        status.shadow.pick.person: alice
+        status.shadow.actions[type=set-status].args.status: "In Progress ⛏️"
+        status.shadow.actions[type=start-run].args.purpose: implement
+
+  - id: would-todo
+    tool: get_item
+    args: { ref: giantswarm/roadmap#102 }
+    expected:
+      json_path:
+        status.eligible.value: false
+        status.eligible.reasons: [NotReady]
+        status.shadow.actions[type=todo].args.to: bob
+
+  - id: would-set-severity
+    tool: get_item
+    args: { ref: giantswarm/roadmap#104 }
+    expected:
+      json_path:
+        status.shadow.actions[type=set-severity].args.severity: medium
+
+  - id: pipeline-stuck
+    description: bob's CI is still running at 10:10, past its default 1h deadline
+    tool: clock_advance
+    args: { by: 1h10m }
+
+  - id: pipeline-overdue
+    description: A long pipeline is observed, not acted on
+    tool: get_change
+    args: { ref: giantswarm/klaus#56 }
+    expected:
+      json_path: { status.ci.state: pending, status.wait.state: overdue }
+
+  - id: alice-starts
+    tool: github_board_set
+    args: { issue: giantswarm/roadmap#101, status: "In Progress ⛏️" }
+
+  - id: alice-opens-pr
+    tool: github_pr_open
+    args: { ref: giantswarm/klaus#57, author: alice, head: c1, closes: [giantswarm/roadmap#101] }
+
+  - id: bob-ci-green
+    tool: github_check_run
+    args: { repo: giantswarm/klaus, sha: b1, name: "ci/circleci: go-test", status: completed, conclusion: success }
+
+  - id: alice-approves
+    tool: github_pr_review
+    args: { ref: giantswarm/klaus#56, by: alice, state: approved }
+
+  - id: bob-merges
+    tool: github_pr_merge
+    args: { ref: giantswarm/klaus#56, merge_sha: m1, by: bob }
+
+  - id: main-builds
+    tool: github_check_run
+    args: { repo: giantswarm/klaus, sha: m1, name: "ci/circleci: go-build", status: completed, conclusion: success }
+
+  - id: main-tests
+    tool: github_check_run
+    args: { repo: giantswarm/klaus, sha: m1, name: "ci/circleci: go-test", status: completed, conclusion: success }
+
+  - id: merge-result-green
+    tool: get_change
+    args: { ref: giantswarm/klaus#56 }
+    expected:
+      json_path: { status.pr.state: merged, status.mergeResult.state: green }
+
+  - id: rest-of-the-day
+    tool: clock_advance
+    args: { by: 6h50m }
+
+  - id: never-wrote
+    tool: github_calls
+    expected:
+      json_path: { mutating: 0 }
+      json_path_min: { count: 1 }
+
+  - id: every-post-is-a-query
+    description: Token minting is the App's only REST POST and changes nothing on GitHub
+    tool: github_calls
+    args: { method: POST }
+    expected:
+      json_path: { rest: 0, mutating: 0 }
+      json_path_min: { graphql: 1 }
+
+  - id: only-token-minting-otherwise
+    tool: github_calls
+    args: { method: POST, api: app }
+    expected:
+      json_path_max: { count: 9 } # at most one token per hour of the day, plus one at startup
+
+  - id: would-actions-recorded
+    description: set-status and start-run for alice's pick, bob's todo, the bug's severity
+    tool: events
+    args: { type: shadow.action }
+    expected:
+      json_path_min: { count: 4 }

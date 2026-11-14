@@ -1,159 +1,277 @@
+# The chart's CRDs are in crds/, which Helm installs once and never upgrades. A HelmRelease
+# (Flux) must set install.crds and upgrade.crds to CreateReplace, so a new chart version's
+# schema reaches the cluster; with plain Helm, apply crds/ before every upgrade.
+
+# -- The prefix of every object's name. Empty: the release's name.
+fullnameOverride: ""
+
 image:
+  # -- The registry of the beekeeper image.
   registry: gsoci.azurecr.io
+  # -- The repository of the beekeeper image.
   repository: giantswarm/beekeeper
-  # Empty: the chart's appVersion.
+  # -- The image tag. Empty: the chart's appVersion.
   tag: ""
+  # -- The image pull policy.
   pullPolicy: IfNotPresent
 
-# beekeeper serve's configuration (the serve: section of its config.yaml).
-# Every caller's Dex ID token is checked against issuer and clientIDs; the
-# caller must carry the organization group and a group teams names.
-serve:
-  # The Dex issuer URL, e.g. https://dex.<installation base domain>.
-  issuer: ""
-  # The audiences accepted: the client muster forwards the person's token for.
-  clientIDs: []  # @schema item: string
-  # The Dex group every member of the organization carries.
-  organization: ""
-  # Further groups that make a caller a member, one per Dex connector that
-  # spells the organization differently. Dex's GitHub connector emits
-  # <connector>:<org>:<team>, e.g. giantswarm-github:giantswarm:employees.
-  # Use the exact group from the token, including the connector prefix.
-  # An unprefixed <org>:<team> matches only an unprefixed token group.
-  # A refused caller's log line names the groups its token carries.
-  # The same exact matching applies to organization, teams and supervisors.
-  organizations: []  # @schema item: string
-  # Dex group -> team. Each team gets its namespace, beekeeper-<team>, for its
-  # notes and agents (teamNamespaces.create). A caller in several is the team
-  # of its most specific: a team's own group before an organization-wide one
-  # (organization, organizations). A team's decisions are answered by its own
-  # groups' members; by an organization-wide group's only for a team without
-  # one.
-  teams: {}  # @schema additionalProperties: true
-  # Team -> the Dex group of its supervisor role (may release the team's
-  # leases and lift its holds).
-  supervisors: {}  # @schema additionalProperties: true
-  # The URL of the muster (its /mcp) a send_message to a kagent: address goes
-  # through, as the caller.
-  muster: ""
-  # Installation -> the muster tool of its kagent MCP server's
-  # invoke_agent_instance.
-  kagent: {}  # @schema additionalProperties: true
-  # Name -> email: the people decisions are filed for (note add --for <name>).
-  people: {}  # @schema additionalProperties: true
-  # Team -> the Slack channel ID its decisions (--for team:<name>) go to.
-  channels: {}  # @schema additionalProperties: true
-  # Team -> the handle of its Slack user group (team-bumblebee for
-  # @team-bumblebee), for a team whose Dex group others share (an
-  # organization-wide group): only the group's members answer its decisions,
-  # as klaus-gateway finds them by email. A team without an entry is its Dex
-  # group's (teams).
-  groups: {}  # @schema additionalProperties: true
-  # klaus-gateway, which puts decisions to their addressee in Slack.
-  gateway:
-    # Its base URL; empty keeps decisions in beekeeper and mounts no token.
-    url: ""
-    # Where the projected ServiceAccount token (audience klaus-gateway) is
-    # mounted.
-    tokenFile: /var/run/secrets/klaus-gateway/token
-    # The muster tool an answer in Slack calls, as the person who answers.
-    answerTool: x_beekeeper_note_answer
-    # The muster tool a person's reply in a conversation with one of their
-    # agents calls, as the person.
-    sendTool: x_beekeeper_send_message
-  # serve's own identity toward muster, for the calls no person makes (the
-  # fleet watch's reads): its projected ServiceAccount token (audience: the
-  # issuer) exchanged at the issuer's Dex (RFC 8693) for a short-lived Dex ID
-  # token. Empty connectorID mounts no token.
-  identity:
-    # The Dex connector that trusts the cluster's ServiceAccount issuer.
-    connectorID: ""
-    # The public Dex client the exchange is made as.
-    clientID: ""
-    # The Dex client the issued token is for (cross-client scope; that client
-    # trusts clientID as a peer), e.g. dex-k8s-authenticator. Empty: clientID.
-    audience: ""
-    # Where the projected ServiceAccount token is mounted.
-    tokenFile: /var/run/secrets/dex/token
+# -- The names of the Secrets every pod pulls its image with.
+imagePullSecrets: []  # @schema item: string
 
-# The watch serve runs in-process (the watch: section of its config.yaml).
-watch:
-  # How often the watch reads; a Go duration.
-  interval: 30s
+github:
+  # -- GitHub's REST API (GraphQL at <apiURL>/graphql).
+  apiURL: https://api.github.com
+  app:
+    # -- The Secret holding the GitHub App's id, its installation's id and its private key. Empty: <fullname>-github-app.
+    secretName: ""
+    # -- The key of the App's id.
+    appIDKey: app-id
+    # -- The key of the id of the App's installation on the org.
+    installationIDKey: installation-id
+    # -- The key of the App's private key (PEM).
+    privateKeyKey: private-key.pem
 
-# The installations serve coordinates, one cluster-scoped Environment each: a
-# lease claim names one, and a name none carries is refused. Each entry:
-# name, and optionally installation (default: name), musterCluster, team
-# (the owning team, whose supervisors may release another person's lease)
-# and alertFloor.
-environments: []  # @schema item: object; itemProperties: {name: {type: string}, installation: {type: string}, musterCluster: {type: string}, team: {type: string}, alertFloor: {type: string}}
-
-# The merge lanes, one cluster-scoped MergeLane each: name, installation and
-# the repositories whose merges roll onto it, merged one at a time.
-lanes: []  # @schema item: object; itemProperties: {name: {type: string}, installation: {type: string}, repositories: {type: array, items: {type: string}}}
-
-# The beekeeper database the mailboxes live in: a Secret key holding its URL
-# (BEEKEEPER_DATABASE_URL), e.g. the <cluster>-app Secret CloudNativePG
-# writes for the database's role.
-database:
+webhook:
+  # -- The Secret holding the GitHub App's webhook secret, which the receiver checks X-Hub-Signature-256 with. Empty: <fullname>-webhook.
   secretName: ""
-  secretKey: uri
+  # -- The key of the webhook secret.
+  secretKey: secret
 
-# Create the namespace beekeeper-<team> of every team in serve.teams. The
-# namespaces outlive an uninstall: they hold the teams' notes.
-teamNamespaces:
-  create: true
+jev:
+  # -- Ask JEV at the decision points in shadow mode. Off: the engine asks no JEV and mounts no key.
+  enabled: true
+  # -- The Secret holding the JEV API key. Empty: <fullname>-jev.
+  secretName: ""
+  # -- The key of the JEV API key.
+  secretKey: key
 
-rbac:
-  # Groups granted read access to every beekeeper.giantswarm.io resource. The
-  # read ClusterRole also aggregates into the cluster's view role. Writes go
-  # through serve's tools only.
-  readerGroups: []  # @schema item: string
+postgres:
+  # -- The CloudNativePG Cluster, which the host, the engine's Secret and the Postgres network policy derive from. Empty: <fullname>-db.
+  cluster: ""
+  # -- The Postgres host. Empty: <cluster>-rw, the Cluster's read-write Service.
+  host: ""
+  # -- The Postgres port.
+  port: 5432
+  # -- The database, owned by the role engine. The migrations grant the roles engine and receiver their privileges.
+  database: beekeeper
+  # -- libpq's sslmode. CloudNativePG serves TLS with its own CA.
+  sslMode: require
+  engine:
+    # -- The basic-auth Secret of the role engine, the owner (it migrates). Empty: <cluster>-app, CloudNativePG's.
+    secretName: ""
+    # -- The key of the role's name.
+    usernameKey: username
+    # -- The key of the role's password.
+    passwordKey: password
+  receiver:
+    # -- The basic-auth Secret of the role receiver, which may only insert into the inbox. Empty: <cluster>-receiver.
+    secretName: ""
+    # -- The key of the role's name.
+    usernameKey: username
+    # -- The key of the role's password.
+    passwordKey: password
+
+engine:
+  # -- Engine replicas. One leads (leader election) and decides; every one serves metrics.
+  replicas: 2
+  # -- The Lease the replicas elect their leader with. Empty: <fullname>-engine.
+  leaderElectionID: ""
+  # -- The log level (debug, info, error).
+  logLevel: info
+  ports:
+    # -- The metrics port (/metrics).
+    metrics: 8080
+    # -- The health port (/healthz, /readyz).
+    health: 8081
+  # -- The engine container's resources.
+  resources:  # @schema additionalProperties: true
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+  migrate:
+    # -- The resources of the init container that runs `beekeeper migrate`.
+    resources:  # @schema additionalProperties: true
+      requests:
+        cpu: 10m
+        memory: 32Mi
+      limits:
+        memory: 128Mi
+  # -- Further arguments of `beekeeper engine`.
+  extraArgs: []  # @schema item: string
+  # -- Further environment variables of the engine container.
+  extraEnv: []  # @schema item: object; itemProperties: {name: {type: string}, value: {type: string}, valueFrom: {type: object, additionalProperties: true}}
+  # -- Annotations of the engine pods.
+  podAnnotations: {}  # @schema additionalProperties: true
+  # -- Further labels of the engine pods.
+  podLabels: {}  # @schema additionalProperties: true
+  # -- The engine pods' node selector.
+  nodeSelector: {}  # @schema additionalProperties: true
+  # -- The engine pods' tolerations.
+  tolerations: []  # @schema item: object
+  # -- The engine pods' affinity. Empty: a soft anti-affinity that spreads the replicas over nodes.
+  affinity: {}  # @schema additionalProperties: true
+  # -- The engine pods' topology spread constraints.
+  topologySpreadConstraints: []  # @schema item: object
+
+receiver:
+  # -- Receiver replicas. Each stores a verified delivery in the Postgres inbox before it answers.
+  replicas: 2
+  # -- The only path the receiver answers, with POST.
+  path: /github/webhook
+  # -- The largest body the receiver accepts, in bytes (inclusive).
+  maxBodyBytes: 10485760
+  # -- The bodies a receiver holds at once, in bytes by their declared size (at least maxBodyBytes): a delivery that doesn't fit is answered 503 before its body is read, so unsigned bodies can't exhaust the memory limit. Default: four of the largest.
+  maxInFlightBytes: 41943040  # @schema minimum: 0
+  # -- Required in production: the node ids of the boards (ProjectV2, PVT_...) the engine observes. Empty: every board's item deliveries are stored.
+  projectNodeIDs: []  # @schema item: string; uniqueItems: true
+  # -- The log level (debug, info, error).
+  logLevel: info
+  ports:
+    # -- The webhook port, the only one the public route reaches.
+    webhook: 8080
+    # -- The metrics and health port (/metrics, /healthz, /readyz).
+    metrics: 8081
+  service:
+    # -- The receiver Service's port, the backend of the webhook route.
+    port: 8080
+    # -- Annotations of the receiver Service.
+    annotations: {}  # @schema additionalProperties: true
+  # -- The receiver container's resources.
+  resources:  # @schema additionalProperties: true
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      memory: 128Mi
+  # -- Further arguments of `beekeeper receiver`.
+  extraArgs: []  # @schema item: string
+  # -- Further environment variables of the receiver container.
+  extraEnv: []  # @schema item: object; itemProperties: {name: {type: string}, value: {type: string}, valueFrom: {type: object, additionalProperties: true}}
+  # -- Annotations of the receiver pods.
+  podAnnotations: {}  # @schema additionalProperties: true
+  # -- Further labels of the receiver pods.
+  podLabels: {}  # @schema additionalProperties: true
+  # -- The receiver pods' node selector.
+  nodeSelector: {}  # @schema additionalProperties: true
+  # -- The receiver pods' tolerations.
+  tolerations: []  # @schema item: object
+  # -- The receiver pods' affinity. Empty: a soft anti-affinity that spreads the replicas over nodes.
+  affinity: {}  # @schema additionalProperties: true
+  # -- The receiver pods' topology spread constraints.
+  topologySpreadConstraints: []  # @schema item: object
 
 serviceAccount:
-  # Annotations on beekeeper's ServiceAccount, its only non-human identity.
-  annotations: {}  # @schema additionalProperties: true
+  # -- Annotations of the engine's ServiceAccount.
+  engineAnnotations: {}  # @schema additionalProperties: true
+  # -- Annotations of the receiver's ServiceAccount, which may do nothing in Kubernetes.
+  receiverAnnotations: {}  # @schema additionalProperties: true
 
-service:
-  port: 8080
-
-# serve's /mcp behind a Gateway API Gateway, for the musters of other
-# installations. Off: serve is reached in-cluster only.
-httpRoute:
-  enabled: false
-  hostnames: []  # @schema item: string
-  # e.g. [{name: giantswarm-default, namespace: envoy-gateway-system}]
-  parentRefs: []  # @schema item: object; itemProperties: {group: {type: string}, kind: {type: string}, name: {type: string}, namespace: {type: string}, sectionName: {type: string}, port: {type: integer}}
-
-resources:
-  requests:
-    cpu: 50m
-    memory: 64Mi
-  limits:
-    memory: 256Mi
-
-podSecurityContext:
+# -- The pod security context of every pod.
+podSecurityContext:  # @schema additionalProperties: true
   runAsNonRoot: true
   runAsUser: 1000
   runAsGroup: 1000
   seccompProfile:
     type: RuntimeDefault
 
-securityContext:
+# -- The security context of every container.
+securityContext:  # @schema additionalProperties: true
   allowPrivilegeEscalation: false
   readOnlyRootFilesystem: true
   capabilities:
     drop:
       - ALL
 
-# Further environment variables, volumes and mounts of serve's container,
-# and init containers of its pod (a sidecar is one with restartPolicy
-# Always): a private CA for the issuer (SSL_CERT_FILE), a local proxy to it.
-extraEnv: []  # @schema item: object; itemRef: ../kubernetes-json-schema/v1.33.1/_definitions.json#/definitions/io.k8s.api.core.v1.EnvVar
-extraVolumes: []  # @schema item: object; itemRef: ../kubernetes-json-schema/v1.33.1/_definitions.json#/definitions/io.k8s.api.core.v1.Volume
-extraVolumeMounts: []  # @schema item: object; itemRef: ../kubernetes-json-schema/v1.33.1/_definitions.json#/definitions/io.k8s.api.core.v1.VolumeMount
-initContainers: []  # @schema item: object; itemRef: ../kubernetes-json-schema/v1.33.1/_definitions.json#/definitions/io.k8s.api.core.v1.Container
+podMonitor:
+  # -- Create a PodMonitor (prometheus-operator) for the engine and one for the receiver.
+  enabled: true
+  # -- Labels a Prometheus selects PodMonitors by, e.g. release: kube-prometheus-stack.
+  labels: {}  # @schema additionalProperties: true
+  # -- The scrape interval.
+  interval: 30s
 
-nodeSelector: {}  # @schema additionalProperties: true
-tolerations: []  # @schema item: object
-affinity: {}  # @schema additionalProperties: true
+prometheusRule:
+  # -- Create the alert rules (a PrometheusRule).
+  enabled: true
+  # -- Labels a Prometheus selects rules by, e.g. release: kube-prometheus-stack.
+  labels: {}  # @schema additionalProperties: true
+  # -- Labels on every alert, e.g. cluster, layer and component.
+  alertLabels: {}  # @schema additionalProperties: true
+  # -- A runbook's URL. Each alert links <runbookURL>#<alert name in lower case>. Empty: no links.
+  runbookURL: ""
+  severities:
+    # -- BeekeeperInvariantViolated: an invariant is violated for 10 minutes.
+    invariantViolated: warning
+    # -- BeekeeperInvariantsMissing: the engine is up but exports no invariants.
+    invariantsMissing: warning
+    # -- BeekeeperReconcileErrors: a reconciler fails for 15 minutes.
+    reconcileErrors: warning
+    # -- BeekeeperNoLeader: replicas are up, none leads.
+    noLeader: warning
+    # -- BeekeeperEngineDown: no engine replica is scraped.
+    engineDown: warning
+    # -- BeekeeperReceiverDown: no receiver replica is scraped.
+    receiverDown: warning
+    # -- BeekeeperReceiverUnavailable: the receiver answers 503 for 10 minutes.
+    receiverUnavailable: warning
+    # -- BeekeeperSourceDegraded: a source is degraded for 30 minutes.
+    sourceDegraded: warning
+    # -- BeekeeperHistoryDropped: history rows were dropped.
+    historyDropped: warning
+  watchdog:
+    # -- An alert that fires while an engine replica leads, for a dead-man's switch.
+    enabled: true
+    # -- Labels of the watchdog alert, e.g. the one your Alertmanager routes to the dead-man's switch.
+    labels: {}  # @schema additionalProperties: true
+  selectors:
+    # -- The PromQL selector of the engine's series. Empty: its namespace and the job of its PodMonitor.
+    engine: ""
+    # -- The PromQL selector of the receiver's series. Empty: its namespace and the job of its PodMonitor.
+    receiver: ""
+
+ciliumNetworkPolicies:
+  # -- Create CiliumNetworkPolicies for the engine, the receiver and (postgres.enabled) Postgres. A cluster with a default-deny policy needs them.
+  enabled: false
+  # -- The authentication mode of every fromEndpoints ingress rule (Cilium mutual authentication). Empty: none.
+  authenticationMode: required
+  # -- The entities kubelet probes come from.
+  probeEntities:  # @schema item: string
+    - host
+  prometheus:
+    # -- The Prometheus pods' labels. Empty: no scrapes.
+    selector:  # @schema additionalProperties: true
+      io.kubernetes.pod.namespace: monitoring
+      app.kubernetes.io/name: prometheus
+  gateway:
+    # -- The pods of the gateway the webhook route goes through. Empty: no webhooks.
+    selector:  # @schema additionalProperties: true
+      io.kubernetes.pod.namespace: envoy-gateway-system
+  dns:
+    # -- The labels of the cluster's DNS pods.
+    selector:  # @schema additionalProperties: true
+      io.kubernetes.pod.namespace: kube-system
+      k8s-app: kube-dns
+    # -- The DNS pods' ports (UDP and TCP).
+    ports:  # @schema item: integer
+      - 53
+      - 1053
+  engine:
+    # -- The hosts the engine reaches over HTTPS: GitHub's API and JEV.
+    fqdns:  # @schema item: string
+      - api.github.com
+      - api.typesafe.ai
+  postgres:
+    # -- Create the policy of the Postgres pods too.
+    enabled: true
+    # -- The labels of the Postgres pods. Empty: cnpg.io/cluster: <postgres.cluster>.
+    selector: {}  # @schema additionalProperties: true
+    # -- The operator's pods.
+    operatorSelector:  # @schema additionalProperties: true
+      io.kubernetes.pod.namespace: cnpg-system
+      app.kubernetes.io/name: cloudnative-pg
+    # -- The instance manager's status port (the operator and kubelet probes).
+    statusPort: 8000
+    # -- The instance manager's metrics port.
+    metricsPort: 9187

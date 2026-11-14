@@ -1,0 +1,139 @@
+name: history-item-timeline
+concept: history
+tags: [phase1]
+description: |
+  Given a ready Up Next item assigned to alice, for giantswarm/muster (one required check)
+  When alice moves it to In Progress at 09:10, opens a PR at 10:10, CI turns green at 10:30,
+  bob approves at 10:45 and alice merges at 11:00
+  Then the event table holds the item's timeline in order, stamped with the engine clock and
+  the source of each observation: its phase changes (Implementing, Published, Merging,
+  Merged), and the Change's waits started, woken and ended (ci on a1, review, ci on the merge
+  commit); the Item itself, in flight and not started by the engine, holds no wait.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Add a dry-run flag to muster serve
+        body: |
+          ### Acceptance criteria
+          - [ ] `muster serve --dry-run` starts no servers
+          Repo: giantswarm/muster
+        assignees: [alice]
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝" }
+steps:
+  - id: ready
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      json_path: { status.phase: Ready }
+
+  - id: to-start
+    tool: clock_advance
+    args: { by: 10m }
+
+  - id: start-work
+    tool: github_board_set
+    args: { issue: giantswarm/roadmap#101, status: "In Progress ⛏️" }
+
+  - id: implementing-without-wait
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      json_path: { status.phase: Implementing, status.wait: null }
+
+  - id: to-pr
+    tool: clock_advance
+    args: { by: 1h }
+
+  - id: pr-opened
+    tool: github_pr_open
+    args: { ref: giantswarm/muster#12, author: alice, head: a1, closes: [giantswarm/roadmap#101] }
+
+  - id: to-ci
+    tool: clock_advance
+    args: { by: 20m }
+
+  - id: ci-green
+    tool: github_status
+    args: { repo: giantswarm/muster, sha: a1, context: "ci/circleci: go-test", state: success }
+
+  - id: to-review
+    tool: clock_advance
+    args: { by: 15m }
+
+  - id: approved
+    tool: github_pr_review
+    args: { ref: giantswarm/muster#12, by: bob, state: approved }
+
+  - id: to-merge
+    tool: clock_advance
+    args: { by: 15m }
+
+  - id: merged
+    tool: github_pr_merge
+    args: { ref: giantswarm/muster#12, merge_sha: m1, by: alice }
+
+  - id: phase-timeline
+    tool: events
+    args: { item: giantswarm/roadmap#101, type: phase.changed, since_step: start-work }
+    expected:
+      json_path:
+        count: 4
+        rows.0.at: "2026-11-16T09:10:00Z"
+        rows.0.source: webhook
+        rows.0.data.to: Implementing
+        rows.1.at: "2026-11-16T10:10:00Z"
+        rows.1.source: webhook
+        rows.1.data.to: Published
+        rows.2.at: "2026-11-16T10:45:00Z"
+        rows.2.source: webhook
+        rows.2.data.to: Merging
+        rows.3.at: "2026-11-16T11:00:00Z"
+        rows.3.source: webhook
+        rows.3.data.to: Merged
+
+  - id: first-observation
+    tool: events
+    args: { item: giantswarm/roadmap#101, type: observed, since_step: start-work }
+    expected:
+      json_path:
+        rows.0.at: "2026-11-16T09:10:00Z"
+        rows.0.source: webhook
+
+  - id: change-waits-started
+    tool: events
+    args: { change: giantswarm/muster#12, type: wait.started, since_step: pr-opened }
+    expected:
+      json_path:
+        count: 3
+        rows.0.at: "2026-11-16T10:10:00Z"
+        rows.0.data.ref: "ci:giantswarm/muster@a1"
+        rows.1.at: "2026-11-16T10:30:00Z"
+        rows.1.data.ref: "pr:giantswarm/muster#12"
+        rows.2.at: "2026-11-16T11:00:00Z"
+        rows.2.data.ref: "ci:giantswarm/muster@m1"
+
+  - id: change-waits-woken
+    tool: events
+    args: { change: giantswarm/muster#12, type: wait.woken, since_step: pr-opened }
+    expected:
+      json_path:
+        count: 2
+        rows.0.at: "2026-11-16T10:30:00Z"
+        rows.0.source: webhook
+        rows.0.data.on: ci
+        rows.1.at: "2026-11-16T10:45:00Z"
+        rows.1.source: webhook
+        rows.1.data.on: review
+
+  - id: change-waits-ended
+    tool: events
+    args: { change: giantswarm/muster#12, type: wait.ended, since_step: pr-opened }
+    expected:
+      json_path:
+        count: 2
+        rows.0.at: "2026-11-16T10:30:00Z"
+        rows.0.data.on: ci
+        rows.1.at: "2026-11-16T10:45:00Z"
+        rows.1.data.on: review

@@ -1,0 +1,134 @@
+suite: monitoring
+templates:
+  - podmonitors.yaml
+  - prometheusrule.yaml
+release:
+  name: beekeeper
+  namespace: beekeeper
+tests:
+  - it: scrapes the engine and the receiver, labelled for the Prometheus that selects them
+    template: podmonitors.yaml
+    set:
+      podMonitor.labels:
+        release: kube-prometheus-stack
+    asserts:
+      - hasDocuments:
+          count: 2
+      - equal:
+          path: metadata.name
+          value: beekeeper-engine
+        documentIndex: 0
+      - equal:
+          path: metadata.labels.release
+          value: kube-prometheus-stack
+      - equal:
+          path: spec.podMetricsEndpoints
+          value:
+            - port: metrics
+              path: /metrics
+              interval: 30s
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/component"]
+          value: receiver
+        documentIndex: 1
+
+  - it: renders no PodMonitors when they are off
+    template: podmonitors.yaml
+    set:
+      podMonitor.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: labels the rules and every alert from values
+    template: prometheusrule.yaml
+    set:
+      prometheusRule.labels:
+        release: kube-prometheus-stack
+      prometheusRule.alertLabels:
+        cluster: test
+        layer: workload
+      prometheusRule.severities.noLeader: critical
+    asserts:
+      - equal:
+          path: metadata.labels.release
+          value: kube-prometheus-stack
+      - equal:
+          path: spec.groups[0].rules[0].labels
+          value:
+            severity: warning
+            cluster: test
+            layer: workload
+      - equal:
+          path: spec.groups[0].rules[3].alert
+          value: BeekeeperNoLeader
+      - equal:
+          path: spec.groups[0].rules[3].labels.severity
+          value: critical
+
+  - it: selects the engine's series by its PodMonitor's job and the Lease's name
+    template: prometheusrule.yaml
+    asserts:
+      - equal:
+          path: spec.groups[0].rules[9].expr
+          value: max(leader_election_master_status{ namespace="beekeeper", job="beekeeper/beekeeper-engine", name="beekeeper-engine" }) == 1
+
+  - it: takes overridden selectors
+    template: prometheusrule.yaml
+    set:
+      prometheusRule.selectors.engine: job="engine"
+    asserts:
+      - equal:
+          path: spec.groups[0].rules[4].expr
+          value: absent(up{ job="engine" } == 1)
+
+  - it: links a runbook only when one is given
+    template: prometheusrule.yaml
+    asserts:
+      - notExists:
+          path: spec.groups[0].rules[0].annotations.runbook_url
+
+  - it: links each alert to its runbook section
+    template: prometheusrule.yaml
+    set:
+      prometheusRule.runbookURL: https://example.com/runbook
+    asserts:
+      - equal:
+          path: spec.groups[0].rules[0].annotations.runbook_url
+          value: https://example.com/runbook#beekeeperinvariantviolated
+
+  - it: labels the watchdog for the dead-man's switch, its own labels first
+    template: prometheusrule.yaml
+    set:
+      prometheusRule.alertLabels:
+        cluster: test
+        receiver: pager
+      prometheusRule.watchdog.labels:
+        receiver: heartbeat
+    asserts:
+      - equal:
+          path: spec.groups[0].rules[9].alert
+          value: BeekeeperWatchdog
+      - equal:
+          path: spec.groups[0].rules[9].labels
+          value:
+            severity: none
+            cluster: test
+            receiver: heartbeat
+
+  - it: has no watchdog when it is off
+    template: prometheusrule.yaml
+    set:
+      prometheusRule.watchdog.enabled: false
+    asserts:
+      - lengthEqual:
+          path: spec.groups[0].rules
+          count: 9
+
+  - it: renders no rules when they are off
+    template: prometheusrule.yaml
+    set:
+      prometheusRule.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0

@@ -1,0 +1,77 @@
+# The base fixture every phase 1 scenario starts from (`pre_configuration.fixture: base`).
+# A scenario's own pre_configuration is merged on top: lists of named objects merge by
+# name (teams, people, repos) or ref (issues, pulls); scalars override.
+clock: "2026-11-16T09:00:00Z" # a Monday
+
+config:
+  installation:
+    org: giantswarm
+    board: { project: 273 }
+    mode: dry-run
+    resync: { board: 10m, changes: 15m }
+    freshness: { deliveryLog: 5m, boardProbe: 10m }
+    polling: { interval: 5m }
+    budget: { observationReserve: 0.2 }
+    retry: { initial: 10s, cap: 5m, jitter: 0 }
+    itemRetention: 168h
+    receiver: { path: /github/webhook, maxBodyBytes: 10485760 }
+    jev: { confidenceFloor: 0.5 }
+    decisionPoints:
+      "ready?": shadow
+      "next?": shadow
+      "parallel-safe?": shadow
+      "bug-severity?": shadow
+    waits:
+      ci: { deadlineFactor: 3, defaultDeadline: 1h, minHistory: 3, atDeadline: re-observe }
+      review: { deadline: 48h, atDeadline: re-observe }
+      dependency: { deadline: 168h, atDeadline: re-observe }
+      mergeResult: { deadline: 2h, atDeadline: re-observe }
+      grace: 5m
+      overdueBackoffCap: 10m
+    ready:
+      acceptanceCriteria: '(?im)^#{1,4}\s*acceptance criteria'
+      targetRepo: '(?im)^(repo|repository):\s*([\w.-]+/[\w.-]+)'
+      planningRepos: [giantswarm/roadmap, giantswarm/giantswarm]
+      todo: "refine with `/gs-plans:gs-plan`"
+    footprint: '(?im)^(footprint|paths):\s*(.+)$'
+  teams:
+    - name: bumblebee
+      boardOption: "Bumblebee🐝"
+      githubTeam: team-bumblebee
+      optIn: { work: [implementable], alerts: false }
+      # no cap: { items, epics } across the team's participants unless a scenario sets one
+  people:
+    - { login: alice, teams: [bumblebee], wip: { items: 1, epics: 1 } }
+    - { login: bob, teams: [bumblebee], wip: { items: 1, epics: 1 } }
+
+github:
+  app: { id: 100, installation: 200, webhookSecret: fixture-webhook-secret }
+  board:
+    project: 273
+    teams: ["Atlas 🗺️", "Bumblebee🐝", "Cabbage 🥬", "Honey Badger 🦡", "Phoenix 🔥", "Planeteers 🪐", "Rocket 🚀", "Shield 🛡️", "Up 🎈", "Turtles 🐢", "Tenet ⚓", "Nifflers 🐿️"]
+  org:
+    members:
+      - { login: alice, teams: [team-bumblebee] }
+      - { login: bob, teams: [team-bumblebee] }
+      - { login: carol, teams: [team-atlas] }
+  # Repos are installed for the App unless they say `installed: false`.
+  repos:
+    - { name: giantswarm/roadmap, visibility: public }
+    - name: giantswarm/klaus
+      visibility: public
+      defaultBranch: main
+      owner: team-bumblebee
+      requiredChecks: ["ci/circleci: go-test", "ci/circleci: go-build"]
+      requiredApprovals: 1
+    - name: giantswarm/muster
+      visibility: public
+      defaultBranch: main
+      owner: team-bumblebee
+      requiredChecks: ["ci/circleci: go-test"]
+      requiredApprovals: 1
+  rateLimit:
+    rest: { limit: 5000, remaining: 5000 }
+    graphql: { limit: 5000, remaining: 5000 }
+
+jev:
+  default: agree # answer as the rule does, with confidence 0.9

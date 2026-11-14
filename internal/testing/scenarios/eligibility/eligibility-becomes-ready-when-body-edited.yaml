@@ -1,0 +1,61 @@
+name: eligibility-becomes-ready-when-body-edited
+concept: eligibility
+tags: [phase1, ready]
+description: |
+  Given an Up Next item assigned to alice with a Repo line but no acceptance
+  criteria, so it is NotReady with one "refine" would-todo
+  When alice adds acceptance criteria to the body (issues.edited)
+  Then ready? is decided again on the new inputs and says "ready", the item is
+  eligible, and one eligibility.changed event is recorded from the webhook.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          The client should retry.
+          Repo: giantswarm/klaus
+        assignees: [alice]
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝" }
+steps:
+  - id: not-ready
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      json_path:
+        status.eligible.value: false
+        status.eligible.reasons: [NotReady]
+
+  - id: refined
+    description: alice adds acceptance criteria
+    tool: github_issue_edit
+    args:
+      ref: giantswarm/roadmap#101
+      body: |
+        The client should retry.
+        ### Acceptance criteria
+        - [ ] retries 5xx up to three times
+        Repo: giantswarm/klaus
+
+  - id: eligible
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      json_path:
+        status.acceptanceCriteria: true
+        status.eligible.value: true
+        status.eligible.reasons: null
+        status.observed.source: webhook
+
+  - id: decided-again
+    tool: decisions
+    args: { point: "ready?", item: giantswarm/roadmap#101, since_step: refined }
+    expected:
+      json_path: { count: 1, rows.0.rule: ready, rows.0.chosen: ready }
+
+  - id: eligibility-changed
+    tool: events
+    args: { item: giantswarm/roadmap#101, type: eligibility.changed, since_step: refined }
+    expected:
+      json_path: { count: 1, rows.0.source: webhook }

@@ -1,0 +1,172 @@
+suite: engine
+templates:
+  - engine-deployment.yaml
+release:
+  name: beekeeper
+  namespace: beekeeper
+tests:
+  - it: runs the engine replicas with the chart's image and leader election
+    chart:
+      appVersion: 1.2.3
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 2
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: gsoci.azurecr.io/giantswarm/beekeeper:1.2.3
+      - equal:
+          path: spec.template.spec.containers[0].args
+          value:
+            - engine
+            - --namespace=$(POD_NAMESPACE)
+            - --replica=$(POD_NAME)
+            - --metrics-addr=:8080
+            - --health-addr=:8081
+            - --leader-elect=true
+            - --leader-election-id=beekeeper-engine
+            - --log-level=info
+            - --github-api-url=https://api.github.com
+            - --github-app-id=$(GITHUB_APP_ID)
+            - --github-installation-id=$(GITHUB_INSTALLATION_ID)
+            - --github-private-key-file=/etc/beekeeper/github-app/private-key.pem
+            - --jev-key-file=/etc/beekeeper/jev/key
+
+  - it: mounts its ServiceAccount token explicitly, as admission policies may turn it off
+    asserts:
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: beekeeper-engine
+      - equal:
+          path: spec.template.spec.automountServiceAccountToken
+          value: true
+
+  - it: migrates as the database's owner before it starts
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[0].name
+          value: migrate
+      - equal:
+          path: spec.template.spec.initContainers[0].args
+          value: [migrate]
+      - contains:
+          path: spec.template.spec.initContainers[0].env
+          content:
+            name: PGUSER
+            valueFrom:
+              secretKeyRef:
+                name: beekeeper-db-app
+                key: username
+      - contains:
+          path: spec.template.spec.initContainers[0].env
+          content:
+            name: PGHOST
+            value: beekeeper-db-rw
+
+  - it: reads the GitHub App and Postgres credentials from the Secrets the values name
+    set:
+      github.app.secretName: app
+      github.app.appIDKey: id
+      postgres.cluster: pg
+      postgres.engine.secretName: pg-engine
+      postgres.database: hive
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GITHUB_APP_ID
+            valueFrom:
+              secretKeyRef:
+                name: app
+                key: id
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: PGPASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: pg-engine
+                key: password
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: PGHOST
+            value: pg-rw
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: PGDATABASE
+            value: hive
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: github-app
+            secret:
+              secretName: app
+              items:
+                - key: private-key.pem
+                  path: private-key.pem
+
+  - it: asks no JEV and mounts no key without it
+    set:
+      jev.enabled: false
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --jev-key-file=/etc/beekeeper/jev/key
+      - notContains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: jev
+            mountPath: /etc/beekeeper/jev
+            readOnly: true
+
+  - it: serves metrics and health on separate ports
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].ports
+          value:
+            - name: metrics
+              containerPort: 8080
+              protocol: TCP
+            - name: health
+              containerPort: 8081
+              protocol: TCP
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet
+          value:
+            path: /readyz
+            port: health
+
+  - it: runs non-root on a read-only root filesystem
+    asserts:
+      - equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: true
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+      - equal:
+          path: spec.template.spec.initContainers[0].securityContext.allowPrivilegeEscalation
+          value: false
+
+  - it: spreads the replicas unless an affinity is given
+    asserts:
+      - equal:
+          path: spec.template.spec.affinity.podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution[0].podAffinityTerm.labelSelector.matchLabels
+          value:
+            app.kubernetes.io/name: beekeeper
+            app.kubernetes.io/instance: beekeeper
+            app.kubernetes.io/component: engine
+
+  - it: takes the lease name and further arguments from values
+    set:
+      engine.leaderElectionID: hive-leader
+      engine.extraArgs: [--verbose]
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --leader-election-id=hive-leader
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --verbose

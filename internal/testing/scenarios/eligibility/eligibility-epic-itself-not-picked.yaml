@@ -1,0 +1,56 @@
+name: eligibility-epic-itself-not-picked
+concept: eligibility
+tags: [phase1, kinds]
+description: |
+  Given an unassigned Epic in Up Next with the best priority, and its ready
+  sub-item in Up Next assigned to alice
+  When the engine decides
+  Then the Epic is not eligible (KindNotImplementable) and is picked for nobody,
+  not even bob who has nothing else to pick; its sub-item is picked for alice.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#90
+        title: Klaus session resilience
+        assignees: []
+        board: { status: "Up Next ➡️", kind: "Epic 🎯", team: "Bumblebee🐝", priority: 1 }
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        assignees: [alice]
+        parent: giantswarm/roadmap#90
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝", priority: 2 }
+steps:
+  - id: epic-not-eligible
+    tool: get_item
+    args: { ref: giantswarm/roadmap#90 }
+    expected:
+      json_path:
+        status.class: Epic
+        status.eligible.value: false
+        status.eligible.reasons: [KindNotImplementable]
+        status.shadow.pick: null
+
+  - id: sub-item-picked
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      json_path:
+        status.eligible.value: true
+        status.shadow.pick.person: alice
+
+  - id: bob-picks-nothing
+    tool: get_person
+    args: { login: bob }
+    expected:
+      json_path: { status.picks: null }
+
+  - id: no-actions-for-the-epic
+    tool: events
+    args: { item: giantswarm/roadmap#90, type: shadow.action }
+    expected:
+      json_path: { count: 0 }

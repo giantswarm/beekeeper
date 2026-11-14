@@ -1,0 +1,73 @@
+name: wait-lost-webhook-woken-by-resync
+concept: wait
+tags: [phase1, learning-waits-dont-wake]
+description: |
+  Given a Change waiting on CI with the default 1h deadline
+  When CI completes green and GitHub never sends the check_run webhook
+  Then the 15-minute changes resync (09:15) finds CI green, long before the deadline, and
+  ends the wait with source resync; the change counts as a missed check_run webhook and no
+  deadline is involved.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        assignees: [alice]
+        board: { status: "In Progress ⛏️", kind: "Story 📑", team: "Bumblebee🐝" }
+    pulls:
+      - ref: giantswarm/klaus#55
+        author: alice
+        head: a1
+        closes: [giantswarm/roadmap#101]
+        checks:
+          - { name: "ci/circleci: go-build", status: completed, conclusion: success }
+          - { name: "ci/circleci: go-test", status: in_progress }
+steps:
+  - id: check-never-sent
+    tool: github_check_run
+    args: { repo: giantswarm/klaus, sha: a1, name: "ci/circleci: go-test", status: completed, conclusion: success, deliver: never }
+
+  - id: resync
+    tool: clock_advance
+    args: { by: 15m }
+
+  - id: wait-ended
+    tool: get_change
+    args: { ref: giantswarm/klaus#55 }
+    expected:
+      json_path:
+        status.ci.state: green
+        status.wait.on: review
+
+  - id: woken-by-resync
+    tool: events
+    args: { change: giantswarm/klaus#55, type: wait.woken, since_step: check-never-sent }
+    expected:
+      json_path:
+        count: 1
+        rows.0.source: resync
+        rows.0.at: "2026-11-16T09:15:00Z"
+        rows.0.data.on: ci
+
+  - id: no-deadline-involved
+    tool: events
+    args: { change: giantswarm/klaus#55, type: wait.deadline, since_step: check-never-sent }
+    expected:
+      json_path: { count: 0 }
+
+  - id: wake-counted
+    tool: metric
+    args: { name: engine_wait_wakes_total, labels: { on: ci, trigger: resync } }
+    expected:
+      json_path: { value: 1 }
+
+  - id: counted-as-missed
+    tool: metric
+    args: { name: engine_webhook_missed_total, labels: { event: check_run } }
+    expected:
+      json_path: { value: 1 }

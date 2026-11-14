@@ -1,0 +1,101 @@
+name: wait-deadline-reobserves-once
+concept: wait
+tags: [phase1, deadline, learning-failed-wakeups]
+description: |
+  Given a Change waiting on CI, with the ci defaultDeadline configured to 4m so that the
+  deadline (09:04) comes before the first 5-minute delivery-log check (09:05) and the
+  15-minute changes resync (09:15)
+  When CI completes green but the check_run delivery is lost (GitHub logs it as failed)
+  Then at the deadline the engine re-observes exactly once, with a conditional read, finds CI
+  green and ends the wait with source reobserve, so it never goes overdue; the change counts
+  as a missed check_run webhook.
+pre_configuration:
+  fixture: base
+  config:
+    installation:
+      waits:
+        ci: { defaultDeadline: 4m }
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        assignees: [alice]
+        board: { status: "In Progress ⛏️", kind: "Story 📑", team: "Bumblebee🐝" }
+    pulls:
+      - ref: giantswarm/klaus#55
+        author: alice
+        head: a1
+        closes: [giantswarm/roadmap#101]
+        checks:
+          - { name: "ci/circleci: go-build", status: completed, conclusion: success }
+          - { name: "ci/circleci: go-test", status: in_progress }
+steps:
+  - id: check-lost
+    description: CI completes green; GitHub logs the delivery as failed
+    tool: github_check_run
+    args: { repo: giantswarm/klaus, sha: a1, name: "ci/circleci: go-test", status: completed, conclusion: success, deliver: lost }
+
+  - id: not-seen
+    tool: get_change
+    args: { ref: giantswarm/klaus#55 }
+    expected:
+      json_path:
+        status.ci.state: pending
+        status.wait.state: watching
+        status.wait.deadline: "2026-11-16T09:04:00Z"
+
+  - id: deadline
+    description: 09:04, before any delivery-log check or resync
+    tool: clock_advance
+    args: { by: 4m }
+
+  - id: wait-ended
+    tool: get_change
+    args: { ref: giantswarm/klaus#55 }
+    expected:
+      json_path:
+        status.ci.state: green
+        status.wait.on: review
+
+  - id: deadline-row
+    tool: events
+    args: { change: giantswarm/klaus#55, type: wait.deadline, since_step: deadline }
+    expected:
+      json_path: { count: 1, rows.0.source: deadline }
+
+  - id: one-reobserve
+    tool: events
+    args: { change: giantswarm/klaus#55, type: wait.reobserved, since_step: deadline }
+    expected:
+      json_path: { count: 1 }
+
+  - id: woken-by-reobserve
+    tool: events
+    args: { change: giantswarm/klaus#55, type: wait.woken, since_step: deadline }
+    expected:
+      json_path:
+        count: 1
+        rows.0.source: reobserve
+        rows.0.data.on: ci
+
+  - id: read-was-conditional
+    tool: github_calls
+    args: { since_step: deadline, api: rest }
+    expected:
+      json_path_min: { conditional: 1 }
+
+  - id: counted-as-missed
+    tool: metric
+    args: { name: engine_webhook_missed_total, labels: { event: check_run } }
+    expected:
+      json_path: { value: 1 }
+
+  - id: never-overdue
+    tool: events
+    args: { change: giantswarm/klaus#55, type: wait.overdue, since_step: check-lost }
+    expected:
+      json_path: { count: 0 }

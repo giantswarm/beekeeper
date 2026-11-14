@@ -1,0 +1,85 @@
+name: eligibility-not-ready-records-one-todo
+concept: eligibility
+tags: [phase1, ready]
+description: |
+  Given two Up Next items with a Repo line but no acceptance criteria, one assigned
+  to alice and one unassigned
+  When the engine observes them, and two board resyncs pass with nothing changed
+  Then ready? decides "not-ready" once per item, both are NotReady, and each has
+  exactly one would-todo "refine with `/gs-plans:gs-plan`": to alice for hers, to
+  team:bumblebee for the unassigned one. The resyncs ask nothing again and add no
+  second todo.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          The client should retry.
+          Repo: giantswarm/klaus
+        assignees: [alice]
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝" }
+      - ref: giantswarm/roadmap#102
+        title: Expose klaus session metrics
+        body: |
+          We need metrics.
+          Repo: giantswarm/klaus
+        assignees: []
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝" }
+steps:
+  - id: alices-not-ready
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      json_path:
+        status.acceptanceCriteria: false
+        status.eligible.value: false
+        status.eligible.reasons: [NotReady]
+        status.shadow.actions[type=todo].args.to: alice
+        status.shadow.actions[type=todo].args.text: "refine with `/gs-plans:gs-plan`"
+
+  - id: unassigned-not-ready
+    tool: get_item
+    args: { ref: giantswarm/roadmap#102 }
+    expected:
+      json_path:
+        status.eligible.value: false
+        status.eligible.reasons: [NotReady]
+        status.shadow.actions[type=todo].args.to: "team:bumblebee"
+        status.shadow.actions[type=todo].args.text: "refine with `/gs-plans:gs-plan`"
+
+  - id: decided-not-ready
+    tool: decisions
+    args: { point: "ready?", item: giantswarm/roadmap#101 }
+    expected:
+      json_path: { count: 1, rows.0.rule: not-ready, rows.0.chosen: not-ready }
+
+  - id: two-resyncs
+    tool: clock_advance
+    args: { by: 20m }
+
+  - id: one-todo-for-alice
+    tool: events
+    args: { item: giantswarm/roadmap#101, type: shadow.action }
+    expected:
+      json_path: { count: 1 }
+
+  - id: one-todo-for-the-team
+    tool: events
+    args: { item: giantswarm/roadmap#102, type: shadow.action }
+    expected:
+      json_path: { count: 1 }
+
+  - id: not-asked-again
+    description: The inputs are unchanged, so neither the rule nor JEV runs again
+    tool: decisions
+    args: { point: "ready?", since_step: two-resyncs }
+    expected:
+      json_path: { count: 0 }
+
+  - id: jev-not-asked-again
+    tool: jev_calls
+    args: { point: "ready?", since_step: two-resyncs }
+    expected:
+      json_path: { count: 0 }

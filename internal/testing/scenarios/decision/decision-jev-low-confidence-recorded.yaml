@@ -1,0 +1,51 @@
+name: decision-jev-low-confidence-recorded
+concept: decision
+tags: [phase1]
+description: |
+  Given a ready item for which JEV answers `ready?` with "not-ready" at confidence 0.3
+  When the engine decides `ready?` for it
+  Then the answer and its confidence are recorded, the outcome counted is
+  jev_low_confidence (not disagree), and the rule's answer stands: the item is
+  eligible.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝" }
+  jev:
+    answers: [{ point: "ready?", item: giantswarm/roadmap#101, answer: not-ready, confidence: 0.3 }]
+steps:
+  - id: recorded
+    tool: decisions
+    args: { point: "ready?", item: giantswarm/roadmap#101 }
+    expected:
+      json_path:
+        count: 1
+        rows.0.rule: ready
+        rows.0.jev: not-ready
+        rows.0.jevConfidence: 0.3
+        rows.0.chosen: ready
+
+  - id: low-confidence-counted
+    tool: metric
+    args: { name: engine_decisions_total, labels: { point: "ready?", outcome: jev_low_confidence } }
+    expected:
+      json_path: { value: 1 }
+
+  - id: not-a-disagreement
+    tool: metric
+    args: { name: engine_decisions_total, labels: { point: "ready?", outcome: disagree } }
+    expected:
+      json_path: { value: 0 }
+
+  - id: rule-stands
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      json_path: { status.eligible.value: true }

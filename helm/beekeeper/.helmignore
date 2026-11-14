@@ -6,6 +6,7 @@
 *.tmp
 *.orig
 *~
+ci/
 tests/
 .schema.yaml
 zz_generated.*

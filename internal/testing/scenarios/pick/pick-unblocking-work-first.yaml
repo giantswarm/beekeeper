@@ -1,0 +1,75 @@
+name: pick-unblocking-work-first
+concept: pick
+tags: [phase1]
+description: |
+  Given bob's In Progress item (in flight), blocked by an open Up Next item (#120,
+  no Priority, the newest), and an Active epic owned by alice with an unassigned Up
+  Next sub-item (#111, Priority 1, older)
+  When the engine orders the team's eligible items
+  Then the item that unblocks in-flight work ranks first, ahead of the Active epic's
+  sub-item, and is alice's pick.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#105
+        title: Stream klaus session logs to the gateway
+        body: |
+          ### Acceptance criteria
+          - [ ] logs arrive within 2s
+          Repo: giantswarm/klaus
+        assignees: [bob]
+        blockedBy: [giantswarm/roadmap#120]
+        board: { status: "In Progress ⛏️", kind: "Story 📑", team: "Bumblebee🐝" }
+      - ref: giantswarm/roadmap#120
+        title: Add a log streaming endpoint to muster
+        body: |
+          ### Acceptance criteria
+          - [ ] a streaming endpoint per session
+          Repo: giantswarm/muster
+        createdAt: "2026-11-14T10:00:00Z"
+        board: { status: "Up Next ➡️", kind: "Task 🗒️", team: "Bumblebee🐝" }
+      - ref: giantswarm/roadmap#90
+        title: Klaus session resilience
+        assignees: [alice]
+        board: { status: "In Progress ⛏️", kind: "Epic 🎯", team: "Bumblebee🐝" }
+      - ref: giantswarm/roadmap#110
+        title: Reconnect klaus sessions after a gateway restart
+        body: |
+          ### Acceptance criteria
+          - [x] sessions reconnect within 30s
+          Repo: giantswarm/klaus
+        assignees: [alice]
+        state: closed
+        parent: giantswarm/roadmap#90
+        board: { status: "Done ✅", kind: "Story 📑", team: "Bumblebee🐝" }
+      - ref: giantswarm/roadmap#111
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        createdAt: "2026-11-01T10:00:00Z"
+        parent: giantswarm/roadmap#90
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝", priority: 1 }
+steps:
+  - id: unblocking-first
+    tool: get_item
+    args: { ref: giantswarm/roadmap#120 }
+    expected:
+      json_path: { status.shadow.pick: { person: alice, rank: 1 } }
+
+  - id: epic-item-second
+    description: Alice took the unblocking item instead, and her epic's sub-item isn't open to bob
+    tool: get_item
+    args: { ref: giantswarm/roadmap#111 }
+    expected:
+      json_path: { status.shadow.pick: null }
+
+  - id: team-picks
+    tool: get_team
+    args: { name: bumblebee }
+    expected:
+      json_path:
+        status.picks:
+          - { person: alice, item: giantswarm/roadmap#120 }

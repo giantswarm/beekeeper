@@ -1,0 +1,84 @@
+name: wait-red-ci-then-push-waits-on-new-sha
+concept: wait
+tags: [phase1]
+description: |
+  Given a Published item whose PR waits on CI for head SHA a1
+  When a required check fails on a1 at 09:10, and alice pushes b2 at 09:30
+  Then on red the Change's ci wait ends (red is final for a1) and the Item moves to Fixing,
+  with no wait on either (nothing is pending until a new head is pushed); on the push the
+  Change follows the new head and waits on CI for b2 (since 09:30, deadline 10:30), and the
+  Item is Published again with no wait of its own.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        assignees: [alice]
+        board: { status: "In Progress ⛏️", kind: "Story 📑", team: "Bumblebee🐝" }
+    pulls:
+      - ref: giantswarm/klaus#55
+        author: alice
+        head: a1
+        closes: [giantswarm/roadmap#101]
+        checks:
+          - { name: "ci/circleci: go-build", status: in_progress }
+          - { name: "ci/circleci: go-test", status: in_progress }
+steps:
+  - id: later
+    tool: clock_advance
+    args: { by: 10m }
+
+  - id: ci-red
+    tool: github_check_run
+    args: { repo: giantswarm/klaus, sha: a1, name: "ci/circleci: go-test", status: completed, conclusion: failure }
+
+  - id: change-red
+    tool: get_change
+    args: { ref: giantswarm/klaus#55 }
+    expected:
+      json_path:
+        status.ci.sha: a1
+        status.ci.state: red
+        status.wait: null
+
+  - id: item-fixing
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      json_path:
+        status.phase: Fixing
+        status.wait: null
+
+  - id: fixing-takes-a-while
+    tool: clock_advance
+    args: { by: 20m }
+
+  - id: fix-pushed
+    tool: github_pr_push
+    args: { ref: giantswarm/klaus#55, head: b2 }
+
+  - id: waits-on-new-sha
+    tool: get_change
+    args: { ref: giantswarm/klaus#55 }
+    expected:
+      json_path:
+        status.pr.headSha: b2
+        status.ci.sha: b2
+        status.ci.state: pending
+        status.wait.on: ci
+        status.wait.ref: "ci:giantswarm/klaus@b2"
+        status.wait.since: "2026-11-16T09:30:00Z"
+        status.wait.deadline: "2026-11-16T10:30:00Z"
+
+  - id: item-published
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      json_path:
+        status.phase: Published
+        status.wait: null

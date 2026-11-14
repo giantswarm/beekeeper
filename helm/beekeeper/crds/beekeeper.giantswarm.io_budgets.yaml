@@ -1,0 +1,127 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: budgets.beekeeper.giantswarm.io
+spec:
+  group: beekeeper.giantswarm.io
+  names:
+    kind: Budget
+    listKind: BudgetList
+    plural: budgets
+    singular: budget
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Budget is the API budget of a GitHub App.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: 'AppBudgetSpec is empty: the Budget is engine-owned.'
+            type: object
+          status:
+            description: BudgetStatus is the GitHub App's API budget.
+            properties:
+              app:
+                description: APIBudget is one API's rate limit as GitHub last reported
+                  it.
+                properties:
+                  limit:
+                    type: integer
+                  remaining:
+                    type: integer
+                  resetAt:
+                    format: date-time
+                    type: string
+                  used:
+                    description: Used counts calls (REST, app) or points (GraphQL)
+                      spent by the engine in the current window.
+                    type: integer
+                required:
+                - limit
+                - remaining
+                type: object
+              deferred:
+                description: |-
+                  Deferred says which APIs observation reads are deferred on: below the observation reserve, or
+                  stopped by a primary or secondary rate limit, until the API's reset.
+                properties:
+                  app:
+                    type: boolean
+                  graphql:
+                    type: boolean
+                  rest:
+                    type: boolean
+                required:
+                - graphql
+                - rest
+                type: object
+              graphql:
+                description: APIBudget is one API's rate limit as GitHub last reported
+                  it.
+                properties:
+                  limit:
+                    type: integer
+                  remaining:
+                    type: integer
+                  resetAt:
+                    format: date-time
+                    type: string
+                  used:
+                    description: Used counts calls (REST, app) or points (GraphQL)
+                      spent by the engine in the current window.
+                    type: integer
+                required:
+                - limit
+                - remaining
+                type: object
+              rest:
+                description: APIBudget is one API's rate limit as GitHub last reported
+                  it.
+                properties:
+                  limit:
+                    type: integer
+                  remaining:
+                    type: integer
+                  resetAt:
+                    format: date-time
+                    type: string
+                  used:
+                    description: Used counts calls (REST, app) or points (GraphQL)
+                      spent by the engine in the current window.
+                    type: integer
+                required:
+                - limit
+                - remaining
+                type: object
+            required:
+            - app
+            - deferred
+            - graphql
+            - rest
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

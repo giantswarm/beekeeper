@@ -1,0 +1,47 @@
+name: history-decisions-recorded-with-inputs
+concept: history
+tags: [phase1]
+description: |
+  Given a ready Up Next item and JEV answering "not-ready" for it with confidence 0.9
+  When the engine decides ready? for it at startup
+  Then the decisions table holds one row for that point and item (the subject) with its
+  inputs hash, the rule's answer, JEV's answer and confidence, the chosen answer (the rule's),
+  the mode shadow and the outcome disagree; and replaying every recorded decision from its
+  recorded inputs reproduces it.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        assignees: []
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝" }
+  jev:
+    answers: [{ point: "ready?", item: giantswarm/roadmap#101, answer: not-ready, confidence: 0.9 }]
+steps:
+  - id: decision-row
+    tool: decisions
+    args: { point: "ready?", item: giantswarm/roadmap#101 }
+    expected:
+      json_path:
+        count: 1
+        rows.0.point: "ready?"
+        rows.0.item: giantswarm/roadmap#101
+        rows.0.subject: giantswarm/roadmap#101
+        rows.0.rule: ready
+        rows.0.jev: not-ready
+        rows.0.jevConfidence: 0.9
+        rows.0.chosen: ready
+        rows.0.mode: shadow
+        rows.0.outcome: disagree
+      contains: ["inputsHash"]
+
+  - id: replayed
+    tool: replay
+    expected:
+      json_path: { mismatches: 0 }
+      json_path_min: { decisions: 1 }

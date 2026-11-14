@@ -1,0 +1,63 @@
+name: decision-mode-rule-skips-jev
+concept: decision
+tags: [phase1]
+description: |
+  Given `ready?` configured in mode rule (the other points stay in shadow) and a
+  ready item
+  When the engine decides `ready?` at startup and again after a body edit
+  Then JEV is never asked `ready?`, the decisions are recorded in mode rule with no
+  JEV answer, and `next?` is still asked of JEV.
+pre_configuration:
+  fixture: base
+  config:
+    installation:
+      decisionPoints: { "ready?": rule }
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝" }
+steps:
+  - id: body-edited
+    tool: github_issue_edit
+    args:
+      ref: giantswarm/roadmap#101
+      body: |
+        ### Acceptance criteria
+        - [ ] retries 5xx up to three times
+        - [ ] gives up after 30s in total
+        Repo: giantswarm/klaus
+
+  - id: rule-only
+    tool: decisions
+    args: { point: "ready?", item: giantswarm/roadmap#101 }
+    expected:
+      json_path:
+        count: 2
+        rows.0.mode: rule
+        rows.0.chosen: ready
+        rows.0.jev: null
+        rows.1.mode: rule
+        rows.1.jev: null
+
+  - id: jev-not-asked
+    tool: jev_calls
+    args: { point: "ready?" }
+    expected:
+      json_path: { count: 0 }
+
+  - id: other-points-still-shadow
+    tool: jev_calls
+    args: { point: "next?" }
+    expected:
+      json_path_min: { count: 1 }
+
+  - id: still-eligible
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      json_path: { status.eligible.value: true }

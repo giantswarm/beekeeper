@@ -1,0 +1,113 @@
+name: gate-person-wip-bounds-picks
+concept: gate
+tags: [phase1]
+description: |
+  Given alice with a WIP limit of 2 items, bob with the default 1, no team cap, and
+  four eligible unassigned items, each in its own repo (#101 to #104, Priority 1 to 4)
+  When the engine picks
+  Then the participants take turns in login order until their WIP is used: alice
+  gets #101 and #103, bob gets #102, each with its would-actions; #104 is neither
+  picked nor held, because a person's own WIP limit only bounds the number of picks
+  and never shows as a hold.
+pre_configuration:
+  fixture: base
+  config:
+    people: [{ login: alice, wip: { items: 2, epics: 1 } }]
+  github:
+    repos:
+      - { name: giantswarm/klaus-gateway, visibility: public, owner: team-bumblebee }
+      - { name: giantswarm/mcp-oauth, visibility: public, owner: team-bumblebee }
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝", priority: 1 }
+      - ref: giantswarm/roadmap#102
+        title: Count muster tool calls by outcome
+        body: |
+          ### Acceptance criteria
+          - [ ] a counter per tool call outcome
+          Repo: giantswarm/muster
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝", priority: 2 }
+      - ref: giantswarm/roadmap#103
+        title: Resume klaus sessions after a gateway restart
+        body: |
+          ### Acceptance criteria
+          - [ ] a session survives a gateway restart
+          Repo: giantswarm/klaus-gateway
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝", priority: 3 }
+      - ref: giantswarm/roadmap#104
+        title: Rotate the OAuth signing keys without downtime
+        body: |
+          ### Acceptance criteria
+          - [ ] old tokens stay valid until they expire
+          Repo: giantswarm/mcp-oauth
+        board: { status: "Up Next ➡️", kind: "Task 🗒️", team: "Bumblebee🐝", priority: 4 }
+steps:
+  - id: team
+    tool: get_team
+    args: { name: bumblebee }
+    expected:
+      json_path:
+        status.wip: { items: 0, epics: 0 }
+        status.picks:
+          - { person: alice, item: giantswarm/roadmap#101 }
+          - { person: bob, item: giantswarm/roadmap#102 }
+          - { person: alice, item: giantswarm/roadmap#103 }
+        status.held: null
+
+  - id: alice-two-picks
+    tool: get_person
+    args: { login: alice }
+    expected:
+      json_path:
+        status.wip: { items: 0, epics: 0 }
+        status.free.items: 2
+        status.picks: [giantswarm/roadmap#101, giantswarm/roadmap#103]
+        status.held: null
+
+  - id: bob-one-pick
+    tool: get_person
+    args: { login: bob }
+    expected:
+      json_path:
+        status.free.items: 1
+        status.picks: [giantswarm/roadmap#102]
+        status.held: null
+
+  - id: second-pick-has-actions
+    tool: get_item
+    args: { ref: giantswarm/roadmap#103 }
+    expected:
+      json_path:
+        status.shadow.pick: { person: alice, rank: 3 }
+        status.shadow.heldBy: null
+        status.shadow.actions:
+          - { type: assign, args: { login: alice } }
+          - { type: set-status, args: { status: "In Progress ⛏️" } }
+          - { type: start-run, args: { purpose: implement } }
+
+  - id: beyond-wip-not-held
+    tool: get_item
+    args: { ref: giantswarm/roadmap#104 }
+    expected:
+      json_path:
+        status.eligible.value: true
+        status.shadow.pick: null
+        status.shadow.heldBy: null
+        status.shadow.actions: null
+
+  - id: three-pick-events
+    tool: events
+    args: { type: shadow.pick }
+    expected:
+      json_path: { count: 3 }
+
+  - id: no-held-events
+    tool: events
+    args: { type: shadow.held }
+    expected:
+      json_path: { count: 0 }

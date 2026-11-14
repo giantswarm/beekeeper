@@ -1,0 +1,203 @@
+{{- /* Every fromEndpoints rule's authentication, at the rule's indentation (6). */ -}}
+{{- define "beekeeper.cnp.auth" -}}
+{{- with .Values.ciliumNetworkPolicies.authenticationMode }}
+{{- printf "authentication:\n  mode: %q" . | nindent 6 }}
+{{- end }}
+{{- end }}
+
+{{- define "beekeeper.cnp.port" -}}
+- ports:
+    - port: {{ . | quote }}
+      protocol: TCP
+{{- end }}
+
+{{- define "beekeeper.cnp.dns" -}}
+- toEndpoints:
+    - matchLabels:
+        {{- toYaml .Values.ciliumNetworkPolicies.dns.selector | nindent 8 }}
+  toPorts:
+    - ports:
+        {{- range .Values.ciliumNetworkPolicies.dns.ports }}
+        - port: {{ . | quote }}
+          protocol: UDP
+        - port: {{ . | quote }}
+          protocol: TCP
+        {{- end }}
+      # Through Cilium's DNS proxy, which toFQDNs rules need.
+      rules:
+        dns:
+          - matchPattern: "*"
+{{- end }}
+
+{{- define "beekeeper.cnp.postgresSelector" -}}
+{{- if .Values.ciliumNetworkPolicies.postgres.selector }}
+{{- toYaml .Values.ciliumNetworkPolicies.postgres.selector }}
+{{- else -}}
+cnpg.io/cluster: {{ include "beekeeper.postgres.cluster" . }}
+{{- end }}
+{{- end }}
+
+{{- define "beekeeper.cnp.toPostgres" -}}
+- toEndpoints:
+    - matchLabels:
+        {{- include "beekeeper.cnp.postgresSelector" . | nindent 8 }}
+  toPorts:
+    {{- include "beekeeper.cnp.port" .Values.postgres.port | nindent 4 }}
+{{- end }}
+
+{{- if .Values.ciliumNetworkPolicies.enabled }}
+{{- $cnp := .Values.ciliumNetworkPolicies }}
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ include "beekeeper.engine.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "beekeeper.engine.labels" . | nindent 4 }}
+spec:
+  description: "The engine: scraped by Prometheus; reaches DNS, the Kubernetes API, GitHub, JEV and Postgres."
+  endpointSelector:
+    matchLabels:
+      {{- include "beekeeper.engine.selectorLabels" . | nindent 6 }}
+  ingress:
+    {{- with $cnp.prometheus.selector }}
+    - fromEndpoints:
+        - matchLabels:
+            {{- toYaml . | nindent 12 }}
+      {{- include "beekeeper.cnp.auth" $ }}
+      toPorts:
+        {{- include "beekeeper.cnp.port" $.Values.engine.ports.metrics | nindent 8 }}
+    {{- end }}
+    {{- with $cnp.probeEntities }}
+    - fromEntities:
+        {{- toYaml . | nindent 8 }}
+      toPorts:
+        {{- include "beekeeper.cnp.port" $.Values.engine.ports.health | nindent 8 }}
+    {{- end }}
+  egress:
+    {{- include "beekeeper.cnp.dns" . | nindent 4 }}
+    - toEntities:
+        - kube-apiserver
+    {{- with $cnp.engine.fqdns }}
+    - toFQDNs:
+        {{- range . }}
+        - matchName: {{ . | quote }}
+        {{- end }}
+      toPorts:
+        {{- include "beekeeper.cnp.port" 443 | nindent 8 }}
+    {{- end }}
+    {{- include "beekeeper.cnp.toPostgres" . | nindent 4 }}
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ include "beekeeper.receiver.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "beekeeper.receiver.labels" . | nindent 4 }}
+spec:
+  description: "The webhook receiver: reached through the gateway, scraped by Prometheus; reaches DNS and Postgres."
+  endpointSelector:
+    matchLabels:
+      {{- include "beekeeper.receiver.selectorLabels" . | nindent 6 }}
+  ingress:
+    {{- with $cnp.gateway.selector }}
+    - fromEndpoints:
+        - matchLabels:
+            {{- toYaml . | nindent 12 }}
+      {{- include "beekeeper.cnp.auth" $ }}
+      toPorts:
+        {{- include "beekeeper.cnp.port" $.Values.receiver.ports.webhook | nindent 8 }}
+    {{- end }}
+    {{- with $cnp.prometheus.selector }}
+    - fromEndpoints:
+        - matchLabels:
+            {{- toYaml . | nindent 12 }}
+      {{- include "beekeeper.cnp.auth" $ }}
+      toPorts:
+        {{- include "beekeeper.cnp.port" $.Values.receiver.ports.metrics | nindent 8 }}
+    {{- end }}
+    {{- with $cnp.probeEntities }}
+    - fromEntities:
+        {{- toYaml . | nindent 8 }}
+      toPorts:
+        {{- include "beekeeper.cnp.port" $.Values.receiver.ports.metrics | nindent 8 }}
+    {{- end }}
+  egress:
+    {{- include "beekeeper.cnp.dns" . | nindent 4 }}
+    {{- include "beekeeper.cnp.toPostgres" . | nindent 4 }}
+{{- if $cnp.postgres.enabled }}
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ include "beekeeper.postgres.cluster" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "beekeeper.labels" . | nindent 4 }}
+spec:
+  description: "Postgres (CloudNativePG): reached by the engine, the receiver, its operator, its other instances and Prometheus."
+  endpointSelector:
+    matchLabels:
+      {{- include "beekeeper.cnp.postgresSelector" . | nindent 6 }}
+  ingress:
+    - fromEndpoints:
+        - matchLabels:
+            {{- include "beekeeper.engine.selectorLabels" . | nindent 12 }}
+        - matchLabels:
+            {{- include "beekeeper.receiver.selectorLabels" . | nindent 12 }}
+      {{- include "beekeeper.cnp.auth" $ }}
+      toPorts:
+        {{- include "beekeeper.cnp.port" .Values.postgres.port | nindent 8 }}
+    # Replication and status between the Cluster's instances.
+    - fromEndpoints:
+        - matchLabels:
+            {{- include "beekeeper.cnp.postgresSelector" . | nindent 12 }}
+      {{- include "beekeeper.cnp.auth" $ }}
+      toPorts:
+        - ports:
+            - port: {{ .Values.postgres.port | quote }}
+              protocol: TCP
+            - port: {{ $cnp.postgres.statusPort | quote }}
+              protocol: TCP
+    {{- with $cnp.postgres.operatorSelector }}
+    - fromEndpoints:
+        - matchLabels:
+            {{- toYaml . | nindent 12 }}
+      {{- include "beekeeper.cnp.auth" $ }}
+      toPorts:
+        - ports:
+            - port: {{ $.Values.postgres.port | quote }}
+              protocol: TCP
+            - port: {{ $cnp.postgres.statusPort | quote }}
+              protocol: TCP
+    {{- end }}
+    {{- with $cnp.prometheus.selector }}
+    - fromEndpoints:
+        - matchLabels:
+            {{- toYaml . | nindent 12 }}
+      {{- include "beekeeper.cnp.auth" $ }}
+      toPorts:
+        {{- include "beekeeper.cnp.port" $cnp.postgres.metricsPort | nindent 8 }}
+    {{- end }}
+    {{- with $cnp.probeEntities }}
+    - fromEntities:
+        {{- toYaml . | nindent 8 }}
+      toPorts:
+        {{- include "beekeeper.cnp.port" $cnp.postgres.statusPort | nindent 8 }}
+    {{- end }}
+  egress:
+    {{- include "beekeeper.cnp.dns" . | nindent 4 }}
+    - toEntities:
+        - kube-apiserver
+    - toEndpoints:
+        - matchLabels:
+            {{- include "beekeeper.cnp.postgresSelector" . | nindent 12 }}
+      toPorts:
+        - ports:
+            - port: {{ .Values.postgres.port | quote }}
+              protocol: TCP
+            - port: {{ $cnp.postgres.statusPort | quote }}
+              protocol: TCP
+{{- end }}
+{{- end }}

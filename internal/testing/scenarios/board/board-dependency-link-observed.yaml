@@ -1,0 +1,63 @@
+name: board-dependency-link-observed
+concept: board
+tags: [phase1, links]
+description: |
+  Given an eligible Up Next item and an open issue it doesn't depend on yet
+  When a person marks the item as blocked by that issue (issue_dependencies
+  blocked_by_added), and later removes the dependency again
+  Then blockedBy lists the open blocker and eligibility is BlockedByOpenIssue, and
+  after the removal blockedBy is empty and the item is eligible again.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#100
+        title: Klaus client API v2
+        assignees: []
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        assignees: [alice]
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝" }
+steps:
+  - id: eligible
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      json_path: { status.blockedBy: null, status.eligible.value: true }
+
+  - id: blocked-by-added
+    tool: github_dependency
+    args: { issue: giantswarm/roadmap#101, blocked_by: giantswarm/roadmap#100, op: add }
+
+  - id: blocked
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      json_path:
+        status.blockedBy: [{ ref: giantswarm/roadmap#100, state: open }]
+        status.eligible.value: false
+        status.eligible.reasons: [BlockedByOpenIssue]
+        status.observed.source: webhook
+
+  - id: blocked-by-removed
+    tool: github_dependency
+    args: { issue: giantswarm/roadmap#101, blocked_by: giantswarm/roadmap#100, op: remove }
+
+  - id: unblocked
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      json_path:
+        status.blockedBy: null
+        status.eligible.value: true
+        status.eligible.reasons: null
+
+  - id: eligibility-changed-twice
+    tool: events
+    args: { item: giantswarm/roadmap#101, type: eligibility.changed, since_step: blocked-by-added }
+    expected:
+      json_path: { count: 2, rows.0.source: webhook, rows.1.source: webhook }

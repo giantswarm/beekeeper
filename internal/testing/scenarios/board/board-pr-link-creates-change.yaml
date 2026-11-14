@@ -1,0 +1,57 @@
+name: board-pr-link-creates-change
+concept: board
+tags: [phase1, links]
+description: |
+  Given an In Progress item with no PR, so its phase is Implementing
+  When alice opens a PR in giantswarm/klaus that closes it (pull_request.opened)
+  Then a Change exists for the PR, linked to the Item, the Item lists it in its
+  changes, and the Item's phase is Published.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        assignees: [alice]
+        board: { status: "In Progress ⛏️", kind: "Story 📑", team: "Bumblebee🐝" }
+steps:
+  - id: implementing
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      json_path: { status.phase: Implementing, status.changes: null }
+
+  - id: pr-opened
+    tool: github_pr_open
+    args: { ref: giantswarm/klaus#55, author: alice, head: a1, closes: [giantswarm/roadmap#101] }
+
+  - id: change-created
+    tool: get_change
+    args: { ref: giantswarm/klaus#55 }
+    expected:
+      json_path:
+        status.pr.repo: giantswarm/klaus
+        status.pr.number: 55
+        status.pr.state: open
+        status.pr.author: alice
+        status.pr.headSha: a1
+        status.items: [giantswarm/roadmap#101]
+        status.observed.source: webhook
+
+  - id: item-published
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      json_path:
+        status.changes: [giantswarm/klaus#55]
+        status.phase: Published
+
+  - id: phase-changed-once
+    tool: events
+    args: { item: giantswarm/roadmap#101, type: phase.changed, since_step: pr-opened }
+    expected:
+      json_path: { count: 1, rows.0.source: webhook }

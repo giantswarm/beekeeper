@@ -1,0 +1,107 @@
+name: pick-recorded-once-not-executed
+concept: pick
+tags: [phase1]
+description: |
+  Given one eligible unassigned item, picked for alice, and an Up Next item of the
+  team assigned to carol (not a Person, so never eligible)
+  When the board resync runs, carol's item changes, and the picked item is edited
+  in a way that doesn't change the pick
+  Then the pick is recorded once (one shadow.pick event, its would-actions once) and
+  shown on the Person and the Team; the engine decides again each time but adds no
+  second pick event or would-action while the pick is unchanged.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝", priority: 1 }
+      - ref: giantswarm/roadmap#150
+        title: Document muster's configuration file
+        body: |
+          ### Acceptance criteria
+          - [ ] every key is documented
+          Repo: giantswarm/muster
+        assignees: [carol]
+        board: { status: "Up Next ➡️", kind: "Task 🗒️", team: "Bumblebee🐝" }
+steps:
+  - id: pick-recorded
+    tool: events
+    args: { type: shadow.pick }
+    expected:
+      json_path:
+        count: 1
+        rows.0.item: giantswarm/roadmap#101
+        rows.0.data.person: alice
+
+  - id: would-actions-recorded
+    description: assign, set-status and start-run
+    tool: events
+    args: { item: giantswarm/roadmap#101, type: shadow.action }
+    expected:
+      json_path: { count: 3 }
+
+  - id: on-the-person
+    tool: get_person
+    args: { login: alice }
+    expected:
+      json_path: { status.free.items: 1, status.picks: [giantswarm/roadmap#101] }
+
+  - id: on-the-team
+    tool: get_team
+    args: { name: bumblebee }
+    expected:
+      json_path:
+        status.picks:
+          - { person: alice, item: giantswarm/roadmap#101 }
+
+  - id: board-resync
+    tool: clock_advance
+    args: { by: 10m }
+
+  - id: decided-again
+    tool: get_team
+    args: { name: bumblebee }
+    expected:
+      json_path:
+        status.lastDecisionAt: "2026-11-16T09:10:00Z"
+        status.picks:
+          - { person: alice, item: giantswarm/roadmap#101 }
+
+  - id: unrelated-webhook
+    description: Carol's item, an Item of the team that isn't eligible, gets a Priority
+    tool: github_board_set
+    args: { issue: giantswarm/roadmap#150, priority: 1 }
+
+  - id: same-item-webhook
+    description: A typo fix in the picked item's title
+    tool: github_issue_edit
+    args: { ref: giantswarm/roadmap#101, title: Retry transient errors in the klaus API client }
+
+  - id: item-reconciled
+    tool: reconciles
+    args: { item: giantswarm/roadmap#101, since_step: same-item-webhook }
+    expected:
+      json_path_min: { count: 1 }
+
+  - id: no-second-pick
+    tool: events
+    args: { type: shadow.pick, since_step: board-resync }
+    expected:
+      json_path: { count: 0 }
+
+  - id: no-second-action
+    tool: events
+    args: { type: shadow.action, since_step: board-resync }
+    expected:
+      json_path: { count: 0 }
+
+  - id: still-alices-pick
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      json_path: { status.shadow.pick.person: alice }

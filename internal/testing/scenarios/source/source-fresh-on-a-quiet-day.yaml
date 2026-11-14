@@ -1,0 +1,101 @@
+name: source-fresh-on-a-quiet-day
+concept: source
+tags: [phase1, learning-unobserved-not-stalled]
+description: |
+  Given an item whose PR is green and waiting on review, and an Up Next item blocked by an
+  open issue, with nothing failing in the webhook delivery log
+  When six hours pass without a single change, so GitHub sends no deliveries at all
+  Then silence is not blindness: the delivery log and the board probe keep being
+  checked, both sources stay fresh, both waits (review, dependency) keep watching without
+  polling or showing unobserved, and no invariant fires.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        assignees: [alice]
+        board: { status: "In Progress ⛏️", kind: "Story 📑", team: "Bumblebee🐝" }
+      - ref: giantswarm/roadmap#100
+        title: Name the klaus session states
+        body: Agree on the states a session can be in.
+        assignees: [bob]
+      - ref: giantswarm/roadmap#102
+        title: Expose klaus session metrics
+        body: |
+          ### Acceptance criteria
+          - [ ] a metric per session state
+          Repo: giantswarm/klaus
+        assignees: [bob]
+        blockedBy: [giantswarm/roadmap#100]
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝" }
+    pulls:
+      - ref: giantswarm/klaus#55
+        author: alice
+        head: a1
+        closes: [giantswarm/roadmap#101]
+        checks:
+          - { name: "ci/circleci: go-build", status: completed, conclusion: success }
+          - { name: "ci/circleci: go-test", status: completed, conclusion: success }
+steps:
+  - id: quiet-day
+    description: Six hours pass; nothing changes and GitHub delivers nothing
+    tool: clock_advance
+    args: { by: 6h }
+
+  - id: both-sources-fresh
+    tool: get_installation
+    expected:
+      json_path:
+        status.sources.webhooks.state: fresh
+        status.sources.webhooks.polling: false
+        status.sources.board.state: fresh
+        status.sources.board.polling: false
+
+  - id: log-was-checked
+    description: The verdict comes from reading the delivery log every 5 minutes, not from silence
+    tool: github_calls
+    args: { since_step: quiet-day, api: app, operation: apps/list-webhook-deliveries }
+    expected:
+      json_path: { count: 72 }
+
+  - id: board-was-probed
+    description: And from the 10-minute board probe
+    tool: github_calls
+    args: { since_step: quiet-day, api: graphql, operation: BoardProbe }
+    expected:
+      json_path: { count: 36 }
+
+  - id: never-degraded
+    tool: events
+    args: { type: source.degraded, since_step: quiet-day }
+    expected:
+      json_path: { count: 0 }
+
+  - id: review-wait-watching
+    tool: get_change
+    args: { ref: giantswarm/klaus#55 }
+    expected:
+      json_path: { status.wait.on: review, status.wait.state: watching }
+
+  - id: dependency-wait-watching
+    tool: get_item
+    args: { ref: giantswarm/roadmap#102 }
+    expected:
+      json_path: { status.wait.on: dependency, status.wait.state: watching }
+
+  - id: nothing-unobserved
+    tool: events
+    args: { type: wait.unobserved, since_step: quiet-day }
+    expected:
+      json_path: { count: 0 }
+
+  - id: no-invariant-fires
+    tool: metric
+    args: { name: engine_invariant_violations }
+    expected:
+      json_path: { value: 0 }

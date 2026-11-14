@@ -1,0 +1,118 @@
+name: wait-unobserved-when-reobserve-fails
+concept: wait
+tags: [phase1, deadline, learning-unobserved-not-stalled]
+description: |
+  Given a Change waiting on CI with its deadline at 10:00 and atDeadline re-observe
+  When GitHub answers every read of giantswarm/klaus with 502 from 09:59 until 10:10, so the
+  re-observe at the deadline fails
+  Then the wait shows unobserved with reason http-502, not overdue, it is not treated as a
+  refusal, and wait-within-deadline holds past deadline plus grace; once GitHub recovers,
+  the next transient retry (10s, doubling, capped at 5m: 10:10:10) re-observes, finds CI
+  still pending, and only then handles the deadline, once: the wait becomes overdue.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        assignees: [alice]
+        board: { status: "In Progress ⛏️", kind: "Story 📑", team: "Bumblebee🐝" }
+    pulls:
+      - ref: giantswarm/klaus#55
+        author: alice
+        head: a1
+        closes: [giantswarm/roadmap#101]
+        checks:
+          - { name: "ci/circleci: go-build", status: completed, conclusion: success }
+          - { name: "ci/circleci: go-test", status: in_progress }
+steps:
+  - id: before-deadline
+    tool: clock_advance
+    args: { by: 59m }
+
+  - id: github-fails
+    description: Every REST read of the repo fails with 502 until cleared
+    tool: github_fault
+    args: { kind: http_error, status: 502, api: rest, match: /repos/giantswarm/klaus }
+
+  - id: deadline
+    tool: clock_advance
+    args: { by: 1m }
+
+  - id: unobserved
+    tool: get_change
+    args: { ref: giantswarm/klaus#55 }
+    expected:
+      json_path:
+        status.wait.on: ci
+        status.wait.state: unobserved
+        status.wait.reason: http-502
+
+  - id: unobserved-row
+    tool: events
+    args: { change: giantswarm/klaus#55, type: wait.unobserved, since_step: deadline }
+    expected:
+      json_path: { count: 1 }
+
+  - id: unobserved-gauge
+    tool: metric
+    args: { name: engine_waits, labels: { on: ci, state: unobserved } }
+    expected:
+      json_path: { value: 1 }
+
+  - id: past-grace
+    description: 10:10, past deadline plus the 5m grace, GitHub still failing
+    tool: clock_advance
+    args: { by: 10m }
+
+  - id: not-stalled
+    tool: metric
+    args: { name: engine_invariant_violations, labels: { invariant: wait-within-deadline } }
+    expected:
+      json_path: { value: 0 }
+
+  - id: still-unobserved
+    tool: get_change
+    args: { ref: giantswarm/klaus#55 }
+    expected:
+      json_path: { status.wait.state: unobserved, status.wait.reason: http-502 }
+
+  - id: not-overdue
+    description: Unobserved is not stalled
+    tool: events
+    args: { change: giantswarm/klaus#55, type: wait.overdue, since_step: github-fails }
+    expected:
+      json_path: { count: 0 }
+
+  - id: not-a-refusal
+    description: A 5xx is transient; it backs off, it is not a refusal
+    tool: events
+    args: { type: refusal, since_step: github-fails }
+    expected:
+      json_path: { count: 0 }
+
+  - id: github-recovers
+    tool: github_fault
+    args: { kind: clear }
+
+  - id: after-recovery
+    tool: clock_advance
+    args: { by: 10m }
+
+  - id: observed-again
+    tool: get_change
+    args: { ref: giantswarm/klaus#55 }
+    expected:
+      json_path:
+        status.ci.state: pending
+        status.wait.state: overdue
+
+  - id: overdue-once
+    tool: events
+    args: { change: giantswarm/klaus#55, type: wait.overdue, since_step: github-recovers }
+    expected:
+      json_path: { count: 1, rows.0.at: "2026-11-16T10:10:10Z" }

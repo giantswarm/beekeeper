@@ -1,0 +1,353 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: changes.beekeeper.giantswarm.io
+spec:
+  group: beekeeper.giantswarm.io
+  names:
+    kind: Change
+    listKind: ChangeList
+    plural: changes
+    singular: change
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.pr.state
+      name: PR
+      type: string
+    - jsonPath: .status.ci.state
+      name: CI
+      type: string
+    - jsonPath: .status.wait.on
+      name: Wait
+      type: string
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Change is a PR that closes a tracked item.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: 'ChangeSpec is empty: Changes are engine-owned.'
+            type: object
+          status:
+            description: ChangeStatus is everything the engine observed and decided
+              about a PR.
+            properties:
+              ci:
+                description: ChangeCI is the CI verdict on a commit.
+                properties:
+                  ignored:
+                    description: Ignored are the checks and statuses seen on the commit
+                      that don't count.
+                    items:
+                      type: string
+                    type: array
+                  relevant:
+                    description: Relevant are the checks and statuses that decide
+                      the verdict (the required set).
+                    items:
+                      type: string
+                    type: array
+                  sha:
+                    type: string
+                  state:
+                    description: State is pending, green, red or none.
+                    type: string
+                required:
+                - sha
+                - state
+                type: object
+              etags:
+                additionalProperties:
+                  type: string
+                description: |-
+                  ETags of the conditional reads, keyed by REST operation id and path; kept so a restart doesn't
+                  cost a full re-read.
+                type: object
+              facts:
+                description: |-
+                  Facts are the raw observations the verdicts are derived from (decide.Change), kept so a 304
+                  after a restart still has them.
+                properties:
+                  codeOwnerTeams:
+                    items:
+                      type: string
+                    type: array
+                  head:
+                    items:
+                      description: CheckFact is a check run or a commit status (Kind
+                        check or status) on a commit.
+                      properties:
+                        completedAt:
+                          format: date-time
+                          type: string
+                        conclusion:
+                          description: |-
+                            Conclusion is success, failure, neutral, cancelled, skipped, timed_out or action_required
+                            (a status's success, failure or error map to success, failure, failure).
+                          type: string
+                        kind:
+                          type: string
+                        name:
+                          type: string
+                        startedAt:
+                          format: date-time
+                          type: string
+                        status:
+                          description: Status is queued, in_progress or completed
+                            (a status's pending is in_progress).
+                          type: string
+                      required:
+                      - kind
+                      - name
+                      - status
+                      type: object
+                    type: array
+                  headSha:
+                    type: string
+                  merge:
+                    items:
+                      description: CheckFact is a check run or a commit status (Kind
+                        check or status) on a commit.
+                      properties:
+                        completedAt:
+                          format: date-time
+                          type: string
+                        conclusion:
+                          description: |-
+                            Conclusion is success, failure, neutral, cancelled, skipped, timed_out or action_required
+                            (a status's success, failure or error map to success, failure, failure).
+                          type: string
+                        kind:
+                          type: string
+                        name:
+                          type: string
+                        startedAt:
+                          format: date-time
+                          type: string
+                        status:
+                          description: Status is queued, in_progress or completed
+                            (a status's pending is in_progress).
+                          type: string
+                      required:
+                      - kind
+                      - name
+                      - status
+                      type: object
+                    type: array
+                  mergeSha:
+                    description: MergeSHA and Merge are the checks and statuses on
+                      the merge commit.
+                    type: string
+                  ownerTeam:
+                    description: OwnerTeam is the repo's owning team, when known.
+                    type: string
+                  repoPrivate:
+                    type: boolean
+                  requiredApprovals:
+                    type: integer
+                  requiredChecks:
+                    items:
+                      type: string
+                    type: array
+                  reviews:
+                    items:
+                      description: ReviewFact is a submitted review.
+                      properties:
+                        by:
+                          type: string
+                        state:
+                          type: string
+                        teams:
+                          items:
+                            type: string
+                          type: array
+                      required:
+                      - by
+                      - state
+                      type: object
+                    type: array
+                type: object
+              items:
+                items:
+                  type: string
+                type: array
+              mergeResult:
+                description: ChangeCI is the CI verdict on a commit.
+                properties:
+                  ignored:
+                    description: Ignored are the checks and statuses seen on the commit
+                      that don't count.
+                    items:
+                      type: string
+                    type: array
+                  relevant:
+                    description: Relevant are the checks and statuses that decide
+                      the verdict (the required set).
+                    items:
+                      type: string
+                    type: array
+                  sha:
+                    type: string
+                  state:
+                    description: State is pending, green, red or none.
+                    type: string
+                required:
+                - sha
+                - state
+                type: object
+              observed:
+                description: Observed is the last observed change and its source.
+                properties:
+                  at:
+                    format: date-time
+                    type: string
+                  source:
+                    type: string
+                required:
+                - at
+                - source
+                type: object
+              pr:
+                description: ChangePR is the observed pull request.
+                properties:
+                  author:
+                    type: string
+                  base:
+                    type: string
+                  draft:
+                    type: boolean
+                  headSha:
+                    type: string
+                  mergeSha:
+                    type: string
+                  nodeId:
+                    type: string
+                  number:
+                    type: integer
+                  repo:
+                    type: string
+                  state:
+                    description: State is open, closed or merged.
+                    type: string
+                required:
+                - number
+                - repo
+                - state
+                type: object
+              refusal:
+                description: |-
+                  Refusal is a read GitHub refused (404, 403 without rate limit, 410, 422). It is not retried until its
+                  inputs change.
+                properties:
+                  code:
+                    type: integer
+                  inputs:
+                    description: |-
+                      Inputs is a hash of what would change the answer (installation repos, the object's last webhook,
+                      configuration); the read is retried only when it differs.
+                    type: string
+                  operation:
+                    type: string
+                  retries:
+                    description: Retries counts reads made with unchanged inputs (the
+                      refusal-not-repeated invariant).
+                    type: integer
+                  since:
+                    format: date-time
+                    type: string
+                required:
+                - code
+                - operation
+                - since
+                type: object
+              review:
+                description: ChangeReview is the review verdict.
+                properties:
+                  approvals:
+                    type: integer
+                  needsOtherTeam:
+                    type: boolean
+                  required:
+                    type: integer
+                  state:
+                    description: State is none, approved or changes-requested.
+                    type: string
+                required:
+                - needsOtherTeam
+                - state
+                type: object
+              wait:
+                description: Wait is what an Item or Change expects to observe next
+                  (design §11).
+                properties:
+                  atDeadline:
+                    type: string
+                  backoff:
+                    description: Backoff is the current overdue or retry backoff.
+                    type: string
+                  deadline:
+                    description: Deadline is when the engine re-observes once.
+                    format: date-time
+                    type: string
+                  deadlineHandled:
+                    description: DeadlineHandled is true once the deadline's single
+                      re-observe has been made.
+                    type: boolean
+                  nextCheck:
+                    description: |-
+                      NextCheck is when the engine next re-observes: the deadline while watching, the overdue backoff
+                      while overdue, the transient retry while unobserved.
+                    format: date-time
+                    type: string
+                  "on":
+                    description: On is dependency, ci or review.
+                    type: string
+                  reason:
+                    description: 'Reason says why the wait is not watching: budget,
+                      source-degraded or http-<code>.'
+                    type: string
+                  ref:
+                    description: 'Ref is the wake ref: issue:<ref>, ci:<repo>@<sha>
+                      or pr:<ref>.'
+                    type: string
+                  since:
+                    format: date-time
+                    type: string
+                  state:
+                    description: State is watching, overdue or unobserved.
+                    type: string
+                required:
+                - atDeadline
+                - deadline
+                - "on"
+                - ref
+                - since
+                - state
+                type: object
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

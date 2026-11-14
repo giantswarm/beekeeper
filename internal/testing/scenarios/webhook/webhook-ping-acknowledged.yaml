@@ -1,0 +1,34 @@
+name: webhook-ping-acknowledged
+concept: webhook
+tags: [phase1]
+description: |
+  Given the receiver with the App's webhook secret
+  When GitHub sends its validly signed `ping` (as when the App's webhook is set up)
+  Then the receiver answers 2xx, counts it as ignored, and the engine reads nothing from GitHub.
+pre_configuration:
+  fixture: base
+steps:
+  - id: ping
+    tool: webhook_post
+    args:
+      event: ping
+      signature: valid
+      body:
+        zen: "hello"
+        hook_id: 1
+        hook: { type: App, app_id: 100 }
+    expected:
+      json_path_min: { status_code: 200 }
+      json_path_max: { status_code: 299 }
+
+  - id: counted-ignored
+    tool: metric
+    args: { name: engine_webhook_deliveries_total, labels: { event: ping, outcome: ignored } }
+    expected:
+      json_path: { value: 1 }
+
+  - id: no-reads
+    tool: github_calls
+    args: { since_step: ping }
+    expected:
+      json_path: { count: 0 }

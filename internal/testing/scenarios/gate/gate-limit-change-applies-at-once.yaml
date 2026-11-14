@@ -1,0 +1,68 @@
+name: gate-limit-change-applies-at-once
+concept: gate
+tags: [phase1]
+description: |
+  Given a team cap of 1 item, taken by alice's pick (#101), and bob's top candidate
+  (#102) held for him by TeamCap
+  When the configuration raises the team cap to 2 (applied as Flux would, with no
+  restart and no clock advance)
+  Then #102 is no longer held and is picked for bob at once, with its would-actions.
+pre_configuration:
+  fixture: base
+  config:
+    teams: [{ name: bumblebee, cap: { items: 1 } }]
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝", priority: 1 }
+      - ref: giantswarm/roadmap#102
+        title: Count muster tool calls by outcome
+        body: |
+          ### Acceptance criteria
+          - [ ] a counter per tool call outcome
+          Repo: giantswarm/muster
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝", priority: 2 }
+steps:
+  - id: held
+    tool: get_item
+    args: { ref: giantswarm/roadmap#102 }
+    expected:
+      json_path: { status.shadow.heldBy: { person: bob, gate: TeamCap } }
+
+  - id: cap-raised
+    tool: config_apply
+    args:
+      teams: [{ name: bumblebee, cap: { items: 2 } }]
+
+  - id: released
+    tool: get_item
+    args: { ref: giantswarm/roadmap#102 }
+    expected:
+      json_path:
+        status.shadow.pick.person: bob
+        status.shadow.heldBy: null
+        status.shadow.actions:
+          - { type: assign, args: { login: bob } }
+          - { type: set-status, args: { status: "In Progress ⛏️" } }
+          - { type: start-run, args: { purpose: implement } }
+
+  - id: team
+    tool: get_team
+    args: { name: bumblebee }
+    expected:
+      json_path:
+        status.picks:
+          - { person: alice, item: giantswarm/roadmap#101 }
+          - { person: bob, item: giantswarm/roadmap#102 }
+        status.held: null
+
+  - id: actions-recorded
+    tool: events
+    args: { item: giantswarm/roadmap#102, type: shadow.action, since_step: cap-raised }
+    expected:
+      json_path: { count: 3 }

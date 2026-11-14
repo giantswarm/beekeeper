@@ -1,0 +1,60 @@
+name: webhook-other-project-ignored
+concept: webhook
+tags: [phase1]
+description: |
+  Given an Up Next item on the roadmap board (project 273), whose issue is also on another
+  org project
+  When a validly signed projects_v2_item delivery arrives for the other project's item
+  Then the receiver answers 2xx and counts it as ignored, the engine reads nothing from
+  GitHub, and the Item isn't reconciled.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        assignees: [alice]
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝" }
+steps:
+  - id: other-project-edit
+    description: Project 999's item for the same issue; node ids follow the fake's scheme
+    tool: webhook_post
+    args:
+      event: projects_v2_item
+      action: edited
+      signature: valid
+      body:
+        projects_v2_item:
+          node_id: "PVTI_giantswarm_999_giantswarm/roadmap#101"
+          project_node_id: PVT_giantswarm_999
+          content_node_id: "I_giantswarm/roadmap#101"
+          content_type: Issue
+        changes:
+          field_value: { field_type: single_select, field_name: Status, to: { name: "Done" } }
+        organization: { login: giantswarm }
+        installation: { id: 200 }
+    expected:
+      json_path_min: { status_code: 200 }
+      json_path_max: { status_code: 299 }
+
+  - id: counted-ignored
+    tool: metric
+    args: { name: engine_webhook_deliveries_total, labels: { event: projects_v2_item, outcome: ignored } }
+    expected:
+      json_path: { value: 1 }
+
+  - id: no-reads
+    tool: github_calls
+    args: { since_step: other-project-edit }
+    expected:
+      json_path: { count: 0 }
+
+  - id: item-not-reconciled
+    tool: reconciles
+    args: { item: giantswarm/roadmap#101, since_step: other-project-edit }
+    expected:
+      json_path: { count: 0 }

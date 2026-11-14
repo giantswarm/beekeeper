@@ -1,0 +1,65 @@
+name: epic-active-when-a-sub-item-passes-ready
+concept: epic
+tags: [phase1]
+description: |
+  Given a Planned Bumblebee epic with two sub-items in Up Next
+  When alice moves one sub-item to In Progress
+  Then the epic is Active, through the sub-item's webhook, and the sub-item is in
+  flight; since the engine started none of its sub-items, the epic takes no slot of
+  the engine's epic WIP (status.wip.epics stays 0).
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#90
+        title: Klaus session resilience
+        assignees: [alice]
+        board: { status: "Up Next ➡️", kind: "Epic 🎯", team: "Bumblebee🐝" }
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        assignees: [alice]
+        parent: giantswarm/roadmap#90
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝" }
+      - ref: giantswarm/roadmap#102
+        title: Resume klaus sessions after a gateway restart
+        body: |
+          ### Acceptance criteria
+          - [ ] a session survives a gateway restart
+          Repo: giantswarm/klaus
+        assignees: [alice]
+        parent: giantswarm/roadmap#90
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝" }
+steps:
+  - id: planned
+    tool: get_item
+    args: { ref: giantswarm/roadmap#90 }
+    expected:
+      json_path: { status.phase: Planned }
+
+  - id: sub-item-started
+    tool: github_board_set
+    args: { issue: giantswarm/roadmap#101, status: "In Progress ⛏️" }
+
+  - id: active
+    tool: get_item
+    args: { ref: giantswarm/roadmap#90 }
+    expected:
+      json_path: { status.phase: Active }
+
+  - id: in-flight-but-no-engine-wip
+    tool: get_team
+    args: { name: bumblebee }
+    expected:
+      json_path:
+        status.inFlight: 1
+        status.wip: { items: 0, epics: 0 }
+
+  - id: epic-phase-changed-once
+    tool: events
+    args: { item: giantswarm/roadmap#90, type: phase.changed, since_step: sub-item-started }
+    expected:
+      json_path: { count: 1, rows.0.source: webhook }

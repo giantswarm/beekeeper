@@ -1,0 +1,89 @@
+name: pick-order-priority-then-age
+concept: pick
+tags: [phase1]
+description: |
+  Given four eligible unassigned items: #101 Priority 1 (new), #102 Priority 2
+  (older), #103 Priority 2 (newer) and #104 without a Priority (the oldest)
+  When the engine picks, and then a person moves the top item back to Backlog, twice
+  Then the order is Priority 1 before 2, older before newer within a priority, and
+  unset Priority last however old: alice and bob take #101 and #102, then #102 and
+  #103, then #103 and #104.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        createdAt: "2026-11-12T10:00:00Z"
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝", priority: 1 }
+      - ref: giantswarm/roadmap#102
+        title: Count muster tool calls by outcome
+        body: |
+          ### Acceptance criteria
+          - [ ] a counter per tool call outcome
+          Repo: giantswarm/muster
+        createdAt: "2026-11-05T10:00:00Z"
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝", priority: 2 }
+      - ref: giantswarm/roadmap#103
+        title: Expose klaus session metrics
+        body: |
+          ### Acceptance criteria
+          - [ ] a gauge per session state
+          Repo: giantswarm/klaus
+        createdAt: "2026-11-10T10:00:00Z"
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝", priority: 2 }
+      - ref: giantswarm/roadmap#104
+        title: Document muster's configuration file
+        body: |
+          ### Acceptance criteria
+          - [ ] every key is documented
+          Repo: giantswarm/muster
+        createdAt: "2026-10-01T10:00:00Z"
+        board: { status: "Up Next ➡️", kind: "Task 🗒️", team: "Bumblebee🐝" }
+steps:
+  - id: priority-first
+    description: Priority 1 comes before an older Priority 2
+    tool: get_team
+    args: { name: bumblebee }
+    expected:
+      json_path:
+        status.picks:
+          - { person: alice, item: giantswarm/roadmap#101 }
+          - { person: bob, item: giantswarm/roadmap#102 }
+
+  - id: top-item-deprioritised
+    tool: github_board_set
+    args: { issue: giantswarm/roadmap#101, status: "Backlog 📦" }
+
+  - id: older-first-within-a-priority
+    tool: get_team
+    args: { name: bumblebee }
+    expected:
+      json_path:
+        status.picks:
+          - { person: alice, item: giantswarm/roadmap#102 }
+          - { person: bob, item: giantswarm/roadmap#103 }
+
+  - id: next-item-deprioritised
+    tool: github_board_set
+    args: { issue: giantswarm/roadmap#102, status: "Backlog 📦" }
+
+  - id: unset-priority-last
+    description: The oldest item comes last because it has no Priority
+    tool: get_team
+    args: { name: bumblebee }
+    expected:
+      json_path:
+        status.picks:
+          - { person: alice, item: giantswarm/roadmap#103 }
+          - { person: bob, item: giantswarm/roadmap#104 }
+
+  - id: ranks
+    tool: get_item
+    args: { ref: giantswarm/roadmap#104 }
+    expected:
+      json_path: { status.shadow.pick: { person: bob, rank: 2 } }

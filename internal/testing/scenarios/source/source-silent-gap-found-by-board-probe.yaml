@@ -1,0 +1,70 @@
+name: source-silent-gap-found-by-board-probe
+concept: source
+tags: [phase1]
+description: |
+  Given an In Progress item with no PR yet (Implementing)
+  When someone moves it to Validation on the board and GitHub never sends the
+  projects_v2_item webhook (nothing is sent and nothing is logged, so the delivery
+  log can't show the gap)
+  Then the 10-minute board probe sees a board change newer than anything the board
+  webhooks reported and marks the board source degraded while the webhooks source
+  stays fresh, the board resync catches the item up, and the change is recorded as a
+  missed webhook.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        assignees: [alice]
+        board: { status: "In Progress ⛏️", kind: "Story 📑", team: "Bumblebee🐝" }
+steps:
+  - id: a-minute-passes
+    description: Move off the startup instant so the change is clearly newer than the startup read
+    tool: clock_advance
+    args: { by: 1m }
+
+  - id: moved-silently
+    tool: github_board_set
+    args: { issue: giantswarm/roadmap#101, status: "Validation ☑️", deliver: never }
+
+  - id: not-seen-yet
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      json_path: { status.board.status: "In Progress ⛏️", status.phase: Implementing }
+
+  - id: probe-and-resync
+    description: At 09:10 the board probe and the board resync are both due
+    tool: clock_advance
+    args: { by: 9m }
+
+  - id: board-degraded
+    tool: get_installation
+    expected:
+      json_path:
+        status.sources.board.state: degraded
+        status.sources.board.reason: probe-gap
+        status.sources.webhooks.state: fresh
+
+  - id: caught-up
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      json_path: { status.board.status: "Validation ☑️", status.phase: Validating }
+
+  - id: missed-event
+    tool: events
+    args: { item: giantswarm/roadmap#101, type: webhook.missed, since_step: moved-silently }
+    expected:
+      json_path: { count: 1 }
+
+  - id: missed-metric
+    tool: metric
+    args: { name: engine_webhook_missed_total, labels: { event: projects_v2_item } }
+    expected:
+      json_path: { value: 1 }

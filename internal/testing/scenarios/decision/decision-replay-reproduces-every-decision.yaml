@@ -1,0 +1,85 @@
+name: decision-replay-reproduces-every-decision
+concept: decision
+tags: [phase1]
+description: |
+  Given two ready items, JEV disagreeing on one of them and failing on the other
+  When a body is edited, a Priority changes and a new Bug arrives, so `ready?`,
+  `next?` and `bug-severity?` are decided several times
+  Then `replay` re-runs every recorded decision through `decide` from its recorded
+  inputs (JEV answers and errors included) with 0 mismatches, and calls neither
+  JEV nor GitHub.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝" }
+      - ref: giantswarm/roadmap#102
+        title: Count muster tool calls by outcome
+        body: |
+          ### Acceptance criteria
+          - [ ] a counter per tool call outcome
+          Repo: giantswarm/muster
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝", priority: 2 }
+  jev:
+    answers: [{ point: "ready?", item: giantswarm/roadmap#101, answer: not-ready, confidence: 0.8 }]
+steps:
+  - id: jev-fails
+    tool: jev_set
+    args: { point: "ready?", item: giantswarm/roadmap#102, error: server }
+
+  - id: body-edited
+    tool: github_issue_edit
+    args:
+      ref: giantswarm/roadmap#102
+      body: |
+        ### Acceptance criteria
+        - [ ] a counter per tool call outcome
+        - [ ] a histogram of tool call durations
+        Repo: giantswarm/muster
+
+  - id: reprioritised
+    tool: github_board_set
+    args: { issue: giantswarm/roadmap#101, priority: 1 }
+
+  - id: jev-on-bugs
+    tool: jev_set
+    args: { point: "bug-severity?", item: giantswarm/roadmap#130, answer: high, confidence: 0.7 }
+
+  - id: bug-created
+    tool: github_issue_create
+    args:
+      ref: giantswarm/roadmap#130
+      title: klaus drops sessions when the gateway restarts
+      body: |
+        Sessions end with "connection reset" after a gateway rollout.
+      board: { status: "Inbox 📥", kind: "Bug 🐞", team: "Bumblebee🐝" }
+
+  - id: decisions-made
+    description: ready? three times (#101, #102 twice), next?, bug-severity?
+    tool: decisions
+    expected:
+      json_path_min: { count: 5 }
+
+  - id: replay
+    tool: replay
+    expected:
+      json_path: { mismatches: 0 }
+      json_path_min: { decisions: 5 }
+
+  - id: replay-asks-no-jev
+    tool: jev_calls
+    args: { since_step: replay }
+    expected:
+      json_path: { count: 0 }
+
+  - id: replay-reads-no-github
+    tool: github_calls
+    args: { since_step: replay }
+    expected:
+      json_path: { rest: 0, graphql: 0 }

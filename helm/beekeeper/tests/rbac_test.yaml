@@ -1,62 +1,82 @@
 suite: rbac
 templates:
   - rbac.yaml
+  - serviceaccounts.yaml
+release:
+  name: beekeeper
+  namespace: beekeeper
 tests:
-  - it: lets the ServiceAccount write only beekeeper's resources and create Events
+  - it: grants the engine its kinds, its leader Lease and events in its namespace only
+    template: rbac.yaml
     documentIndex: 0
     asserts:
       - isKind:
-          of: ClusterRole
+          of: Role
+      - equal:
+          path: metadata.namespace
+          value: beekeeper
       - equal:
           path: rules
           value:
             - apiGroups: ["beekeeper.giantswarm.io"]
-              resources: ["environments", "holds", "mergelanes", "notes", "rosterentries"]
+              resources: ["items", "changes", "budgets"]
               verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
             - apiGroups: ["beekeeper.giantswarm.io"]
-              resources: ["environments/status", "holds/status", "mergelanes/status", "notes/status", "rosterentries/status"]
-              verbs: ["get", "update", "patch"]
-            - apiGroups: [""]
-              resources: ["events"]
-              verbs: ["get", "list", "watch", "create"]
-            - apiGroups: [""]
-              resources: ["namespaces"]
+              resources: ["installations", "teams", "people"]
               verbs: ["get", "list", "watch"]
-  - it: binds the writer role to beekeeper's ServiceAccount only
+            - apiGroups: ["beekeeper.giantswarm.io"]
+              resources:
+                - items/status
+                - changes/status
+                - budgets/status
+                - installations/status
+                - teams/status
+                - people/status
+              verbs: ["get", "update", "patch"]
+            - apiGroups: ["coordination.k8s.io"]
+              resources: ["leases"]
+              verbs: ["get", "create", "update"]
+            - apiGroups: ["", "events.k8s.io"]
+              resources: ["events"]
+              verbs: ["create", "patch"]
+
+  - it: binds the Role to the engine's ServiceAccount alone
+    template: rbac.yaml
     documentIndex: 1
     asserts:
       - isKind:
-          of: ClusterRoleBinding
+          of: RoleBinding
       - equal:
           path: subjects
           value:
             - kind: ServiceAccount
-              name: RELEASE-NAME
-              namespace: NAMESPACE
-  - it: gives the read role read verbs only, aggregated into view
-    documentIndex: 2
-    asserts:
-      - equal:
-          path: metadata.labels["rbac.authorization.k8s.io/aggregate-to-view"]
-          value: "true"
-      - equal:
-          path: rules[0].verbs
-          value: ["get", "list", "watch"]
-  - it: binds no reader group by default
+              name: beekeeper-engine
+              namespace: beekeeper
+
+  - it: renders nothing cluster-wide
+    template: rbac.yaml
     asserts:
       - hasDocuments:
-          count: 3
-  - it: binds the reader groups to the read role
-    set:
-      rbac.readerGroups: [giantswarm-ad:everyone]
-    documentIndex: 3
+          count: 2
+
+  - it: gives the receiver a ServiceAccount without a token
+    template: serviceaccounts.yaml
+    documentIndex: 1
     asserts:
       - equal:
-          path: roleRef.name
-          value: RELEASE-NAME-read
+          path: metadata.name
+          value: beekeeper-receiver
       - equal:
-          path: subjects
-          value:
-            - apiGroup: rbac.authorization.k8s.io
-              kind: Group
-              name: giantswarm-ad:everyone
+          path: automountServiceAccountToken
+          value: false
+
+  - it: gives the engine a ServiceAccount with a token
+    template: serviceaccounts.yaml
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: metadata.name
+          value: beekeeper-engine
+      - equal:
+          path: automountServiceAccountToken
+          value: true

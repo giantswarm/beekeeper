@@ -1,0 +1,117 @@
+name: source-degraded-board-polls-then-recovers
+concept: source
+tags: [phase1]
+description: |
+  Given two In Progress items and a board change whose webhook GitHub never sends,
+  so the 09:10 board probe marks the board source degraded
+  When a second unannounced change follows at 09:11 and is found by the 09:20 probe,
+  and the 09:30 probe then finds no new gap
+  Then the board is degraded (probe-gap) from 09:10 and, from one polling interval later
+  (09:15), its filtered board query runs every 5 minutes instead of every 10; the second
+  change is caught by a poll, and once the board is fresh again the query is back to every
+  10 minutes.
+  (Windows are half-open and as long as a multiple of the period, so the counts don't
+  depend on where the timers sit.)
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        assignees: [alice]
+        board: { status: "In Progress ⛏️", kind: "Story 📑", team: "Bumblebee🐝" }
+      - ref: giantswarm/roadmap#102
+        title: Expose klaus session metrics
+        body: |
+          ### Acceptance criteria
+          - [ ] a metric per session state
+          Repo: giantswarm/klaus
+        assignees: [bob]
+        board: { status: "In Progress ⛏️", kind: "Story 📑", team: "Bumblebee🐝" }
+steps:
+  - id: a-minute-passes
+    tool: clock_advance
+    args: { by: 1m }
+
+  - id: first-silent-change
+    tool: github_board_set
+    args: { issue: giantswarm/roadmap#101, status: "Validation ☑️", deliver: never }
+
+  - id: first-probe
+    description: The 09:10 probe finds the gap
+    tool: clock_advance
+    args: { by: 9m }
+
+  - id: board-degraded
+    tool: get_installation
+    expected:
+      json_path: { status.sources.board.state: degraded, status.sources.board.reason: probe-gap }
+
+  - id: another-minute
+    tool: clock_advance
+    args: { by: 1m }
+
+  - id: second-silent-change
+    tool: github_board_set
+    args: { issue: giantswarm/roadmap#102, status: "Blocked / Waiting ⛔️", deliver: never }
+
+  - id: while-degraded
+    description: 09:11 to 09:26, entirely inside the degraded period; board polls at 09:15, 09:20, 09:25
+    tool: clock_advance
+    args: { by: 15m }
+
+  - id: board-read-every-5m
+    tool: github_calls
+    args: { since_step: while-degraded, api: graphql, operation: BoardTeamItems }
+    expected:
+      json_path: { count: 3 }
+
+  - id: second-change-caught-by-a-poll
+    tool: get_item
+    args: { ref: giantswarm/roadmap#102 }
+    expected:
+      json_path: { status.board.status: "Blocked / Waiting ⛔️", status.phase: Waiting }
+
+  - id: still-degraded
+    description: The 09:20 probe found the second gap, so the board is still degraded
+    tool: metric
+    args: { name: engine_polling_active, labels: { source: board } }
+    expected:
+      json_path: { value: 1 }
+
+  - id: recovery-probe
+    description: The 09:30 probe finds no new gap
+    tool: clock_advance
+    args: { by: 4m }
+
+  - id: board-fresh
+    tool: get_installation
+    expected:
+      json_path: { status.sources.board.state: fresh, status.sources.board.polling: false }
+
+  - id: polling-stopped
+    tool: metric
+    args: { name: engine_polling_active, labels: { source: board } }
+    expected:
+      json_path: { value: 0 }
+
+  - id: after-recovery
+    tool: clock_advance
+    args: { by: 30m }
+
+  - id: board-read-every-10m
+    tool: github_calls
+    args: { since_step: after-recovery, api: graphql, operation: BoardTeamItems }
+    expected:
+      json_path: { count: 3 }
+
+  - id: degraded-once
+    description: The second gap kept the board degraded; it did not degrade it again
+    tool: events
+    args: { type: source.degraded, since_step: first-silent-change }
+    expected:
+      json_path: { count: 1 }

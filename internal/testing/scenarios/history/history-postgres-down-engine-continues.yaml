@@ -1,0 +1,129 @@
+name: history-postgres-down-engine-continues
+concept: history
+tags: [phase1]
+description: |
+  Given an In Progress item whose PR waits on CI, a ready Story #102 in Backlog (so not yet an
+  Item), and Postgres going down at 09:00
+  When CI completes green and #102 is moved to Up Next, both with their webhooks delivered,
+  and Postgres comes back after the 09:05 delivery-log check
+  Then the receiver refuses both deliveries with 503 (outcome unavailable) because it can't
+  store them, GitHub logs them as failed, and at 09:05 the webhooks source is degraded
+  (deliveries-failed) and the engine re-observes what the failed deliveries name; it keeps
+  observing, deciding and updating objects meanwhile (the Change sees green, #102 becomes an
+  eligible Item, the team's last decision is 09:05); once Postgres is up the buffered history
+  rows are written with their engine-clock times and no history row is dropped.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        assignees: [alice]
+        board: { status: "In Progress ⛏️", kind: "Story 📑", team: "Bumblebee🐝" }
+      - ref: giantswarm/roadmap#102
+        title: Expose klaus session metrics
+        body: |
+          ### Acceptance criteria
+          - [ ] a metric per session state
+          Repo: giantswarm/klaus
+        assignees: []
+        board: { status: "Backlog 📦", kind: "Story 📑", team: "Bumblebee🐝" }
+    pulls:
+      - ref: giantswarm/klaus#55
+        author: alice
+        head: a1
+        closes: [giantswarm/roadmap#101]
+        checks:
+          - { name: "ci/circleci: go-build", status: completed, conclusion: success }
+          - { name: "ci/circleci: go-test", status: in_progress }
+steps:
+  - id: postgres-down
+    tool: postgres_fault
+    args: { kind: down }
+
+  - id: ci-completes
+    tool: github_check_run
+    args: { repo: giantswarm/klaus, sha: a1, name: "ci/circleci: go-test", status: completed, conclusion: success }
+
+  - id: moved-up-next
+    tool: github_board_set
+    args: { issue: giantswarm/roadmap#102, status: "Up Next ➡️" }
+
+  - id: refused
+    description: Deliveries that can't be stored are refused with 503
+    tool: metric
+    args: { name: engine_webhook_deliveries_total, labels: { outcome: unavailable } }
+    expected:
+      json_path: { value: 2 }
+
+  - id: delivery-log-check
+    tool: clock_advance
+    args: { by: 5m }
+
+  - id: webhooks-degraded
+    tool: get_installation
+    expected:
+      json_path:
+        status.sources.webhooks.state: degraded
+        status.sources.webhooks.reason: deliveries-failed
+
+  - id: change-updated
+    tool: get_change
+    args: { ref: giantswarm/klaus#55 }
+    expected:
+      json_path:
+        status.ci.state: green
+        status.wait.on: review
+
+  - id: item-decided
+    tool: get_item
+    args: { ref: giantswarm/roadmap#102 }
+    expected:
+      json_path:
+        status.phase: Ready
+        status.eligible.value: true
+
+  - id: still-deciding
+    tool: get_team
+    args: { name: bumblebee }
+    expected:
+      json_path: { status.lastDecisionAt: "2026-11-16T09:05:00Z" }
+
+  - id: postgres-up
+    tool: postgres_fault
+    args: { kind: up }
+
+  - id: buffered-ready-decision
+    tool: decisions
+    args: { point: "ready?", item: giantswarm/roadmap#102, since_step: postgres-down }
+    expected:
+      json_path:
+        count: 1
+        rows.0.at: "2026-11-16T09:05:00Z"
+        rows.0.chosen: ready
+
+  - id: buffered-wake-row
+    tool: events
+    args: { change: giantswarm/klaus#55, type: wait.woken, since_step: postgres-down }
+    expected:
+      json_path:
+        count: 1
+        rows.0.at: "2026-11-16T09:05:00Z"
+        rows.0.source: reobserve
+        rows.0.data.on: ci
+
+  - id: buffered-decisions
+    tool: decisions
+    args: { point: "next?", since_step: postgres-down }
+    expected:
+      json_path_min: { count: 1 }
+
+  - id: nothing-dropped
+    tool: metric
+    args: { name: engine_history_dropped_total }
+    expected:
+      json_path: { value: 0 }

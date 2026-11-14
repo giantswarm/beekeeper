@@ -1,0 +1,77 @@
+name: board-resync-reads-only-team-active-statuses
+concept: board
+tags: [phase1, resync, learning-api-budget]
+description: |
+  Given a board with Bumblebee items in the active statuses, plus a Bumblebee
+  Backlog item and an Atlas item in Up Next
+  When the 10-minute board resync runs
+  Then the engine runs one filtered GraphQL board query (BoardTeamItems) for the
+  team's open items in the active statuses (and its Inbox bugs), never pages the
+  board unfiltered, and stays within a few points; the Backlog story and the Atlas
+  item don't become Items.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        assignees: []
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝" }
+      - ref: giantswarm/roadmap#102
+        title: Expose klaus session metrics
+        assignees: [alice]
+        board: { status: "In Progress ⛏️", kind: "Story 📑", team: "Bumblebee🐝" }
+      - ref: giantswarm/roadmap#103
+        title: Klaus session resume
+        assignees: [bob]
+        board: { status: "Blocked / Waiting ⛔️", kind: "Feature 💫", team: "Bumblebee🐝" }
+      - ref: giantswarm/roadmap#104
+        title: Bump the klaus Go toolchain
+        assignees: [bob]
+        board: { status: "Validation ☑️", kind: "Task 🗒️", team: "Bumblebee🐝" }
+      - ref: giantswarm/roadmap#105
+        title: Klaus plugin marketplace
+        assignees: []
+        board: { status: "Backlog 📦", kind: "Story 📑", team: "Bumblebee🐝" }
+      - ref: giantswarm/roadmap#106
+        title: Rotate the Atlas dashboards' service accounts
+        assignees: []
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Atlas 🗺️" }
+steps:
+  - id: board-resync
+    tool: clock_advance
+    args: { by: 10m }
+
+  - id: one-filtered-query
+    tool: github_calls
+    args: { since_step: board-resync, api: graphql, operation: BoardTeamItems }
+    expected:
+      json_path: { count: 1 }
+      json_path_max: { graphqlPoints: 2 }
+
+  - id: no-other-board-reads
+    description: Besides the resync, only the 1-point freshness probe runs in this interval
+    tool: github_calls
+    args: { since_step: board-resync, api: graphql }
+    expected:
+      json_path_max: { count: 2, graphqlPoints: 3 }
+
+  - id: only-active-team-items
+    tool: list_items
+    args: { team: bumblebee }
+    expected:
+      json_path: { count: 4 }
+
+  - id: backlog-item-not-read
+    tool: get_item
+    args: { ref: giantswarm/roadmap#105 }
+    expected:
+      success: false
+      error_contains: ["not found"]
+
+  - id: other-team-not-read
+    tool: get_item
+    args: { ref: giantswarm/roadmap#106 }
+    expected:
+      success: false
+      error_contains: ["not found"]

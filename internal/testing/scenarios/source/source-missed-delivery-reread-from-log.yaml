@@ -1,0 +1,110 @@
+name: source-missed-delivery-reread-from-log
+concept: source
+tags: [phase1]
+description: |
+  Given two PRs in giantswarm/klaus waiting on CI, klaus#55 on a1 and klaus#56 on b1
+  When CI completes on a1 and GitHub logs that check_run delivery as failed
+  Then at the next delivery-log check the engine reads that one delivery from the log
+  (a GET of the delivery, to learn from its payload what to re-observe), re-reads only
+  the ref it names (CI on a1), and wakes klaus#55 as a re-observe; it doesn't redeliver
+  (no POST, since phase 1 writes nothing to GitHub) and doesn't touch klaus#56. The
+  degraded source's regular polling only starts one polling interval later.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        assignees: [alice]
+        board: { status: "In Progress ⛏️", kind: "Story 📑", team: "Bumblebee🐝" }
+      - ref: giantswarm/roadmap#102
+        title: Expose klaus session metrics
+        body: |
+          ### Acceptance criteria
+          - [ ] a metric per session state
+          Repo: giantswarm/klaus
+        assignees: [bob]
+        board: { status: "In Progress ⛏️", kind: "Story 📑", team: "Bumblebee🐝" }
+    pulls:
+      - ref: giantswarm/klaus#55
+        author: alice
+        head: a1
+        closes: [giantswarm/roadmap#101]
+        checks:
+          - { name: "ci/circleci: go-build", status: completed, conclusion: success }
+          - { name: "ci/circleci: go-test", status: in_progress }
+      - ref: giantswarm/klaus#56
+        author: bob
+        head: b1
+        closes: [giantswarm/roadmap#102]
+        checks:
+          - { name: "ci/circleci: go-test", status: in_progress }
+steps:
+  - id: ci-completes-lost
+    tool: github_check_run
+    args: { repo: giantswarm/klaus, sha: a1, name: "ci/circleci: go-test", status: completed, conclusion: success, deliver: lost }
+
+  - id: not-seen-yet
+    tool: get_change
+    args: { ref: giantswarm/klaus#55 }
+    expected:
+      json_path: { status.ci.state: pending }
+
+  - id: log-check
+    description: The 09:05 delivery-log check
+    tool: clock_advance
+    args: { by: 5m }
+
+  - id: delivery-read-from-log
+    description: One GET of the failed delivery (GET /app/hook/deliveries/{id}, with the App's JWT)
+    tool: github_calls
+    args: { since_step: log-check, api: app, operation: apps/get-webhook-delivery }
+    expected:
+      json_path: { count: 1 }
+
+  - id: no-redelivery
+    description: A redelivery would be a POST to /app/hook/deliveries/{id}/attempts
+    tool: github_calls
+    args: { since_step: ci-completes-lost, api: app, method: POST, path: /app/hook/deliveries }
+    expected:
+      json_path: { count: 0 }
+
+  - id: named-sha-reread
+    tool: github_calls
+    args: { since_step: log-check, method: GET, path: "/repos/giantswarm/klaus/commits/a1/*" }
+    expected:
+      json_path_min: { count: 1 }
+
+  - id: caught-up
+    tool: get_change
+    args: { ref: giantswarm/klaus#55 }
+    expected:
+      json_path: { status.ci.state: green, status.wait.on: review }
+
+  - id: woken-as-reobserve
+    tool: events
+    args: { change: giantswarm/klaus#55, type: wait.woken, since_step: log-check }
+    expected:
+      json_path: { count: 1, rows.0.source: reobserve, rows.0.data.on: ci }
+
+  - id: other-sha-not-read
+    tool: github_calls
+    args: { since_step: log-check, path: "/repos/giantswarm/klaus/commits/b1/*" }
+    expected:
+      json_path: { count: 0 }
+
+  - id: other-pr-not-read
+    tool: github_calls
+    args: { since_step: log-check, path: /repos/giantswarm/klaus/pulls/56 }
+    expected:
+      json_path: { count: 0 }
+
+  - id: other-change-not-reconciled
+    tool: reconciles
+    args: { change: giantswarm/klaus#56, since_step: log-check }
+    expected:
+      json_path: { count: 0 }

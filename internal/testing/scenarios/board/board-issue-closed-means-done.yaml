@@ -1,0 +1,62 @@
+name: board-issue-closed-means-done
+concept: board
+tags: [phase1, lifecycle]
+description: |
+  Given alice's In Progress item with no PR, in flight and with no wait (nothing is
+  pending that the engine observes)
+  When a person closes the issue but leaves the board Status at In Progress
+  Then the Item's phase is Done (the closed issue wins over the Status) and it no
+  longer counts as in flight.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        assignees: [alice]
+        board: { status: "In Progress ⛏️", kind: "Story 📑", team: "Bumblebee🐝" }
+steps:
+  - id: implementing
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      json_path:
+        status.phase: Implementing
+        status.wait: null
+
+  - id: in-flight
+    tool: get_team
+    args: { name: bumblebee }
+    expected:
+      json_path: { status.inFlight: 1 }
+
+  - id: closed
+    description: A person closes the issue (issues.closed)
+    tool: github_issue_edit
+    args: { ref: giantswarm/roadmap#101, state: closed }
+
+  - id: done
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      json_path:
+        status.issue.state: closed
+        status.board.status: "In Progress ⛏️"
+        status.phase: Done
+        status.wait: null
+
+  - id: phase-changed-once
+    tool: events
+    args: { item: giantswarm/roadmap#101, type: phase.changed, since_step: closed }
+    expected:
+      json_path: { count: 1, rows.0.source: webhook, rows.0.data.to: Done }
+
+  - id: no-longer-in-flight
+    tool: get_team
+    args: { name: bumblebee }
+    expected:
+      json_path: { status.inFlight: 0 }

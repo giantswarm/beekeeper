@@ -1,0 +1,72 @@
+name: pick-active-epic-items-first
+concept: pick
+tags: [phase1]
+description: |
+  Given an Active epic owned by alice (one sub-item done) with an unassigned
+  sub-item in Up Next that has no Priority, and an older standalone item with
+  Priority 1
+  When the engine orders the team's eligible items
+  Then the Active epic's sub-item ranks first and is alice's pick, ahead of the
+  higher-priority standalone item, which goes to bob: finishing comes before starting.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#90
+        title: Klaus session resilience
+        assignees: [alice]
+        board: { status: "In Progress ⛏️", kind: "Epic 🎯", team: "Bumblebee🐝" }
+      - ref: giantswarm/roadmap#110
+        title: Reconnect klaus sessions after a gateway restart
+        body: |
+          ### Acceptance criteria
+          - [x] sessions reconnect within 30s
+          Repo: giantswarm/klaus
+        assignees: [alice]
+        state: closed
+        parent: giantswarm/roadmap#90
+        board: { status: "Done ✅", kind: "Story 📑", team: "Bumblebee🐝" }
+      - ref: giantswarm/roadmap#111
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        createdAt: "2026-11-12T10:00:00Z"
+        parent: giantswarm/roadmap#90
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝" }
+      - ref: giantswarm/roadmap#102
+        title: Count muster tool calls by outcome
+        body: |
+          ### Acceptance criteria
+          - [ ] a counter per tool call outcome
+          Repo: giantswarm/muster
+        createdAt: "2026-11-01T10:00:00Z"
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝", priority: 1 }
+steps:
+  - id: epic-active
+    tool: get_item
+    args: { ref: giantswarm/roadmap#90 }
+    expected:
+      json_path: { status.class: Epic, status.phase: Active }
+
+  - id: epic-item-ranks-first
+    tool: get_item
+    args: { ref: giantswarm/roadmap#111 }
+    expected:
+      json_path: { status.shadow.pick: { person: alice, rank: 1 } }
+
+  - id: priority-item-second
+    tool: get_item
+    args: { ref: giantswarm/roadmap#102 }
+    expected:
+      json_path: { status.shadow.pick: { person: bob, rank: 2 } }
+
+  - id: team-picks
+    tool: get_team
+    args: { name: bumblebee }
+    expected:
+      json_path:
+        status.picks:
+          - { person: alice, item: giantswarm/roadmap#111 }
+          - { person: bob, item: giantswarm/roadmap#102 }

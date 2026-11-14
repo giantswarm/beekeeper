@@ -1,0 +1,97 @@
+name: board-item-leaves-team-scope
+concept: board
+tags: [phase1, scope, wake-index]
+description: |
+  Given an In Progress Bumblebee item whose PR waits on CI for its head SHA
+  When a person changes the item's Team field from Bumblebee to Atlas
+  Then the Item is deleted at once with one item.removed event (reason
+  team-changed), its Change goes with it, and their waits leave the wake index, so a
+  later check_run on that head SHA reconciles nothing and costs no reads.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        assignees: [alice]
+        board: { status: "In Progress ⛏️", kind: "Story 📑", team: "Bumblebee🐝" }
+    pulls:
+      - ref: giantswarm/klaus#55
+        author: alice
+        head: a1
+        closes: [giantswarm/roadmap#101]
+        checks:
+          - { name: "ci/circleci: go-build", status: completed, conclusion: success }
+          - { name: "ci/circleci: go-test", status: in_progress }
+steps:
+  - id: waiting-on-ci
+    tool: get_change
+    args: { ref: giantswarm/klaus#55 }
+    expected:
+      json_path:
+        status.wait.on: ci
+        status.wait.ref: "ci:giantswarm/klaus@a1"
+
+  - id: moved-to-atlas
+    description: A person hands the item to another team
+    tool: github_board_set
+    args: { issue: giantswarm/roadmap#101, team: "Atlas 🗺️" }
+
+  - id: item-gone
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      success: false
+      error_contains: ["not found"]
+
+  - id: removed-event
+    tool: events
+    args: { item: giantswarm/roadmap#101, type: item.removed, since_step: moved-to-atlas }
+    expected:
+      json_path: { count: 1, rows.0.source: webhook, rows.0.data.reason: team-changed }
+
+  - id: change-gone
+    tool: get_change
+    args: { ref: giantswarm/klaus#55 }
+    expected:
+      success: false
+      error_contains: ["not found"]
+
+  - id: no-waits-left
+    tool: metric
+    args: { name: engine_waits }
+    expected:
+      json_path: { value: 0 }
+
+  - id: no-team-items
+    tool: metric
+    args: { name: engine_items, labels: { team: bumblebee } }
+    expected:
+      json_path: { value: 0 }
+
+  - id: ci-completes
+    description: CI on the former Change's head SHA completes and its webhook is delivered
+    tool: github_check_run
+    args: { repo: giantswarm/klaus, sha: a1, name: "ci/circleci: go-test", status: completed, conclusion: success }
+
+  - id: change-not-reconciled
+    tool: reconciles
+    args: { change: giantswarm/klaus#55, since_step: ci-completes }
+    expected:
+      json_path: { count: 0 }
+
+  - id: item-not-reconciled
+    tool: reconciles
+    args: { item: giantswarm/roadmap#101, since_step: ci-completes }
+    expected:
+      json_path: { count: 0 }
+
+  - id: no-reads-for-it
+    tool: github_calls
+    args: { since_step: ci-completes }
+    expected:
+      json_path: { count: 0 }

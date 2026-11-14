@@ -1,0 +1,64 @@
+name: decision-jev-error-rule-stands
+concept: decision
+tags: [phase1]
+description: |
+  Given an eligible ready item and JEV timing out on `ready?` for it
+  When a person edits the body (new inputs, so `ready?` is decided again) and the
+  edit keeps it ready
+  Then the decision records the JEV timeout as jevError with no JEV answer, the
+  rule's answer (ready) is chosen, outcome jev_error is counted, and the item's
+  eligibility doesn't change.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝" }
+steps:
+  - id: jev-times-out
+    tool: jev_set
+    args: { point: "ready?", item: giantswarm/roadmap#101, error: timeout }
+
+  - id: body-edited
+    tool: github_issue_edit
+    args:
+      ref: giantswarm/roadmap#101
+      body: |
+        ### Acceptance criteria
+        - [ ] retries 5xx up to three times
+        - [ ] gives up after 30s in total
+        Repo: giantswarm/klaus
+
+  - id: error-recorded
+    tool: decisions
+    args: { point: "ready?", item: giantswarm/roadmap#101, since_step: body-edited }
+    expected:
+      json_path:
+        count: 1
+        rows.0.rule: ready
+        rows.0.jev: null
+        rows.0.jevError: timeout
+        rows.0.chosen: ready
+
+  - id: error-counted
+    tool: metric
+    args: { name: engine_decisions_total, labels: { point: "ready?", outcome: jev_error } }
+    expected:
+      json_path: { value: 1 }
+
+  - id: still-eligible
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      json_path: { status.eligible.value: true }
+
+  - id: eligibility-unchanged
+    tool: events
+    args: { item: giantswarm/roadmap#101, type: eligibility.changed, since_step: jev-times-out }
+    expected:
+      json_path: { count: 0 }

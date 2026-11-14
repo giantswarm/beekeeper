@@ -1,0 +1,63 @@
+name: eligibility-assigned-to-non-participant-never-touched
+concept: eligibility
+tags: [phase1]
+description: |
+  Given an Up Next item without acceptance criteria, assigned to carol, who is not
+  a configured Person
+  When the engine observes it at startup and through two board resyncs
+  Then it is not eligible (AssignedToNonParticipant) and never touched: no pick, no
+  decision point asked about it (so no "refine" todo goes to carol), and no
+  would-action of any kind.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Atlas dashboards for klaus
+        body: |
+          Carol wants klaus on the Atlas dashboards.
+          Repo: giantswarm/klaus
+        assignees: [carol]
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝", priority: 1 }
+steps:
+  - id: not-eligible
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      json_path:
+        status.assignees: [carol]
+        status.eligible.value: false
+        status.eligible.reasons: [AssignedToNonParticipant]
+        status.shadow.pick: null
+        status.shadow.actions: null
+
+  - id: two-resyncs
+    tool: clock_advance
+    args: { by: 20m }
+
+  - id: still-untouched
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      json_path:
+        status.eligible.reasons: [AssignedToNonParticipant]
+        status.shadow.pick: null
+        status.shadow.actions: null
+
+  - id: no-decisions
+    tool: decisions
+    args: { item: giantswarm/roadmap#101 }
+    expected:
+      json_path: { count: 0 }
+
+  - id: no-would-actions
+    tool: events
+    args: { item: giantswarm/roadmap#101, type: shadow.action }
+    expected:
+      json_path: { count: 0 }
+
+  - id: nobody-picks-it
+    tool: get_team
+    args: { name: bumblebee }
+    expected:
+      not_contains: ["giantswarm/roadmap#101"]

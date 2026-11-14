@@ -1,0 +1,71 @@
+name: board-filter-option-checked-at-startup
+concept: board
+tags: [phase1, startup, configuration]
+description: |
+  Given the team's boardOption is misspelt as "Bumblebee 🐝" (with a space), and the
+  board has a Bumblebee🐝 item in Up Next
+  When the engine starts, checks the option against the board schema, and its
+  resync interval passes
+  Then it doesn't silently observe nothing: the Installation condition
+  BoardFilterValid is False naming the unknown option, the board source is degraded
+  (filter-invalid), no Items exist, and no board query runs with the bad filter. When the configuration is fixed, the condition
+  turns True and the team's items are observed.
+pre_configuration:
+  fixture: base
+  config:
+    teams: [{ name: bumblebee, boardOption: "Bumblebee 🐝" }]
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        assignees: []
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝" }
+steps:
+  - id: condition-false
+    tool: get_installation
+    expected:
+      json_path:
+        status.conditions[type=BoardFilterValid].status: "False"
+        status.conditions[type=BoardFilterValid].reason: UnknownTeamOption
+        status.sources.board.state: degraded
+        status.sources.board.reason: filter-invalid
+      contains: ["Bumblebee 🐝"]
+
+  - id: no-items
+    tool: list_items
+    args: { team: bumblebee }
+    expected:
+      json_path: { count: 0 }
+
+  - id: resync-interval-passes
+    tool: clock_advance
+    args: { by: 10m }
+
+  - id: no-query-with-bad-filter
+    tool: github_calls
+    args: { api: graphql, operation: BoardTeamItems }
+    expected:
+      json_path: { count: 0 }
+
+  - id: config-fixed
+    tool: config_apply
+    args:
+      teams: [{ name: bumblebee, boardOption: "Bumblebee🐝" }]
+
+  - id: condition-true
+    tool: get_installation
+    expected:
+      json_path:
+        status.conditions[type=BoardFilterValid].status: "True"
+
+  - id: items-observed
+    tool: list_items
+    args: { team: bumblebee }
+    expected:
+      json_path: { count: 1 }
+
+  - id: queried-once-fixed
+    tool: github_calls
+    args: { since_step: config-fixed, api: graphql, operation: BoardTeamItems }
+    expected:
+      json_path: { count: 1 }

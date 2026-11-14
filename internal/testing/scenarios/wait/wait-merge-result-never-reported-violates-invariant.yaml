@@ -1,0 +1,76 @@
+name: wait-merge-result-never-reported-violates-invariant
+concept: wait
+tags: [phase1, merge-result]
+description: |
+  Given an approved, green PR in giantswarm/muster that alice merges at 09:00 as m1
+  When no check ever reports on m1, up to and including the re-observe at the mergeResult
+  deadline (11:00)
+  Then the invariant merge-reaches-result-check holds until the deadline and is violated (1)
+  once the deadline's single re-observe finds no result; the wait becomes overdue.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Add a dry-run flag to muster serve
+        body: |
+          ### Acceptance criteria
+          - [ ] `muster serve --dry-run` starts no servers
+          Repo: giantswarm/muster
+        assignees: [alice]
+        board: { status: "In Progress ⛏️", kind: "Story 📑", team: "Bumblebee🐝" }
+    pulls:
+      - ref: giantswarm/muster#12
+        author: alice
+        head: a1
+        closes: [giantswarm/roadmap#101]
+        statuses: [{ context: "ci/circleci: go-test", state: success }]
+        reviews: [{ by: bob, state: approved }]
+expect_violations: [merge-reaches-result-check]
+steps:
+  - id: alice-merges
+    tool: github_pr_merge
+    args: { ref: giantswarm/muster#12, merge_sha: m1, by: alice }
+
+  - id: watching
+    tool: get_change
+    args: { ref: giantswarm/muster#12 }
+    expected:
+      json_path:
+        status.mergeResult.state: pending
+        status.wait.ref: "ci:giantswarm/muster@m1"
+        status.wait.deadline: "2026-11-16T11:00:00Z"
+
+  - id: almost
+    tool: clock_advance
+    args: { by: 1h59m }
+
+  - id: holds-before-deadline
+    tool: metric
+    args: { name: engine_invariant_violations, labels: { invariant: merge-reaches-result-check } }
+    expected:
+      json_path: { value: 0 }
+
+  - id: deadline
+    tool: clock_advance
+    args: { by: 1m }
+
+  - id: reobserved-once
+    tool: events
+    args: { change: giantswarm/muster#12, type: wait.reobserved, since_step: deadline }
+    expected:
+      json_path: { count: 1 }
+
+  - id: overdue
+    tool: get_change
+    args: { ref: giantswarm/muster#12 }
+    expected:
+      json_path:
+        status.mergeResult.state: pending
+        status.wait.state: overdue
+
+  - id: violated
+    tool: metric
+    args: { name: engine_invariant_violations, labels: { invariant: merge-reaches-result-check } }
+    expected:
+      json_path: { value: 1 }

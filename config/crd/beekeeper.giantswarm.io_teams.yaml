@@ -1,0 +1,129 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: teams.beekeeper.giantswarm.io
+spec:
+  group: beekeeper.giantswarm.io
+  names:
+    kind: Team
+    listKind: TeamList
+    plural: teams
+    singular: team
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Team is a team that opted in to the engine.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: TeamSpec configures a team.
+            properties:
+              boardOption:
+                description: BoardOption is the team's option of the board's Team
+                  field.
+                type: string
+              cap:
+                description: Cap is an optional limit across a team's participants.
+                properties:
+                  epics:
+                    type: integer
+                  items:
+                    type: integer
+                type: object
+              githubTeam:
+                type: string
+              optIn:
+                description: OptIn says which work a team hands to the engine.
+                properties:
+                  alerts:
+                    type: boolean
+                  work:
+                    description: Work lists the classes of work, e.g. implementable.
+                    items:
+                      type: string
+                    type: array
+                type: object
+            required:
+            - boardOption
+            type: object
+          status:
+            description: TeamStatus is the result of the team's last decision pass.
+            properties:
+              held:
+                items:
+                  description: TeamHeld is an item a gate holds for a person.
+                  properties:
+                    gate:
+                      type: string
+                    item:
+                      type: string
+                    person:
+                      type: string
+                  required:
+                  - gate
+                  - item
+                  - person
+                  type: object
+                type: array
+              inFlight:
+                description: InFlight counts the team's implementable items in Implementing
+                  through Validating.
+                type: integer
+              lastDecisionAt:
+                format: date-time
+                type: string
+              picks:
+                items:
+                  description: TeamPick is an item the engine would start for a person
+                    now.
+                  properties:
+                    item:
+                      type: string
+                    person:
+                      type: string
+                  required:
+                  - item
+                  - person
+                  type: object
+                type: array
+              wip:
+                description: WIP is the engine's own WIP across the team.
+                properties:
+                  epics:
+                    type: integer
+                  items:
+                    type: integer
+                required:
+                - epics
+                - items
+                type: object
+            required:
+            - inFlight
+            - wip
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

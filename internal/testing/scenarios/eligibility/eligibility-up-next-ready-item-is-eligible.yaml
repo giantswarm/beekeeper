@@ -1,0 +1,55 @@
+name: eligibility-up-next-ready-item-is-eligible
+concept: eligibility
+tags: [phase1, ready]
+description: |
+  Given an unassigned Story in Bumblebee's Up Next with acceptance criteria and a
+  Repo line
+  When the engine observes it
+  Then ready? decides "ready" (JEV asked once and agreeing), the Item knows its
+  target repo and acceptance criteria, and it is eligible with no reasons.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#101
+        title: Retry transient errors in the klaus client
+        body: |
+          ### Acceptance criteria
+          - [ ] retries 5xx up to three times
+          Repo: giantswarm/klaus
+        assignees: []
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝" }
+steps:
+  - id: eligible
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      json_path:
+        status.phase: Ready
+        status.acceptanceCriteria: true
+        status.targetRepos: [giantswarm/klaus]
+        status.eligible.value: true
+        status.eligible.reasons: null
+
+  - id: ready-decided-once
+    tool: decisions
+    args: { point: "ready?", item: giantswarm/roadmap#101 }
+    expected:
+      json_path:
+        count: 1
+        rows.0.rule: ready
+        rows.0.jev: ready
+        rows.0.chosen: ready
+        rows.0.mode: shadow
+
+  - id: listed-as-eligible
+    tool: list_items
+    args: { team: bumblebee, eligible: true }
+    expected:
+      json_path: { count: 1, items: [giantswarm/roadmap#101] }
+
+  - id: no-todo
+    tool: get_item
+    args: { ref: giantswarm/roadmap#101 }
+    expected:
+      not_contains: ["gs-plans:gs-plan"]

@@ -1,0 +1,108 @@
+name: eligibility-requires-up-next
+concept: eligibility
+tags: [phase1]
+description: |
+  Given two ready Bumblebee stories in Up Next, one assigned to alice and one to
+  bob, each its person's pick
+  When people move alice's back to Backlog and bob's to Inbox, and later file a
+  ready story straight into Backlog
+  Then both Items stay, in phase Backlog, not eligible for the single reason
+  NotUpNext; nobody has a pick and no would-action is recorded after the moves:
+  prioritisation stays with people. The story filed into Backlog never becomes an
+  Item.
+pre_configuration:
+  fixture: base
+  github:
+    issues:
+      - ref: giantswarm/roadmap#201
+        title: Klaus plugin marketplace
+        body: |
+          ### Acceptance criteria
+          - [ ] plugins can be listed and installed
+          Repo: giantswarm/klaus
+        assignees: [alice]
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝" }
+      - ref: giantswarm/roadmap#202
+        title: Count muster tool calls by outcome
+        body: |
+          ### Acceptance criteria
+          - [ ] a counter per tool call outcome
+          Repo: giantswarm/muster
+        assignees: [bob]
+        board: { status: "Up Next ➡️", kind: "Story 📑", team: "Bumblebee🐝" }
+steps:
+  - id: picked
+    tool: get_team
+    args: { name: bumblebee }
+    expected:
+      json_path:
+        status.picks:
+          - { person: alice, item: giantswarm/roadmap#201 }
+          - { person: bob, item: giantswarm/roadmap#202 }
+
+  - id: moved-to-backlog
+    tool: github_board_set
+    args: { issue: giantswarm/roadmap#201, status: "Backlog 📦" }
+
+  - id: moved-to-inbox
+    tool: github_board_set
+    args: { issue: giantswarm/roadmap#202, status: "Inbox 📥" }
+
+  - id: backlog-not-eligible
+    tool: get_item
+    args: { ref: giantswarm/roadmap#201 }
+    expected:
+      json_path:
+        status.board.status: "Backlog 📦"
+        status.phase: Backlog
+        status.eligible.value: false
+        status.eligible.reasons: [NotUpNext]
+        status.shadow.pick: null
+
+  - id: inbox-not-eligible
+    tool: get_item
+    args: { ref: giantswarm/roadmap#202 }
+    expected:
+      json_path:
+        status.board.status: "Inbox 📥"
+        status.phase: Backlog
+        status.eligible.value: false
+        status.eligible.reasons: [NotUpNext]
+        status.shadow.pick: null
+
+  - id: nothing-eligible
+    tool: list_items
+    args: { team: bumblebee, eligible: true }
+    expected:
+      json_path: { count: 0 }
+
+  - id: no-picks
+    tool: get_team
+    args: { name: bumblebee }
+    expected:
+      json_path: { status.picks: null }
+
+  - id: no-would-actions
+    tool: events
+    args: { type: shadow.action, since_step: moved-to-backlog }
+    expected:
+      json_path: { count: 0 }
+
+  - id: filed-into-backlog
+    tool: github_issue_create
+    args:
+      ref: giantswarm/roadmap#203
+      title: Klaus session export
+      body: |
+        ### Acceptance criteria
+        - [ ] a session can be exported as JSON
+        Repo: giantswarm/klaus
+      assignees: []
+      board: { status: "Backlog 📦", kind: "Story 📑", team: "Bumblebee🐝" }
+
+  - id: never-an-item
+    tool: get_item
+    args: { ref: giantswarm/roadmap#203 }
+    expected:
+      success: false
+      error_contains: ["not found"]
