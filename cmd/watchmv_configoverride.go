@@ -9,11 +9,11 @@ import (
 // overrides settles the overrides whose end arrived, a GitHub check held
 // while githubHeld, and says what it did.
 func (w *Watcher) overrides(ctx context.Context, githubHeld bool) {
-	lines, err := w.Host.settleOverrides(ctx, WatchParty, func(ts []state.Timer) map[int]checkResult {
+	lines, err := w.Host.SettleOverrides(ctx, WatchParty, func(ts []state.Timer) map[int]checkResult {
 		if w.LoopOwned {
-			return w.Host.loopTimerChecks(ctx, ts, w.Host.now, githubHeld)
+			return w.Host.LoopTimerChecks(ctx, ts, w.Host.Now(), githubHeld)
 		}
-		return checkTimers(ctx, ts, w.Host.now, githubHeld)
+		return Cmd.CheckTimers(ctx, ts, w.Host.Now(), githubHeld)
 	})
 	for _, l := range lines {
 		w.EmitNow("pending", "%s", l)

@@ -76,7 +76,7 @@ func TestExecutionWatchReconcilesWithBoundedDeadlineAndThrottle(t *testing.T) {
 	if calls != 1 {
 		t.Fatal("watch reconciled again inside its interval")
 	}
-	w.Host.now = w.Host.now.Add(time.Minute)
+	watchApp(w.Host).now = watchApp(w.Host).now.Add(time.Minute)
 	w.SyncExecutions(context.Background(), st)
 	if calls != 2 {
 		t.Fatal("watch failed to reconcile after its interval")
@@ -154,7 +154,7 @@ func TestExecutionWatchDeadlineBackoffAndSingleUnconfirmedReport(t *testing.T) {
 	}
 
 	// Next minute is inside failure backoff: no retry, no ENDED flap.
-	w.Host.now = w.Host.now.Add(time.Minute)
+	watchApp(w.Host).now = watchApp(w.Host).now.Add(time.Minute)
 	st = w.SyncExecutions(context.Background(), st)
 	if syncCalls != 1 {
 		t.Fatalf("reconciled during 2m backoff at +1m: syncCalls=%d", syncCalls)
@@ -162,12 +162,12 @@ func TestExecutionWatchDeadlineBackoffAndSingleUnconfirmedReport(t *testing.T) {
 
 	// At +2m, the first backoff retry runs and still hits the deadline: no
 	// duplicate EXECUTION UNCONFIRMED or ENDED line, and next backoff is 4m.
-	w.Host.now = w.Host.now.Add(time.Minute)
+	watchApp(w.Host).now = watchApp(w.Host).now.Add(time.Minute)
 	st = w.SyncExecutions(context.Background(), st)
 	if syncCalls != 2 {
 		t.Fatalf("did not retry at +2m backoff: syncCalls=%d, want 2", syncCalls)
 	}
-	w.Host.now = w.Host.now.Add(2 * time.Minute)
+	watchApp(w.Host).now = watchApp(w.Host).now.Add(2 * time.Minute)
 	st = w.SyncExecutions(context.Background(), st)
 	if syncCalls != 2 {
 		t.Fatalf("reconciled inside 4m second backoff: syncCalls=%d", syncCalls)
@@ -186,7 +186,7 @@ func TestExecutionWatchDeadlineBackoffAndSingleUnconfirmedReport(t *testing.T) {
 
 	// At +4m after the second failure, the host recovers and ENDED is emitted once.
 	failDeadline = false
-	w.Host.now = w.Host.now.Add(2 * time.Minute)
+	watchApp(w.Host).now = watchApp(w.Host).now.Add(2 * time.Minute)
 	st = w.SyncExecutions(context.Background(), st)
 	if syncCalls != 3 || inspectCalls != 1 || st.Starts[1].Execution.Observation.Reachability != execution.Reachable {
 		t.Fatalf("recovery after backoff failed: sync=%d inspect=%d reachability=%s", syncCalls, inspectCalls, st.Starts[1].Execution.Observation.Reachability)
@@ -287,7 +287,7 @@ func TestExecutionWatchEndedRunSettlesAndMultiHostRotationDoesNotFlap(t *testing
 	// Minutes 1, 2, 3: rotation changes host order, but settled host-a is never
 	// polled again and unconfirmed host-b stays unconfirmed without ENDED flaps.
 	for range 3 {
-		w.Host.now = w.Host.now.Add(time.Minute)
+		watchApp(w.Host).now = watchApp(w.Host).now.Add(time.Minute)
 		st = w.SyncExecutions(context.Background(), st)
 	}
 	if callsA != 3 {

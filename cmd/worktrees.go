@@ -748,26 +748,26 @@ type worktreesMark struct {
 // the sample goes on. A run that removed something is one WORKTREES line; a
 // failed one is WORKTREES FAILED until a run succeeds.
 func watchWorktrees(w *Watcher, now time.Time) {
-	every := w.Host.cfg.Doctor.WorktreesEvery.Duration
-	if w.Host.cfg.Disk.Auto() || !w.WorktreesOn || every <= 0 || !w.WorktreesTrimming.CompareAndSwap(false, true) {
+	every := watchApp(w.Host).cfg.Doctor.WorktreesEvery.Duration
+	if watchApp(w.Host).cfg.Disk.Auto() || !w.WorktreesOn || every <= 0 || !w.WorktreesTrimming.CompareAndSwap(false, true) {
 		return
 	}
 	if now.Before(w.WorktreesNext) {
 		w.WorktreesTrimming.Store(false)
 		return
 	}
-	d := *w.Host
+	d := *watchApp(w.Host)
 	w.Bg.Add(1)
 	go func() {
 		defer w.Bg.Done()
 		defer w.WorktreesTrimming.Store(false)
 		var m worktreesMark
-		_, _ = w.Host.store.ReadFile(worktreesFile, &m)
+		_, _ = watchApp(w.Host).store.ReadFile(worktreesFile, &m)
 		if now.Sub(m.At) < every {
 			w.WorktreesNext = m.At.Add(every)
 			return
 		}
-		r := w.Host.trimWorktrees(false, func() (worktreeMachine, error) { return liveWorktrees(&d) })
+		r := watchApp(w.Host).trimWorktrees(false, func() (worktreeMachine, error) { return liveWorktrees(&d) })
 		if d.context().Err() != nil {
 			return
 		}
@@ -776,7 +776,7 @@ func watchWorktrees(w *Watcher, now time.Time) {
 			return
 		}
 		w.WorktreesNext = now.Add(every)
-		_ = w.Host.store.WriteFile(worktreesFile, worktreesMark{At: now})
+		_ = watchApp(w.Host).store.WriteFile(worktreesFile, worktreesMark{At: now})
 		w.Check("worktrees", r.err != nil || len(r.failed) > 0, "WORKTREES FAILED: %s", r)
 		if r.acted() {
 			w.EmitNow("worktrees-trim", "WORKTREES %s (doctor.worktreesEvery)", r)

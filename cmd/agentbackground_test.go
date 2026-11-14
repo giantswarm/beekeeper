@@ -706,7 +706,7 @@ func stubFresh(t *testing.T, live *[]*claude.Session) {
 // pollStop runs the watch's stop step on the state read now and live.
 func pollStop(t *testing.T, w *Watcher, live []*claude.Session) {
 	t.Helper()
-	st, err := w.Host.store.Read()
+	st, err := watchApp(w.Host).store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -730,7 +730,7 @@ func TestParkedBackgroundSessionStopsAndResumes(t *testing.T) {
 	if len(*calls) != 0 {
 		t.Fatalf("stopped in its turn: %q", argvs(*calls))
 	}
-	w.Host.now = a.now.Add(time.Minute)
+	watchApp(w.Host).now = a.now.Add(time.Minute)
 	pollStop(t, w, live)
 	if len(*calls) != 1 || !slices.Equal((*calls)[0].argv[1:], []string{bgStopCmd, bgShortID}) {
 		t.Fatalf("calls %q", argvs(*calls))

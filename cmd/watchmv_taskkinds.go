@@ -9,5 +9,5 @@ const kindSpendEvery = 10 * time.Minute
 
 // KindSpending runs in the command, which holds what it needs (watchKindSpending).
 func (w *Watcher) KindSpending(now time.Time) {
-	watchKindSpending(w, now)
+	Cmd.WatchKindSpending(w, now)
 }

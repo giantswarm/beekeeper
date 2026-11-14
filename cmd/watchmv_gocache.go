@@ -10,7 +10,7 @@ import (
 // next look's time is read only with the flag held, after the look that
 // wrote it gave the flag back.
 func (w *Watcher) GoCache(now time.Time) {
-	if w.Host.cfg.Disk.Auto() || !w.GoCacheOn || w.Host.cfg.Doctor.GoCacheMax() == 0 || !w.goCaching.CompareAndSwap(false, true) {
+	if w.Host.Cfg().Disk.Auto() || !w.GoCacheOn || w.Host.Cfg().Doctor.GoCacheMax() == 0 || !w.goCaching.CompareAndSwap(false, true) {
 		return
 	}
 	if now.Before(w.GoCacheNext) {
@@ -21,11 +21,11 @@ func (w *Watcher) GoCache(now time.Time) {
 	go func() {
 		defer w.Bg.Done()
 		defer w.goCaching.Store(false)
-		w.GoCacheLook(now, goBuilds)
+		w.GoCacheLook(now, Cmd.GoBuilds)
 	}()
 }
 
 // GoCacheLook runs in the command, which holds what it needs (watchGoCacheLook).
 func (w *Watcher) GoCacheLook(now time.Time, builds func() []int) {
-	watchGoCacheLook(w, now, builds)
+	Cmd.WatchGoCacheLook(w, now, builds)
 }

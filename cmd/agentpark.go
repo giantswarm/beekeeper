@@ -825,7 +825,7 @@ func (a *app) recheckLeaseParks(st *state.State, parks []settledPark) []settledP
 // whose park is resumable; a resume that fails is a line, and the agent
 // stays parked for the next poll or agents resume.
 func watchAutoResume(w *Watcher, ctx context.Context, st *state.State) {
-	if !w.Host.cfg.Agents.AutoResume || st.Stop != nil {
+	if !watchApp(w.Host).cfg.Agents.AutoResume || st.Stop != nil {
 		return
 	}
 	for _, ag := range st.Agents {
@@ -835,10 +835,10 @@ func watchAutoResume(w *Watcher, ctx context.Context, st *state.State) {
 			continue
 		}
 		cp := ag
-		if !freshPark(st, ag) && w.Host.usageHighBlockForAgent(ctx, st, nil, &cp) != "" {
+		if !freshPark(st, ag) && watchApp(w.Host).usageHighBlockForAgent(ctx, st, nil, &cp) != "" {
 			continue
 		}
-		quiet := *w.Host // the wake's own report is not a watch line
+		quiet := *watchApp(w.Host) // the wake's own report is not a watch line
 		quiet.out = io.Discard
 		if err := quiet.resumeParked(ctx, WatchParty, cmp.Or(ag.Session, ag.Name)); err != nil {
 			w.Emit("park-resume-"+ag.Name, "AGENT RESUME FAILED %q: %v; beekeeper agents resume %q", ag.Name, err, ag.Name)
@@ -849,10 +849,10 @@ func watchAutoResume(w *Watcher, ctx context.Context, st *state.State) {
 			continue
 		}
 		ag := state.Agent{Party: p.By}
-		if roleRun(st, p.By) && w.Host.usageHighBlockForAgent(ctx, st, nil, &ag) != "" {
+		if roleRun(st, p.By) && watchApp(w.Host).usageHighBlockForAgent(ctx, st, nil, &ag) != "" {
 			continue
 		}
-		quiet := *w.Host
+		quiet := *watchApp(w.Host)
 		quiet.out = io.Discard
 		if err := quiet.resumeOffRoster(ctx, WatchParty, p.By, false); err != nil {
 			id := cmp.Or(wakeID(p.By), p.By.Name)

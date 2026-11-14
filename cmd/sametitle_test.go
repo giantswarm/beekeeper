@@ -113,7 +113,7 @@ func TestTheRoleReachesItsHolderPastASharedTitle(t *testing.T) {
 // once one session is left with it.
 func TestTheWatchSaysASharedTitle(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
-	w.Host.now = time.Now()
+	watchApp(w.Host).now = time.Now()
 	both := []*claude.Session{{PID: 3, ID: "s3", Name: sharedTitle}, {PID: 9, ID: "s9", Name: sharedTitle}}
 	w.SameTitles(both)
 	w.SameTitles(both)

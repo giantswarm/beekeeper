@@ -101,7 +101,7 @@ func TestPlainCIParkWakesOnRedAndOnGreen(t *testing.T) {
 				return nil
 			}
 			t.Cleanup(func() { wakeOwner = wasWake })
-			if err := w.Host.store.Update(func(st *state.State) ([]state.Event, error) {
+			if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 				st.Agents = []state.Agent{{Party: state.Party{Session: "s9", Name: bk228}, Task: "fix o/r#7",
 					Park: &state.Park{On: claimIssue, At: relayNow.Add(-time.Minute), Waits: "CI", ReviewHead: ciHead}}}
 				st.Timers = []state.Timer{{ID: 1, Due: relayNow.Add(-time.Minute), When: prChecks7, Wake: bk228, What: "CI settled: fix or park for review", Until: relayNow.Add(2 * time.Hour)}}
@@ -111,18 +111,18 @@ func TestPlainCIParkWakesOnRedAndOnGreen(t *testing.T) {
 			}
 			live := []*claude.Session{}
 			w.Pending(context.Background(), live)
-			st, _ := w.Host.store.Read()
+			st, _ := watchApp(w.Host).store.Read()
 			if len(woke) != 0 || len(st.Timers) != 1 || st.Timers[0].Reason != "1 of 2 checks on head abcdef012 still running" {
 				t.Fatalf("while running: woke %v, timers %+v", woke, st.Timers)
 			}
 			answer = tc.settled
-			w.Host.now = relayNow.Add(timerEvery)
+			watchApp(w.Host).now = relayNow.Add(timerEvery)
 			w.Pending(context.Background(), live)
 			w.TimerActs.Wait()
 			if len(woke) != 0 {
 				t.Fatalf("old worker woke: %v", woke)
 			}
-			settled, _ := w.Host.store.Read()
+			settled, _ := watchApp(w.Host).store.Read()
 			if name == ciGreenName {
 				if settled.Agents[0].Park.ReviewHead != ciHead || len(settled.ReviewParks) != 1 {
 					t.Fatal("green CI did not request review")
@@ -136,10 +136,10 @@ func TestPlainCIParkWakesOnRedAndOnGreen(t *testing.T) {
 			}
 			// Closed: later ticks neither read nor wake again.
 			before := reads
-			w.Host.now = relayNow.Add(3 * timerEvery)
+			watchApp(w.Host).now = relayNow.Add(3 * timerEvery)
 			w.Pending(context.Background(), live)
 			w.TimerActs.Wait()
-			if st, _ := w.Host.store.Read(); len(st.Timers) != 0 || len(woke) != 0 || reads != before {
+			if st, _ := watchApp(w.Host).store.Read(); len(st.Timers) != 0 || len(woke) != 0 || reads != before {
 				t.Fatalf("after firing: timers %+v, woke %v, reads %d→%d", st.Timers, woke, before, reads)
 			}
 		})

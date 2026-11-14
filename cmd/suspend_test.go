@@ -30,12 +30,12 @@ func (f *suspendFixture) SuspendRecords(context.Context, time.Time) ([]machine.S
 func TestSuspendRecoveryAcrossPolls(t *testing.T) {
 	w, out := onceWatch(t, nil)
 	w.Standby = true
-	entry := w.Host.now
+	entry := watchApp(w.Host).now
 	exit := entry.Add(2 * time.Hour)
 	worker := state.Party{Name: "fixture-worker", Session: "fixture-session"}
 	supervisor := state.Party{Name: "fixture-supervisor", Session: "fixture-supervisor-session"}
 	supervisedBy(t, w, supervisor, entry.Add(-time.Minute))
-	err := w.Host.store.Update(func(st *state.State) ([]state.Event, error) {
+	err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Agents = []state.Agent{{Party: worker, Task: "continue fixture"}, {Party: state.Party{Name: stateIdle}}, {Party: state.Party{Name: paramDone}, Task: "finished suspend fixture", Done: true}}
 		st.Timers = []state.Timer{{ID: 1, Due: entry.Add(time.Hour), What: "fixture timer"}, {ID: 2, Due: exit.Add(time.Hour), What: "later suspend timer"}}
 		return nil, nil
@@ -78,14 +78,14 @@ func TestSuspendRecoveryAcrossPolls(t *testing.T) {
 func TestSuspendRespectsDeskStop(t *testing.T) {
 	w, _ := onceWatch(t, nil)
 	w.Standby = true
-	st, err := w.Host.store.Read()
+	st, err := watchApp(w.Host).store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
 	// A stopped desk must report gaps without scheduling recovery.
 	st.Agents = []state.Agent{{Party: state.Party{Name: remoteMCPFixture}, Task: suspendFixtureTask}}
 	st.Stop = &state.Stop{Reason: "suspend fixture stop"}
-	w.Resumed(st, nil, w.Host.now, w.Host.now.Add(time.Hour))
+	w.Resumed(st, nil, watchApp(w.Host).now, watchApp(w.Host).now.Add(time.Hour))
 	if len(w.SuspendRecovery) != 0 {
 		t.Fatal("stopped desk queued recovery")
 	}
@@ -94,7 +94,7 @@ func TestSuspendRespectsDeskStop(t *testing.T) {
 func TestSuspendOnlyWakesStoppedBusyWorkers(t *testing.T) {
 	w, _ := onceWatch(t, nil)
 	w.Standby = true
-	st, err := w.Host.store.Read()
+	st, err := watchApp(w.Host).store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +103,7 @@ func TestSuspendOnlyWakesStoppedBusyWorkers(t *testing.T) {
 		{Party: state.Party{Name: "suspend parked worker"}, Task: "wait", Park: &state.Park{}},
 		{Party: state.Party{Name: reviewedStoppedCase, Session: "stopped-id"}, Task: suspendFixtureTask},
 	}
-	w.Resumed(st, []*claude.Session{{Name: holderLive, ID: "live-id", PID: 123}}, w.Host.now, w.Host.now.Add(time.Hour))
+	w.Resumed(st, []*claude.Session{{Name: holderLive, ID: "live-id", PID: 123}}, watchApp(w.Host).now, watchApp(w.Host).now.Add(time.Hour))
 	if len(w.SuspendRecovery) != 1 || w.SuspendRecovery[reviewedStoppedCase].Party.Name != reviewedStoppedCase {
 		t.Fatalf("queued: %v", w.SuspendRecovery)
 	}
@@ -112,7 +112,7 @@ func TestSuspendOnlyWakesStoppedBusyWorkers(t *testing.T) {
 func TestSuspendRestartsSupervisorService(t *testing.T) {
 	w, _ := onceWatch(t, nil)
 	w.Standby = true
-	fixture := &suspendFixture{Machine: plat.Machine, records: []machine.SuspendRecord{{At: w.Host.now, Entry: true}, {At: w.Host.now.Add(time.Hour)}}}
+	fixture := &suspendFixture{Machine: plat.Machine, records: []machine.SuspendRecord{{At: watchApp(w.Host).now, Entry: true}, {At: watchApp(w.Host).now.Add(time.Hour)}}}
 	original := plat.Machine
 	plat.Machine = fixture
 	defer func() { plat.Machine = original }()
@@ -121,12 +121,12 @@ func TestSuspendRestartsSupervisorService(t *testing.T) {
 		State: func(context.Context) string { return "suspend fixture inactive" },
 		Start: func(context.Context) error { starts++; return nil },
 	}
-	w.Suspends(t.Context(), w.Host.now.Add(-time.Minute), nil)
+	w.Suspends(t.Context(), watchApp(w.Host).now.Add(-time.Minute), nil)
 	w.Stand.Inflight.Wait()
 	if starts != 1 {
 		t.Fatalf("supervisor starts: %d", starts)
 	}
-	w.Suspends(t.Context(), w.Host.now, nil)
+	w.Suspends(t.Context(), watchApp(w.Host).now, nil)
 	if starts != 1 {
 		t.Fatalf("duplicate supervisor recovery: %d", starts)
 	}
@@ -135,18 +135,18 @@ func TestSuspendRestartsSupervisorService(t *testing.T) {
 func TestSuspendReportsEachCompletedGap(t *testing.T) {
 	w, out := onceWatch(t, nil)
 	fixture := &suspendFixture{Machine: plat.Machine, records: []machine.SuspendRecord{
-		{At: w.Host.now.Add(-time.Hour)}, // exit without a known entry is ignored
-		{At: w.Host.now, Entry: true},
-		{At: w.Host.now.Add(time.Hour)},
-		{At: w.Host.now.Add(2 * time.Hour), Entry: true},
-		{At: w.Host.now.Add(3 * time.Hour)},
-		{At: w.Host.now.Add(4 * time.Hour), Entry: true}, // no exit yet
+		{At: watchApp(w.Host).now.Add(-time.Hour)}, // exit without a known entry is ignored
+		{At: watchApp(w.Host).now, Entry: true},
+		{At: watchApp(w.Host).now.Add(time.Hour)},
+		{At: watchApp(w.Host).now.Add(2 * time.Hour), Entry: true},
+		{At: watchApp(w.Host).now.Add(3 * time.Hour)},
+		{At: watchApp(w.Host).now.Add(4 * time.Hour), Entry: true}, // no exit yet
 	}}
 	original := plat.Machine
 	plat.Machine = fixture
 	defer func() { plat.Machine = original }()
-	w.Suspends(t.Context(), w.Host.now.Add(-time.Hour), nil)
-	w.Suspends(t.Context(), w.Host.now, nil)
+	w.Suspends(t.Context(), watchApp(w.Host).now.Add(-time.Hour), nil)
+	w.Suspends(t.Context(), watchApp(w.Host).now, nil)
 	if got := strings.Count(out.String(), "SUSPENDED / RESUMED"); got != 2 {
 		t.Fatalf("gap lines: %d\n%s", got, out)
 	}
@@ -158,13 +158,13 @@ func TestSuspendReportsEachCompletedGap(t *testing.T) {
 func TestSuspendRecoveryDoesNotRetryFailuresAfterRelay(t *testing.T) {
 	w, out := onceWatch(t, nil)
 	w.Standby = true
-	entry := w.Host.now
+	entry := watchApp(w.Host).now
 	exit := entry.Add(time.Hour)
 	worker := state.Party{Name: "copy-worker", Session: bgID}
 	oldGuide := state.Party{Name: "Guide run 56", Session: "old-guide-session"}
 	newGuide := state.Party{Name: "Guide run 57", Session: "new-guide-session"}
 	supervisedBy(t, w, oldGuide, entry.Add(-time.Minute))
-	if err := w.Host.store.Update(func(st *state.State) ([]state.Event, error) {
+	if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Agents = []state.Agent{{Party: worker, Task: suspendFixtureTask}}
 		return nil, nil
 	}); err != nil {
@@ -187,7 +187,7 @@ func TestSuspendRecoveryDoesNotRetryFailuresAfterRelay(t *testing.T) {
 	}
 	w.Suspends(t.Context(), entry.Add(-time.Minute), nil)
 	w.Stand.Inflight.Wait()
-	if err := w.Host.store.Update(func(st *state.State) ([]state.Event, error) {
+	if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Guide.Relieved = append(st.Guide.Relieved, state.Relief{Party: oldGuide, At: exit})
 		st.Guide.Holder = &state.Supervisor{Party: newGuide, Since: exit}
 		return nil, nil
@@ -451,8 +451,8 @@ func TestSuspendRecoveryRelayWhileQueued(t *testing.T) {
 	w.Standby = true
 	oldGuide := state.Party{Name: "Guide run 61", Session: "suspend-old-guide"}
 	newGuide := state.Party{Name: "Guide run 62", Session: "suspend-new-guide"}
-	supervisedBy(t, w, oldGuide, w.Host.now.Add(-time.Minute))
-	if err := w.Host.store.Update(func(st *state.State) ([]state.Event, error) {
+	supervisedBy(t, w, oldGuide, watchApp(w.Host).now.Add(-time.Minute))
+	if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Agents = []state.Agent{
 			{Party: oldGuide, Task: suspendFixtureTask},
 			{Party: newGuide, Task: suspendFixtureTask},
@@ -461,16 +461,16 @@ func TestSuspendRecoveryRelayWhileQueued(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	st, err := w.Host.store.Read()
+	st, err := watchApp(w.Host).store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
-	w.Resumed(st, nil, w.Host.now.Add(-time.Hour), w.Host.now)
+	w.Resumed(st, nil, watchApp(w.Host).now.Add(-time.Hour), watchApp(w.Host).now)
 	w.Stand.Busy.Store(true)
 	w.RecoverSuspend(t.Context())
-	if err := w.Host.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Guide.Relieved = append(st.Guide.Relieved, state.Relief{Party: oldGuide, By: newGuide, At: w.Host.now, Taken: w.Host.now})
-		st.Guide.Holder = &state.Supervisor{Party: newGuide, Since: w.Host.now}
+	if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Guide.Relieved = append(st.Guide.Relieved, state.Relief{Party: oldGuide, By: newGuide, At: watchApp(w.Host).now, Taken: watchApp(w.Host).now})
+		st.Guide.Holder = &state.Supervisor{Party: newGuide, Since: watchApp(w.Host).now}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -489,11 +489,11 @@ func TestSuspendRecoveryRelayWhileQueued(t *testing.T) {
 		t.Fatalf("deliveries after relay: %v", calls)
 	}
 	// A later suspend must also ignore the stale relieved roster entry.
-	st, err = w.Host.store.Read()
+	st, err = watchApp(w.Host).store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
-	w.Resumed(st, nil, w.Host.now, w.Host.now.Add(time.Hour))
+	w.Resumed(st, nil, watchApp(w.Host).now, watchApp(w.Host).now.Add(time.Hour))
 	if len(w.SuspendRecovery) != 1 || !w.SuspendRecovery[newGuide.Name].Guide {
 		t.Fatalf("queued after relay: %v", w.SuspendRecovery)
 	}

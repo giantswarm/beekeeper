@@ -58,7 +58,7 @@ func (w *Watcher) WatchFeed(ctx context.Context) {
 	}()
 	defer func() { <-done }()
 	for ctx.Err() == nil {
-		err := w.Host.hub().Listen(ctx, []string{resourceFeed}, func() {
+		err := w.Host.Hub().Listen(ctx, []string{resourceFeed}, func() {
 			w.Clear(CentralKey)
 			w.Clear(feedKey)
 			resumed.Store(true)
@@ -72,9 +72,9 @@ func (w *Watcher) WatchFeed(ctx context.Context) {
 			return
 		}
 		if u := (*central.Unreachable)(nil); errors.As(err, &u) {
-			w.Emit(CentralKey, "CENTRAL UNREACHABLE %s: %s", w.Host.cfg.Central.Context, u.Reason)
+			w.Emit(CentralKey, "CENTRAL UNREACHABLE %s: %s", w.Host.Cfg().Central.Context, u.Reason)
 		} else {
-			w.Emit(feedKey, "CENTRAL FEED REFUSED %s: %v; subscribed again every %s", w.Host.cfg.Central.Context, err, feedRetry)
+			w.Emit(feedKey, "CENTRAL FEED REFUSED %s: %v; subscribed again every %s", w.Host.Cfg().Central.Context, err, feedRetry)
 		}
 		t := time.NewTimer(feedRetry)
 		select {
@@ -98,13 +98,13 @@ func (w *Watcher) readFeed(ctx context.Context, resume bool) bool {
 	last := w.FeedID
 	w.Mu.Unlock()
 	var f feed.Feed
-	me := state.Party{Name: w.Host.cfg.Identity.Person, Host: w.Host.cfg.Identity.Host}
-	if _, err := w.Host.callCentralRaw(ctx, me, nameReadFeed, map[string]any{paramAfter: last}, &f); err != nil {
+	me := state.Party{Name: w.Host.Cfg().Identity.Person, Host: w.Host.Cfg().Identity.Host}
+	if _, err := w.Host.CallCentralRaw(ctx, me, nameReadFeed, map[string]any{paramAfter: last}, &f); err != nil {
 		if u := (*central.Unreachable)(nil); errors.As(err, &u) {
-			w.Emit(CentralKey, "CENTRAL UNREACHABLE %s: %s", w.Host.cfg.Central.Context, u.Reason)
+			w.Emit(CentralKey, "CENTRAL UNREACHABLE %s: %s", w.Host.Cfg().Central.Context, u.Reason)
 			return false
 		}
-		w.Emit(feedKey, "CENTRAL FEED UNREADABLE %s: %v", w.Host.cfg.Central.Context, err)
+		w.Emit(feedKey, "CENTRAL FEED UNREADABLE %s: %v", w.Host.Cfg().Central.Context, err)
 		return false
 	}
 	w.Clear(feedKey)
@@ -115,7 +115,7 @@ func (w *Watcher) readFeed(ctx context.Context, resume bool) bool {
 		return true
 	}
 	if resume && f.Gap {
-		w.EmitNow(feedKey, "CENTRAL FEED GAP %s: events after %s may be missing: the central instance no longer holds them", w.Host.cfg.Central.Context, feedTime(last))
+		w.EmitNow(feedKey, "CENTRAL FEED GAP %s: events after %s may be missing: the central instance no longer holds them", w.Host.Cfg().Central.Context, feedTime(last))
 	}
 	for _, ev := range f.Events {
 		if ev.ID <= last {
@@ -141,7 +141,7 @@ func feedTime(id string) string {
 // Printable is another machine's text as one line of the watch: a control
 // character or escape is a space, so it forges no line and moves no cursor.
 func Printable(s string) string {
-	return oneLine(strings.Map(func(r rune) rune {
+	return Cmd.OneLine(strings.Map(func(r rune) rune {
 		if !unicode.IsPrint(r) {
 			return ' '
 		}

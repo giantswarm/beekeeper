@@ -37,6 +37,6 @@ func TimerSettlesPark(t state.Timer, p *state.Park, person string) bool {
 	// A worker's own one-shot deadline/probe is itself the condition for
 	// an external PR/issue wait. The reference is context, not a second
 	// condition. Keep unrelated typed conditions and repeating reminders out.
-	_, external := parseRef(p.On)
+	_, external := Cmd.ParseRef(p.On)
 	return external && t.When == "" && t.Repeat == "" && t.By.Is(p.By)
 }

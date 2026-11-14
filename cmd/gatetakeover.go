@@ -5,7 +5,7 @@ import (
 )
 
 func (w *Watcher) StaleMerges() {
-	st, err := w.Host.store.Peek()
+	st, err := w.Host.Store().Peek()
 	if err != nil {
 		return
 	}

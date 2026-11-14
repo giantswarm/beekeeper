@@ -66,13 +66,13 @@ func reportingWatch(t *testing.T, dir string) (*Watcher, *[]string, *bytes.Buffe
 	if err := os.WriteFile(brief, []byte("# Hourly status\n\nPost it."), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	w.Host.cfg.Reporter = hourly()
-	w.Host.cfg.Reporter.Brief, w.Host.cfg.Reporter.Dir, w.Host.cfg.Reporter.Person = brief, dir, "Ada"
-	w.Host.cfg.Claude.ProjectsDir = filepath.Join(dir, "projects")
-	w.Host.now = reportNow
+	watchApp(w.Host).cfg.Reporter = hourly()
+	watchApp(w.Host).cfg.Reporter.Brief, watchApp(w.Host).cfg.Reporter.Dir, watchApp(w.Host).cfg.Reporter.Person = brief, dir, "Ada"
+	watchApp(w.Host).cfg.Claude.ProjectsDir = filepath.Join(dir, "projects")
+	watchApp(w.Host).now = reportNow
 	var launched []string
 	w.TurnEnded = func(context.Context, string) bool { return false }
-	w.Host.zone = func() (*time.Location, error) { return time.LoadLocation("Europe/Athens") }
+	watchApp(w.Host).zone = func() (*time.Location, error) { return time.LoadLocation("Europe/Athens") }
 	w.RunReport = func(unit, id, name, prompt string) error {
 		if !strings.HasPrefix(unit, "beekeeper-report-"+id[:8]) || !strings.Contains(prompt, "to Ada") || !strings.Contains(prompt, "–"+strings.TrimPrefix(name, "Status report ")+" EEST, every time in Europe/Athens") || !regexp.MustCompile("`beekeeper report --since \\S+\\+03:00 --until \\S+T"+strings.TrimPrefix(name, "Status report ")+":00\\+03:00`").MatchString(prompt) || !strings.Contains(prompt, "beekeeper reporter check") || !strings.HasSuffix(prompt, "Post it.") {
 			t.Errorf("launch %s %s %q", unit, name, prompt)
@@ -93,7 +93,7 @@ func TestReporterStartsOncePerSlotAcrossWatches(t *testing.T) {
 	if names := append(*la, *lb...); len(names) != 1 || names[0] != "Status report 02:00" {
 		t.Fatalf("started %v and %v, want one reporter, Status report 02:00", *la, *lb)
 	}
-	st, err := a.Host.store.Read()
+	st, err := watchApp(a.Host).store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,8 +112,8 @@ func TestReporterSkipsTheNextSlotWhileItRuns(t *testing.T) {
 	w, launched, out := reportingWatch(t, dir)
 	ctx := context.Background()
 	w.TendReporter(ctx, nil)
-	w.Host.cfg.Reporter.Timeout.Duration = 2 * time.Hour
-	w.Host.now = reportNow.Add(time.Hour)
+	watchApp(w.Host).cfg.Reporter.Timeout.Duration = 2 * time.Hour
+	watchApp(w.Host).now = reportNow.Add(time.Hour)
 	w.TendReporter(ctx, nil)
 	w.TendReporter(ctx, nil)
 	if len(*launched) != 1 || strings.Count(out.String(), "is skipped") != 1 {
@@ -129,9 +129,9 @@ func TestReporterEndsOnThePost(t *testing.T) {
 	w, _, out := reportingWatch(t, dir)
 	ctx := context.Background()
 	w.TendReporter(ctx, nil)
-	st, _ := w.Host.store.Read()
+	st, _ := watchApp(w.Host).store.Read()
 	id := st.Report.Session
-	proj := filepath.Join(w.Host.cfg.Claude.ProjectsDir, "p")
+	proj := filepath.Join(watchApp(w.Host).cfg.Claude.ProjectsDir, "p")
 	if err := os.MkdirAll(proj, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -141,18 +141,18 @@ func TestReporterEndsOnThePost(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(proj, id+".jsonl"), []byte(post), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	w.Host.now = reportNow.Add(3 * time.Minute)
+	watchApp(w.Host).now = reportNow.Add(3 * time.Minute)
 	w.TendReporter(ctx, nil)
-	st, _ = w.Host.store.Read()
+	st, _ = watchApp(w.Host).store.Read()
 	if st.Report.Running() || st.Report.Outcome != "posted" || len(st.Agents) != 0 {
 		t.Errorf("report %+v, agents %+v", st.Report, st.Agents)
 	}
 	if !strings.Contains(out.String(), "posted: posted its report, off the roster") || verbs(t, w, "reporter.posted") != 1 {
 		t.Errorf("out:\n%s", out)
 	}
-	w.Host.now = reportNow.Add(time.Hour)
+	watchApp(w.Host).now = reportNow.Add(time.Hour)
 	w.TendReporter(ctx, nil)
-	if st, _ = w.Host.store.Read(); !st.Report.Running() || st.Report.Session == id {
+	if st, _ = watchApp(w.Host).store.Read(); !st.Report.Running() || st.Report.Session == id {
 		t.Errorf("the next slot's report %+v", st.Report)
 	}
 }
@@ -162,9 +162,9 @@ func TestReporterTimesOut(t *testing.T) {
 	w, _, out := reportingWatch(t, dir)
 	ctx := context.Background()
 	w.TendReporter(ctx, nil)
-	w.Host.now = reportNow.Add(20 * time.Minute)
+	watchApp(w.Host).now = reportNow.Add(20 * time.Minute)
 	w.TendReporter(ctx, nil)
-	st, _ := w.Host.store.Read()
+	st, _ := watchApp(w.Host).store.Read()
 	if st.Report.Running() || st.Report.Outcome != "timeout" || len(st.Agents) != 0 {
 		t.Errorf("report %+v, agents %+v", st.Report, st.Agents)
 	}
@@ -184,7 +184,7 @@ func TestReporterOnlyInTheStandbyWatch(t *testing.T) {
 
 func TestReporterNotStartedSaysWhyOnce(t *testing.T) {
 	w, _, out := reportingWatch(t, t.TempDir())
-	w.Host.cfg.Reporter.Brief = filepath.Join(t.TempDir(), "missing.md")
+	watchApp(w.Host).cfg.Reporter.Brief = filepath.Join(t.TempDir(), "missing.md")
 	for range 2 {
 		w.TendReporter(context.Background(), nil)
 	}
@@ -208,7 +208,7 @@ func TestTurnPIDs(t *testing.T) {
 // verbs counts the events of verb in w's log.
 func verbs(t *testing.T, w *Watcher, verb string) int {
 	t.Helper()
-	evs, err := w.Host.store.Events(0, func(e state.Event) bool { return e.Verb == verb })
+	evs, err := watchApp(w.Host).store.Events(0, func(e state.Event) bool { return e.Verb == verb })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,9 +220,9 @@ func TestReporterEndsATurnThatEndedWithoutAPost(t *testing.T) {
 	ctx := context.Background()
 	w.TendReporter(ctx, nil)
 	w.TurnEnded = func(context.Context, string) bool { return true }
-	w.Host.now = reportNow.Add(2 * time.Minute)
+	watchApp(w.Host).now = reportNow.Add(2 * time.Minute)
 	w.TendReporter(ctx, nil)
-	st, _ := w.Host.store.Read()
+	st, _ := watchApp(w.Host).store.Read()
 	if st.Report.Running() || st.Report.Outcome != "unposted" || len(st.Agents) != 0 || verbs(t, w, "reporter.unposted") != 1 {
 		t.Errorf("report %+v, agents %+v; out:\n%s", st.Report, st.Agents, out)
 	}
@@ -265,9 +265,9 @@ func TestReporterFinalThenPaused(t *testing.T) {
 	ctx := context.Background()
 	w.TendReporter(ctx, nil) // 02:00 EEST
 	w.TurnEnded = func(context.Context, string) bool { return true }
-	w.Host.now = reportNow.Add(time.Minute)
+	watchApp(w.Host).now = reportNow.Add(time.Minute)
 	w.TendReporter(ctx, nil) // ended
-	if err := w.Host.store.Update(func(st *state.State) ([]state.Event, error) {
+	if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 		st.ReportPause = &state.ReportPause{Final: reportNow.Add(45 * time.Minute)}
 		return nil, nil
 	}); err != nil {
@@ -279,23 +279,23 @@ func TestReporterFinalThenPaused(t *testing.T) {
 		prompt = p
 		return nil
 	}
-	w.Host.now = reportNow.Add(30 * time.Minute)
+	watchApp(w.Host).now = reportNow.Add(30 * time.Minute)
 	w.TendReporter(ctx, nil)
-	w.Host.now = reportNow.Add(45 * time.Minute)
+	watchApp(w.Host).now = reportNow.Add(45 * time.Minute)
 	w.TendReporter(ctx, nil)
 	if len(*launched) != 2 || (*launched)[1] != "Status report 02:45" || !strings.Contains(prompt, "Report 02:00–02:45 EEST") ||
 		!strings.Contains(prompt, "last report before the 1h00m reports pause") {
 		t.Fatalf("launched %v, prompt %q; out:\n%s", *launched, prompt, out)
 	}
 	w.TendReporter(ctx, nil) // ended
-	w.Host.now = reportNow.Add(3 * time.Hour)
+	watchApp(w.Host).now = reportNow.Add(3 * time.Hour)
 	w.TendReporter(ctx, nil)
 	w.TendReporter(ctx, nil)
-	st, _ := w.Host.store.Read()
+	st, _ := watchApp(w.Host).store.Read()
 	if len(*launched) != 2 || !st.ReportPause.Paused() || verbs(t, w, "reporter.pause") != 1 {
 		t.Errorf("after the final: launched %v, pause %+v", *launched, st.ReportPause)
 	}
-	if err := w.Host.store.Update(func(st *state.State) ([]state.Event, error) { st.ReportPause = nil; return nil, nil }); err != nil {
+	if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) { st.ReportPause = nil; return nil, nil }); err != nil {
 		t.Fatal(err)
 	}
 	w.TendReporter(ctx, nil)

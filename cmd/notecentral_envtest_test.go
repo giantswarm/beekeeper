@@ -257,7 +257,7 @@ func TestEnvtestCentralParkAndFold(t *testing.T) {
 
 	var watched bytes.Buffer
 	w := ana.watcher(&watched)
-	st, err := w.Host.store.Read()
+	st, err := watchApp(w.Host).store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}

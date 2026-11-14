@@ -24,7 +24,7 @@ func watchHandCITimerToReviewRead(w *Watcher, ctx context.Context, f timerFire, 
 		return false, nil
 	}
 	if ag.Execution != nil {
-		st, err := w.Host.store.Read()
+		st, err := watchApp(w.Host).store.Read()
 		if err != nil {
 			return false, err
 		}
@@ -35,7 +35,7 @@ func watchHandCITimerToReviewRead(w *Watcher, ctx context.Context, f timerFire, 
 	} else if ag.Park.ReviewHead != p.Head {
 		return false, nil
 	}
-	err = w.Host.store.Update(func(st *state.State) ([]state.Event, error) {
+	err = watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 		for i := range st.Agents {
 			cur := &st.Agents[i]
 			if !cur.Is(ag.Party) {

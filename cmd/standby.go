@@ -169,7 +169,7 @@ func sendRequest(host, msg string) string {
 // watchNoteFailedSuccessor files the one note for the person on rl's first
 // successor that did not come up, and returns its number (0: none filed).
 func watchNoteFailedSuccessor(w *Watcher, rl role, holder state.Party) int {
-	person := w.Host.cfg.Guide.Person
+	person := watchApp(w.Host).cfg.Guide.Person
 	if person == "" {
 		return 0
 	}
@@ -181,10 +181,10 @@ func watchNoteFailedSuccessor(w *Watcher, rl role, holder state.Party) int {
 		Options:   []string{"take over: the running session holds the role and arms its watch", "leave it: the standby watch retries"},
 	}
 	var id int
-	_ = w.Host.store.Update(func(st *state.State) ([]state.Event, error) {
+	_ = watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 		st.NextNote++
 		id = st.NextNote
-		n := state.Note{ID: id, For: person, Text: d.text(), By: WatchParty, At: w.Host.now.UTC(), Kind: noteDecision,
+		n := state.Note{ID: id, For: person, Text: d.text(), By: WatchParty, At: watchApp(w.Host).now.UTC(), Kind: noteDecision,
 			Default: fmt.Sprintf("the standby watch starts at most %d successors, %s apart and doubling", maxFailedSuccessors, dur(successorBackoff))}
 		st.Notes = append(st.Notes, n)
 		return []state.Event{event(WatchParty, "note.add", "#%d %s", n.ID, n.Text)}, nil

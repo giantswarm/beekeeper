@@ -18,5 +18,5 @@ func (rl role) MayTake(st *state.State, me state.Party) error {
 	if h := rl.Get(st).Holder; (h != nil && h.Is(me)) || rl.StartedAs(st, me) {
 		return nil
 	}
-	return refused("%q is no %s run beekeeper started, and only such a run takes the role: `beekeeper %s start --new` starts the next one", me.Name, rl.Name, rl.Name)
+	return Cmd.Refused("%q is no %s run beekeeper started, and only such a run takes the role: `beekeeper %s start --new` starts the next one", me.Name, rl.Name, rl.Name)
 }

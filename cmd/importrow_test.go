@@ -285,10 +285,10 @@ func TestWatchSaysNoDesktopRowOnce(t *testing.T) {
 	plat = platform.Stub()
 	t.Cleanup(func() { plat = orig })
 	plat.Opener = &recordingOpener{}
-	w.Host.cfg.Claude.DesktopDir = recordDir(t, "local_rowed001")
-	w.Host.cfg.Claude.DesktopLog = capLog(t, 3)
+	watchApp(w.Host).cfg.Claude.DesktopDir = recordDir(t, "local_rowed001")
+	watchApp(w.Host).cfg.Claude.DesktopLog = capLog(t, 3)
 	w.Table = rowlessTable()
-	st := rowlessState(w.Host.now)
+	st := rowlessState(watchApp(w.Host).now)
 	for range 2 {
 		w.RowlessAgents(st)
 	}
@@ -311,7 +311,7 @@ func TestWatchSaysNoDesktopRowOnce(t *testing.T) {
 		}
 	}
 	// A rowless worker that comes later is said on its own.
-	st.Starts = append(st.Starts, state.Start{Party: state.Party{Session: "later001"}, At: w.Host.now.Add(-time.Hour)})
+	st.Starts = append(st.Starts, state.Start{Party: state.Party{Session: "later001"}, At: watchApp(w.Host).now.Add(-time.Hour)})
 	st.Agents = append(st.Agents, state.Agent{Party: state.Party{Session: "later001", Name: "worker later001"}, Task: rowlessTask})
 	w.RowlessAgents(st)
 	if s := out.String(); strings.Count(s, "NO DESKTOP ROW") != 2 || !strings.Contains(s, `never imported "worker later001"`) {
@@ -441,7 +441,7 @@ func TestDoctorSkipsReopenForSSHExecutionsAndNonDesktopMode(t *testing.T) {
 		}
 	}
 	w, _, watchOut := notifyingWatch(t, t.TempDir(), false)
-	w.Host.cfg.Agents.Mode = config.ModeBackground
+	watchApp(w.Host).cfg.Agents.Mode = config.ModeBackground
 	w.Table = rowlessTable()
 	w.RowlessAgents(localSt)
 	if watchOut.Len() != 0 {

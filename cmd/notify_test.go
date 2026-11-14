@@ -59,7 +59,7 @@ func TestWatchNotifiesEachDueOnceAcrossWatches(t *testing.T) {
 	dir := t.TempDir()
 	a, da, _ := notifyingWatch(t, dir, false)
 	b, db, _ := notifyingWatch(t, dir, false)
-	if err := a.Host.store.Update(func(st *state.State) ([]state.Event, error) { *st = *pendingState(); return nil, nil }); err != nil {
+	if err := watchApp(a.Host).store.Update(func(st *state.State) ([]state.Event, error) { *st = *pendingState(); return nil, nil }); err != nil {
 		t.Fatal(err)
 	}
 	live := []*claude.Session{{ID: "s4", HostID: hostFour, Name: agentFour}}
@@ -150,7 +150,7 @@ func TestStaleUpgradeHoldIsMarked(t *testing.T) {
 func TestMachineLinesNeverNotify(t *testing.T) {
 	needsPlatform(t)
 	w, d, out := notifyingWatch(t, t.TempDir(), false)
-	th := &w.Host.cfg.Watch
+	th := &watchApp(w.Host).cfg.Watch
 	th.AvailMinMiB, th.LoadMax = 1<<30, 0.001
 	w.Sample(context.Background())
 	for _, l := range []string{"LOW RAM", "HIGH LOAD"} {

@@ -68,7 +68,7 @@ func TestCodexUnreadableFallback(t *testing.T) {
 							return capacity.UsageReading{}, errors.New("reader offline")
 						}
 						w := a.newWatcher(false, chores)
-						w.Clock, w.Host.now = clk, now
+						w.Clock, watchApp(w.Host).now = clk, now
 						w.ReadHeadroom = func(context.Context, *capacity.SwapReading) *capacity.Headroom { return roomy() }
 						view := w.WatchUsage(t.Context(), &state.State{}, nil)
 						want := 3

@@ -28,7 +28,7 @@ type overtake struct {
 // hand, which said its settled refs do not settle it. Only an answer, a
 // default or a close by hand ends either.
 func refsSettle(n state.Note, asking int) bool {
-	return overtakable(n, asking) && len(n.Refs) > 0 && n.Kind != noteTodo && n.Reopened.IsZero()
+	return Cmd.Overtakable(n, asking) && len(n.Refs) > 0 && n.Kind != noteTodo && n.Reopened.IsZero()
 }
 
 // OvertakeRefs are the distinct issues and pull requests of the notes of
@@ -41,7 +41,7 @@ func OvertakeRefs(st *state.State) []github.PR {
 			continue
 		}
 		for _, s := range n.Refs {
-			if r, ok := parseRef(s); ok && !slices.Contains(out, r) {
+			if r, ok := Cmd.ParseRef(s); ok && !slices.Contains(out, r) {
 				out = append(out, r)
 			}
 		}
@@ -57,12 +57,12 @@ func settledRefs(refs []string, states map[github.PR]github.RefState) (string, b
 	var parts []string
 	var keyword bool
 	for _, s := range refs {
-		r, ok := parseRef(s)
+		r, ok := Cmd.ParseRef(s)
 		at := states[r]
 		if !ok || at.State == "" || at.State == github.Open {
 			return "", false
 		}
-		part := refName(r) + " " + strings.ToLower(at.State)
+		part := Cmd.RefName(r) + " " + strings.ToLower(at.State)
 		if at.Closer != "" {
 			part += " by " + at.Closer + "'s closing keyword"
 			keyword = true
@@ -111,10 +111,10 @@ func findOvertaken(st *state.State, states map[github.PR]github.RefState) (over,
 		// the filing worker has since finished its task.
 		alreadyMerged := false
 		for _, ref := range n.Refs {
-			r, _ := parseRef(ref)
+			r, _ := Cmd.ParseRef(ref)
 			at := states[r]
 			if at.State == github.Merged && !at.MergedAt.IsZero() && !n.At.IsZero() && !at.MergedAt.After(n.At) {
-				kept = append(kept, overtake{n.ID, refName(r) + " already merged when the note was added"})
+				kept = append(kept, overtake{n.ID, Cmd.RefName(r) + " already merged when the note was added"})
 				alreadyMerged = true
 				break
 			}
@@ -148,14 +148,14 @@ func (w *Watcher) overtakenNow(ctx context.Context, st *state.State) (over, kept
 	refs := OvertakeRefs(st)
 	switch {
 	case len(refs) == 0:
-	case lowBudget(st.Budget, w.Host.cfg.GitHub.Floor, w.Host.now):
+	case Cmd.LowBudget(st.Budget, w.Host.Cfg().GitHub.Floor, w.Host.Now()):
 		if !w.Chores {
 			w.EmitNow("pending", "NOTE REFS NOT READ (--once): the GitHub budget is under its floor until %s; no note is overtaken or kept",
 				st.Budget.Reset.Local().Format("15:04"))
 		}
 	default:
 		// A failed batch keeps its notes open; the others' are decided.
-		s, err := refStates(ctx, refs)
+		s, err := Cmd.RefStates(ctx, refs)
 		states = s
 		if err != nil {
 			w.Fail("note-refs", "NOTE REFS UNREADABLE: cannot read the notes' issues and pull requests: %v", err)
@@ -165,7 +165,7 @@ func (w *Watcher) overtakenNow(ctx context.Context, st *state.State) (over, kept
 		if unanswered := slices.DeleteFunc(slices.Clone(refs), func(r github.PR) bool { _, ok := s[r]; return ok }); len(unanswered) > 0 && !w.Chores {
 			names := make([]string, len(unanswered))
 			for i, r := range unanswered {
-				names[i] = refName(r)
+				names[i] = Cmd.RefName(r)
 			}
 			w.EmitNow("pending", "NOTE REFS UNANSWERED (--once): %s; their notes stay open", strings.Join(names, ", "))
 		}
@@ -186,8 +186,8 @@ func keepOpen(st *state.State, kept []overtake, by state.Party) ([]string, []sta
 			continue
 		}
 		n.Kept = kept[j].Reason
-		lines = append(lines, fmt.Sprintf("NOTE KEPT: #%d, %s: %s", n.ID, n.Kept, truncate(n.Text, 200)))
-		evs = append(evs, event(by, NoteKept, "#%d kept: %s%s%s", n.ID, oneLine(n.Kept), overtakenSep, n.Text))
+		lines = append(lines, fmt.Sprintf("NOTE KEPT: #%d, %s: %s", n.ID, n.Kept, Cmd.Truncate(n.Text, 200)))
+		evs = append(evs, Cmd.Event(by, NoteKept, "#%d kept: %s%s%s", n.ID, Cmd.OneLine(n.Kept), overtakenSep, n.Text))
 	}
 	return lines, evs
 }
@@ -203,8 +203,8 @@ func closeOvertaken(st *state.State, over []overtake, by state.Party) ([]string,
 		if i < 0 {
 			return false
 		}
-		lines = append(lines, fmt.Sprintf("NOTE OVERTAKEN: #%d, %s: %s", n.ID, over[i].Reason, truncate(n.Text, 200)))
-		evs = append(evs, overtakenEvent(by, n, over[i].Reason))
+		lines = append(lines, fmt.Sprintf("NOTE OVERTAKEN: #%d, %s: %s", n.ID, over[i].Reason, Cmd.Truncate(n.Text, 200)))
+		evs = append(evs, Cmd.OvertakenEvent(by, n, over[i].Reason))
 		return true
 	})
 	return lines, evs
@@ -229,13 +229,13 @@ func (w *Watcher) wouldOvertake(st *state.State, over, kept []overtake) {
 	for _, o := range over {
 		i := slices.IndexFunc(st.Notes, func(n state.Note) bool { return n.ID == o.Id })
 		if i >= 0 {
-			w.EmitNow("pending", "NOTE OVERTAKEN (--once writes nothing): #%d, %s: %s", o.Id, o.Reason, truncate(st.Notes[i].Text, 200))
+			w.EmitNow("pending", "NOTE OVERTAKEN (--once writes nothing): #%d, %s: %s", o.Id, o.Reason, Cmd.Truncate(st.Notes[i].Text, 200))
 		}
 	}
 	for _, o := range kept {
 		i := slices.IndexFunc(st.Notes, func(n state.Note) bool { return n.ID == o.Id })
 		if i >= 0 && st.Notes[i].Kept != o.Reason {
-			w.EmitNow("pending", "NOTE KEPT (--once writes nothing): #%d, %s: %s", o.Id, o.Reason, truncate(st.Notes[i].Text, 200))
+			w.EmitNow("pending", "NOTE KEPT (--once writes nothing): #%d, %s: %s", o.Id, o.Reason, Cmd.Truncate(st.Notes[i].Text, 200))
 		}
 	}
 }

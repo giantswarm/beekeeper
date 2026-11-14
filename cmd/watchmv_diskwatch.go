@@ -69,14 +69,14 @@ func (w *Watcher) SampleDisk(now time.Time, d machine.Disk, t *proc.Table, owner
 	if w.Disk.pathsAt.IsZero() || now.Sub(w.Disk.pathsAt) >= minDiskSpan {
 		read := w.Disk.ReadPaths
 		if read == nil {
-			read = func(ctx context.Context) []diskPath { return readDiskPaths(ctx, w.Host.diskPathRoots()) }
+			read = func(ctx context.Context) []diskPath { return Cmd.ReadDiskPaths(ctx, w.Host.DiskPathRoots()) }
 		}
-		paths := read(w.Host.context())
-		diskPathGrowth(paths, w.Disk.Paths)
+		paths := read(w.Host.Context())
+		Cmd.DiskPathGrowth(paths, w.Disk.Paths)
 		w.Disk.Paths = paths
 		w.Disk.pathsAt = now
 	}
-	th := w.Host.cfg.Watch
+	th := w.Host.Cfg().Watch
 	low := d.FreeMiB < th.DiskMin(d.TotalMiB)
 	w.Check("disk", low, "LOW DISK: / %d GiB free", d.FreeMiB/1024)
 	w.Check("diskfull", d.FreeMiB < th.DiskCritical(d.TotalMiB), "DISK NEARLY FULL: / %d GiB free of %d GiB", d.FreeMiB/1024, d.TotalMiB/1024)
@@ -163,7 +163,7 @@ func (dw *DiskWatch) WritersLine(now time.Time, freeMiB int, t *proc.Table, owne
 		}
 		total += n
 		comms[t.ByPID[pid].Comm] += n
-		if s := owner(t, pid, owners); s != "" {
+		if s := Cmd.Owner(t, pid, owners); s != "" {
 			sessions[fmt.Sprintf("%q", s)] += n
 		}
 	}
@@ -179,7 +179,7 @@ func (dw *DiskWatch) WritersLine(now time.Time, freeMiB int, t *proc.Table, owne
 	}
 	if lost := int64(dw.Base.freeMiB-freeMiB) << 20; lost > 2*total {
 		line += fmt.Sprintf("; %s of the %s lost by processes the watch cannot read (another user's, such as dockerd, or ended ones)",
-			gibStr(lost-total), gibStr(lost))
+			Cmd.GibStr(lost-total), Cmd.GibStr(lost))
 	}
 	return line + dw.pathLine()
 }
@@ -191,15 +191,15 @@ func bytesLine(by map[string]int64, n int) string {
 	})
 	parts := make([]string, 0, n)
 	for _, name := range names[:min(n, len(names))] {
-		parts = append(parts, name+" "+gibStr(by[name]))
+		parts = append(parts, name+" "+Cmd.GibStr(by[name]))
 	}
 	return strings.Join(parts, ", ")
 }
 
 func (dw *DiskWatch) pathLine() string {
-	paths := topDiskPaths(dw.Paths, true, 1)
+	paths := Cmd.TopDiskPaths(dw.Paths, true, 1)
 	if len(paths) == 0 {
 		return ""
 	}
-	return "; fastest-growing path: " + diskPathText(paths[0])
+	return "; fastest-growing path: " + Cmd.DiskPathText(paths[0])
 }

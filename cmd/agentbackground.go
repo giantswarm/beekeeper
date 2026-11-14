@@ -734,10 +734,10 @@ func watchStopParked(w *Watcher, ctx context.Context, st *state.State, sessions 
 	if err != nil {
 		return // no turn is known to have ended
 	}
-	for _, p := range parkedResident(st, sessions, t, w.Host.now) {
+	for _, p := range parkedResident(st, sessions, t, watchApp(w.Host).now) {
 		key := "park-stop-" + p.Session
 		short := p.Session[:min(8, len(p.Session))]
-		stopped, err := w.Host.stopParkedSession(ctx, st, p)
+		stopped, err := watchApp(w.Host).stopParkedSession(ctx, st, p)
 		if err != nil {
 			w.Fail(key, "PARKED SESSION STAYS %q: its background session %s keeps its memory: %v", p.Name, short, err)
 			continue
@@ -746,7 +746,7 @@ func watchStopParked(w *Watcher, ctx context.Context, st *state.State, sessions 
 		if !stopped {
 			continue
 		}
-		_ = w.Host.store.Record(event(WatchParty, parkStoppedEvent, "%s: stopped its background session %s while it is parked; its wake resumes it", p.Name, p.Session))
+		_ = watchApp(w.Host).store.Record(event(WatchParty, parkStoppedEvent, "%s: stopped its background session %s while it is parked; its wake resumes it", p.Name, p.Session))
 		w.EmitNow("park-stop", "PARKED SESSION STOPPED %q: background session %s frees its memory while parked; its wake resumes it (claude attach %s)", p.Name, short, short)
 	}
 	for _, ag := range st.Agents {
@@ -757,7 +757,7 @@ func watchStopParked(w *Watcher, ctx context.Context, st *state.State, sessions 
 		if !ok {
 			continue
 		}
-		if _, busy := turnRunning(sessions, t, ag.Party, w.Host.now); busy {
+		if _, busy := turnRunning(sessions, t, ag.Party, watchApp(w.Host).now); busy {
 			continue
 		}
 		unit := h.Unit(id)
@@ -770,7 +770,7 @@ func watchStopParked(w *Watcher, ctx context.Context, st *state.State, sessions 
 			continue
 		}
 		w.Clear(key)
-		_ = w.Host.store.Record(event(WatchParty, parkStoppedEvent, "%s: stopped its %s unit %s while it is parked; its wake resumes it", ag.Name, h.Name(), unit))
+		_ = watchApp(w.Host).store.Record(event(WatchParty, parkStoppedEvent, "%s: stopped its %s unit %s while it is parked; its wake resumes it", ag.Name, h.Name(), unit))
 		w.EmitNow("park-stop", "PARKED SESSION STOPPED %q: %s unit %s frees its memory while parked; its wake resumes it", ag.Name, h.Name(), unit)
 	}
 }

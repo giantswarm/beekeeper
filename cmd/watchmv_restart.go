@@ -43,7 +43,7 @@ func (r *restartWatch) Due() *restartRequest {
 	}
 	bin := r.Binary
 	if bin == nil {
-		bin = func() (string, bool) { return processBinary(os.Getpid()) }
+		bin = func() (string, bool) { return Cmd.ProcessBinary(os.Getpid()) }
 	}
 	if path, replaced := bin(); !replaced || path != req.Binary {
 		return nil

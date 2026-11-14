@@ -169,7 +169,7 @@ func TestWatchSaysHandoverHeldOnce(t *testing.T) {
 	dir := t.TempDir()
 	w, _, out := notifyingWatch(t, dir, false)
 	w.Notifier = nil
-	ts := w.Host.now.Add(-time.Minute).UTC().Format(time.RFC3339)
+	ts := watchApp(w.Host).now.Add(-time.Minute).UTC().Format(time.RFC3339)
 	tr := filepath.Join(dir, "s1.jsonl")
 	line := `{"type":"assistant","timestamp":"` + ts + `","message":{"id":"m1","model":"claude-opus-5-5","usage":{"input_tokens":10,"cache_read_input_tokens":410000},"content":[]}}` + "\n"
 	if err := os.WriteFile(tr, []byte(line), 0o600); err != nil {
@@ -178,20 +178,20 @@ func TestWatchSaysHandoverHeldOnce(t *testing.T) {
 	one := state.Party{Session: "s1", Name: sessionOne}
 	st := &state.State{
 		Agents:  []state.Agent{{Party: one, Task: countTask}},
-		Records: []state.Record{{Session: one, Issue: issue61, Waits: "the report", At: w.Host.now.Add(-time.Minute)}},
+		Records: []state.Record{{Session: one, Issue: issue61, Waits: "the report", At: watchApp(w.Host).now.Add(-time.Minute)}},
 	}
-	live := []*claude.Session{{ID: "s1", Name: sessionOne, Transcript: tr, LastActive: w.Host.now}}
+	live := []*claude.Session{{ID: "s1", Name: sessionOne, Transcript: tr, LastActive: watchApp(w.Host).now}}
 
 	w.HandoversDue(st, live)
 	w.HandoversDue(st, live)
 	held := fmt.Sprintf(`HANDOVER HELD %q at 410k: last step, report expected (it waits on "the report"); due at %s or at 500k`,
-		sessionOne, w.Host.now.Add(29*time.Minute).Local().Format("15:04"))
+		sessionOne, watchApp(w.Host).now.Add(29*time.Minute).Local().Format("15:04"))
 	if got := out.String(); strings.Count(got, held) != 1 || strings.Contains(got, "HANDOVER DUE") {
 		t.Errorf("want one held line %q, got:\n%s", held, got)
 	}
 
 	out.Reset()
-	w.Host.now = w.Host.now.Add(time.Hour)
+	watchApp(w.Host).now = watchApp(w.Host).now.Add(time.Hour)
 	w.HandoversDue(st, live)
 	w.HandoversDue(st, live)
 	due := fmt.Sprintf(`HANDOVER DUE %q at 410k, held 30m for its last step (it waits on "the report"): beekeeper agents handover %q`, sessionOne, sessionOne)
@@ -588,8 +588,8 @@ func TestHandoverProtectsOldCLIAndReleasesOnFailure(t *testing.T) {
 	next := state.Party{Session: newID, Name: countName}
 	cli := &claude.Session{ID: oldID, Name: countName, PID: 42}
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
-	w.Host.store = a.store
-	w.Host.now = time.Now()
+	watchApp(w.Host).store = a.store
+	watchApp(w.Host).now = time.Now()
 	ended := useEndRevived(t)
 	useLauncher(t, &stopLauncher{})
 	ctx, cancel := context.WithCancel(t.Context())
@@ -598,7 +598,7 @@ func TestHandoverProtectsOldCLIAndReleasesOnFailure(t *testing.T) {
 	t.Cleanup(func() { sendNote = orig })
 	sendNote = func(context.Context, string, string, string) (peer.Result, error) {
 		if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-			st.Starts = []state.Start{{Party: old, At: w.Host.now.Add(-time.Hour)}, {Party: next, At: w.Host.now}}
+			st.Starts = []state.Start{{Party: old, At: watchApp(w.Host).now.Add(-time.Hour)}, {Party: next, At: watchApp(w.Host).now}}
 			st.Agents = []state.Agent{{Party: next, Task: countTask}}
 			return nil, nil
 		}); err != nil {

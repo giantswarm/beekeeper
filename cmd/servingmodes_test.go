@@ -667,7 +667,7 @@ echo "switched to $1"
 	// switches it again.
 	for range 4 {
 		w := s.app(&bytes.Buffer{}).newWatcher(false, false)
-		if err := w.Host.reconcileServeModes(context.Background()); err != nil {
+		if err := watchApp(w.Host).reconcileServeModes(context.Background()); err != nil {
 			t.Fatalf("reconcile: %v", err)
 		}
 		s.fresh()
@@ -784,7 +784,7 @@ func TestServingModesStatusAndWatch(t *testing.T) {
 
 	// The watch reads the mode and says nothing while it is settled.
 	w := s.app(&bytes.Buffer{}).newWatcher(false, false)
-	if err := w.Host.reconcileServeModes(context.Background()); err != nil {
+	if err := watchApp(w.Host).reconcileServeModes(context.Background()); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 	if conds := openConditions(w); conds != "" {

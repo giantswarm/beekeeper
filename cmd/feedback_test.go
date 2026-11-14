@@ -63,20 +63,20 @@ func feedbackWatch(t *testing.T) (*Watcher, *slackStandIn, *[]string, *bytes.Buf
 	slack := &slackStandIn{threads: map[string]string{reportTS: feedbackThread}}
 	m := centraltest.New(t, slack.url(t), "slack")
 	bin, _ := centraltest.Binary(t, m.URL, "token")
-	w.Host.cfg.Feedback.Context, w.Host.cfg.Feedback.Server = gazelle, viaSlack
-	w.Host.cfg.Feedback.Every.Duration, w.Host.cfg.Feedback.Window.Duration = 5*time.Minute, 24*time.Hour
-	w.Host.cfg.Central.Muster, w.Host.cfg.Central.Timeout.Duration = bin, 10*time.Second
+	watchApp(w.Host).cfg.Feedback.Context, watchApp(w.Host).cfg.Feedback.Server = gazelle, viaSlack
+	watchApp(w.Host).cfg.Feedback.Every.Duration, watchApp(w.Host).cfg.Feedback.Window.Duration = 5*time.Minute, 24*time.Hour
+	watchApp(w.Host).cfg.Central.Muster, watchApp(w.Host).cfg.Central.Timeout.Duration = bin, 10*time.Second
 	var sent []string
 	w.Deliver = func(_ context.Context, q, msg string) error {
 		sent = append(sent, q+" <- "+msg)
 		return nil
 	}
-	err := w.Host.store.Update(func(st *state.State) ([]state.Event, error) {
+	err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Guide = &state.Role{Holder: &state.Supervisor{Party: state.Party{Name: firstRun, Session: "sup"}}}
 		st.Agents = []state.Agent{{Party: state.Party{Name: "Board pull 9", Session: "bp9"}}}
 		st.ReportThreads = []state.ReportThread{
-			{Report: "Status report 15:00", Channel: "C1", TS: reportTS, Posted: w.Host.now.Add(-time.Hour)},
-			{Report: "Status report yesterday", Channel: "C1", TS: "50.000001", Posted: w.Host.now.Add(-25 * time.Hour)},
+			{Report: "Status report 15:00", Channel: "C1", TS: reportTS, Posted: watchApp(w.Host).now.Add(-time.Hour)},
+			{Report: "Status report yesterday", Channel: "C1", TS: "50.000001", Posted: watchApp(w.Host).now.Add(-25 * time.Hour)},
 		}
 		return nil, nil
 	})
@@ -100,7 +100,7 @@ func TestFeedbackDeliversTheAuthorsReplies(t *testing.T) {
 	if r := strings.Join(slack.reactions, " "); r != "C1/100.000002:eyes C1/100.000004:eyes" {
 		t.Errorf("reactions %s", r)
 	}
-	st, _ := w.Host.store.Read()
+	st, _ := watchApp(w.Host).store.Read()
 	if len(st.ReportThreads) != 1 || st.ReportThreads[0].Seen != "100.000004" {
 		t.Errorf("threads %+v: want the day-old one dropped, the reply seen", st.ReportThreads)
 	}
@@ -122,7 +122,7 @@ func TestFeedbackKeepsAReplyNotDelivered(t *testing.T) {
 	deliver := w.Deliver
 	w.Deliver = func(context.Context, string, string) error { return errors.New("no CLI") }
 	w.ReadFeedback(context.Background(), w.Host)
-	st, _ := w.Host.store.Read()
+	st, _ := watchApp(w.Host).store.Read()
 	if st.ReportThreads[0].Seen != "" || !strings.Contains(out.String(), "FEEDBACK on Status report 15:00 not delivered to Board pull 9, read again next time: no CLI") {
 		t.Errorf("threads %+v; out:\n%s", st.ReportThreads, out)
 	}
@@ -151,11 +151,11 @@ func TestFeedbackUnreadableIsSaidOnce(t *testing.T) {
 func TestReporterPostRecordsItsThread(t *testing.T) {
 	dir := t.TempDir()
 	w, _, _ := reportingWatch(t, dir)
-	w.Host.cfg.Feedback.Context = gazelle
+	watchApp(w.Host).cfg.Feedback.Context = gazelle
 	ctx := context.Background()
 	w.TendReporter(ctx, nil)
-	st, _ := w.Host.store.Read()
-	proj := filepath.Join(w.Host.cfg.Claude.ProjectsDir, "p")
+	st, _ := watchApp(w.Host).store.Read()
+	proj := filepath.Join(watchApp(w.Host).cfg.Claude.ProjectsDir, "p")
 	if err := os.MkdirAll(proj, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -165,9 +165,9 @@ func TestReporterPostRecordsItsThread(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(proj, st.Report.Session+".jsonl"), []byte(post), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	w.Host.now = reportNow.Add(3 * time.Minute)
+	watchApp(w.Host).now = reportNow.Add(3 * time.Minute)
 	w.TendReporter(ctx, nil)
-	st, _ = w.Host.store.Read()
+	st, _ = watchApp(w.Host).store.Read()
 	if len(st.ReportThreads) != 1 || st.ReportThreads[0].Channel != "D1" || st.ReportThreads[0].TS != reportTS || st.ReportThreads[0].Report != st.Report.Name {
 		t.Errorf("threads %+v", st.ReportThreads)
 	}

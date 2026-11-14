@@ -42,7 +42,7 @@ func HandoversDue(st *state.State, sessions []*claude.Session, cfg config.Agents
 ) []DueAgent {
 	var out []DueAgent
 	for _, ag := range st.Agents {
-		if said(ag.Party) || ag.Done || keepsRole(st, ag.Party) || mergeInFlight(st, ag.Party, alive) {
+		if said(ag.Party) || ag.Done || Cmd.KeepsRole(st, ag.Party) || Cmd.MergeInFlight(st, ag.Party, alive) {
 			continue
 		}
 		s, live := claude.Live(sessions, ag.Party)
@@ -63,9 +63,9 @@ func HandoversDue(st *state.State, sessions []*claude.Session, cfg config.Agents
 			case now.Before(until) && c < int64(cfg.LastStepCeiling):
 				d.Held, d.Until = why, until
 			case now.Before(until):
-				d.Was = fmt.Sprintf("its last step (%s) holds no hand-over past %s", why, tokensText(int64(cfg.LastStepCeiling)))
+				d.Was = fmt.Sprintf("its last step (%s) holds no hand-over past %s", why, Cmd.TokensText(int64(cfg.LastStepCeiling)))
 			default:
-				d.Was = fmt.Sprintf("held %s for its last step (%s)", dur(cfg.LastStepGrace.Duration), why)
+				d.Was = fmt.Sprintf("held %s for its last step (%s)", Cmd.Dur(cfg.LastStepGrace.Duration), why)
 			}
 		}
 		out = append(out, d)
@@ -105,16 +105,16 @@ func (w *Watcher) HandoversDue(st *state.State, sessions []*claude.Session) {
 	said := func(p state.Party) bool { return w.Reported[key(p)] }
 	contextOf := func(ag state.Agent, s *claude.Session) int64 {
 		if s == nil {
-			s = &claude.Session{Transcript: transcriptOf(w.Host.cfg, ag.Session)}
+			s = &claude.Session{Transcript: Cmd.TranscriptOf(w.Host.Cfg(), ag.Session)}
 		}
-		return transcriptContext(s)
+		return Cmd.TranscriptContext(s)
 	}
-	for _, d := range HandoversDue(st, sessions, w.Host.cfg.Agents, w.Host.now, said, contextOf, proc.Alive) {
+	for _, d := range HandoversDue(st, sessions, w.Host.Cfg().Agents, w.Host.Now(), said, contextOf, proc.Alive) {
 		if d.Held != "" {
 			if k := "handover-held " + d.Agent.Session; !w.Reported[k] {
 				w.Reported[k], w.Dirty = true, true
 				w.EmitNow("handover", "HANDOVER HELD %q at %s: last step, report expected (%s); due at %s or at %s",
-					d.Agent.Name, tokensText(d.Context), d.Held, d.Until.Local().Format("15:04"), tokensText(int64(w.Host.cfg.Agents.LastStepCeiling)))
+					d.Agent.Name, Cmd.TokensText(d.Context), d.Held, d.Until.Local().Format("15:04"), Cmd.TokensText(int64(w.Host.Cfg().Agents.LastStepCeiling)))
 			}
 			continue
 		}
@@ -126,6 +126,6 @@ func (w *Watcher) HandoversDue(st *state.State, sessions []*claude.Session) {
 		if d.Was != "" {
 			was = ", " + d.Was
 		}
-		w.EmitNow("handover", "HANDOVER DUE %q at %s%s%s: beekeeper agents handover %q", d.Agent.Name, tokensText(d.Context), parked, was, d.Agent.Name)
+		w.EmitNow("handover", "HANDOVER DUE %q at %s%s%s: beekeeper agents handover %q", d.Agent.Name, Cmd.TokensText(d.Context), parked, was, d.Agent.Name)
 	}
 }

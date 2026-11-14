@@ -14,11 +14,11 @@ type recoveryOutput struct{ watch *Watcher }
 func (o recoveryOutput) Write(p []byte) (int, error) {
 	o.watch.Mu.Lock()
 	defer o.watch.Mu.Unlock()
-	return o.watch.Host.out.Write(p)
+	return watchApp(o.watch.Host).out.Write(p)
 }
 
 func watchNewGuideRecovery(w *Watcher) *Watcher {
-	a := *w.Host
+	a := *watchApp(w.Host)
 	a.out = recoveryOutput{w}
 	g := a.newWatcher(true, false)
 	g.Clock = w.Clock
@@ -34,14 +34,14 @@ func watchRecoverGuide(w *Watcher, ctx context.Context) {
 	if ctx.Err() != nil || w.Stand.Starting.Load() || w.Stand.Busy.Load() {
 		return
 	}
-	w.Host.now = w.Clk().Now()
+	watchApp(w.Host).now = w.Clk().Now()
 	t, err := plat.Machine.Processes()
 	if err != nil {
 		w.Fail(guideRecoveryKey, "cannot read guide processes: %v", err)
 		return
 	}
 	w.Table = t
-	st, err := w.Host.store.Peek()
+	st, err := watchApp(w.Host).store.Peek()
 	if err != nil {
 		w.Fail(guideRecoveryKey, "cannot read guide state: %v", err)
 		return
@@ -50,10 +50,10 @@ func watchRecoverGuide(w *Watcher, ctx context.Context) {
 	if st.Stop != nil {
 		return
 	}
-	sessions := claude.DiscoverLiveness(w.Host.cfg, t, w.Host.now)
+	sessions := claude.DiscoverLiveness(watchApp(w.Host).cfg, t, watchApp(w.Host).now)
 	w.ResumeRestarted(ctx, guideRole, st, sessions)
 	w.GuideGone(ctx, st, sessions)
-	for _, line := range w.Host.daemonsOutOfUnits(liveDaemonsInUnits(t), proc.Cgroup, false, WatchParty, w.Host.now) {
+	for _, line := range watchApp(w.Host).daemonsOutOfUnits(liveDaemonsInUnits(t), proc.Cgroup, false, WatchParty, watchApp(w.Host).now) {
 		w.Emit("guide-daemon "+line, "DOCTOR %s", line)
 	}
 }

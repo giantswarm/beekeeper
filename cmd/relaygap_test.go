@@ -69,7 +69,7 @@ func TestStandbyResumesASuccessorWhoseReopenWaitsOnTheFocus(t *testing.T) {
 		},
 	}
 	t.Cleanup(w.Stand.Inflight.Wait)
-	w.Host.now = relayNow
+	watchApp(w.Host).now = relayNow
 	supervisedBy(t, w, run, relayNow.Add(-3*time.Minute))
 	w.Pending(context.Background(), nil)
 	eventually(2*time.Second, func() bool { return revived.Load() == 1 && !w.Stand.Starting.Load() })
@@ -96,9 +96,9 @@ func TestStandbyWaitsForAnUrgentReopen(t *testing.T) {
 			return nil
 		},
 	}
-	w.Host.now = relayNow
+	watchApp(w.Host).now = relayNow
 	supervisedBy(t, w, run, relayNow.Add(-3*time.Minute))
-	if err := w.Host.store.Update(func(st *state.State) ([]state.Event, error) {
+	if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Agents = append(st.Agents, state.Agent{Party: run, DesktopTurn: relayNow.Add(-time.Minute)})
 		return nil, nil
 	}); err != nil {
@@ -123,7 +123,7 @@ func TestStandbyWaitsForARunningTurn(t *testing.T) {
 			return nil
 		},
 	}
-	w.Host.now = relayNow
+	watchApp(w.Host).now = relayNow
 	supervisedBy(t, w, run, relayNow.Add(-3*time.Minute))
 	w.Pending(context.Background(), nil)
 	if strings.Contains(out.String(), "GONE") {

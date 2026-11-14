@@ -357,16 +357,16 @@ func TestWatchReleasesTheHoldOfADefaultedOrOvertakenDecision(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w, out := overtakingWatch(t, map[string]string{heldRef: tc.ref})
-			f := useFakeBoard(t, w.Host, map[int]string{7: holdBlocked})
+			f := useFakeBoard(t, watchApp(w.Host), map[int]string{7: holdBlocked})
 			setNotes(t, w, state.Note{ID: 1, Kind: noteDecision, For: notePerson, Text: "merge o/r#7?", Refs: []string{heldRef},
-				Default: dfltOK, Due: w.Host.now.Add(tc.due), By: state.Party{Name: agentOne}, TaskEnded: w.Host.now,
+				Default: dfltOK, Due: watchApp(w.Host).now.Add(tc.due), By: state.Party{Name: agentOne}, TaskEnded: watchApp(w.Host).now,
 				Held: &state.ItemHold{Ref: heldRef, Status: holdBlocked, Was: holdUpNext}})
 			w.Pending(context.Background(), nil)
 			w.TimerActs.Wait()
 			if ids := openIDs(t, w); len(ids) != 0 {
 				t.Fatalf("open %v", ids)
 			}
-			if got := f.offered(w.Host); got != heldRef {
+			if got := f.offered(watchApp(w.Host)); got != heldRef {
 				t.Fatalf("offered %q (Status %q)", got, f.statusOf(7))
 			}
 			if !strings.Contains(out.String(), "BOARD RELEASED: o/r#7 back to Up Next, note #1 "+tc.how) {

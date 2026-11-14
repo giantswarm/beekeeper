@@ -7,5 +7,5 @@ import (
 
 // Ungated runs in the command, which holds what it needs (watchUngated).
 func (w *Watcher) Ungated(sessions []*claude.Session, t *proc.Table) {
-	watchUngated(w, sessions, t)
+	Cmd.WatchUngated(w, sessions, t)
 }

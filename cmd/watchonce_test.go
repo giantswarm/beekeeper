@@ -20,7 +20,7 @@ func onceWatch(t *testing.T, read func(context.Context, []github.PR) (map[github
 	w.Chores = false
 	refStates = read
 	var out strings.Builder
-	w.Host.out = &out
+	watchApp(w.Host).out = &out
 	setNotes(t, w, state.Note{ID: 1, Kind: noteDecision, For: personTimo, Text: askedQ, By: state.Party{Name: supRun3}, Refs: []string{refOne, refTwo}})
 	return w, &out
 }
@@ -82,7 +82,7 @@ func TestWatchOnceSaysWhatKeepsTheNotesUnread(t *testing.T) {
 		t.Error("GitHub read under the budget's floor")
 		return nil, nil
 	})
-	if err := w.Host.store.Update(func(st *state.State) ([]state.Event, error) {
+	if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Budget = &state.Budget{Remaining: 0, Limit: 5000, Reset: relayNow.Add(time.Hour), At: relayNow}
 		return nil, nil
 	}); err != nil {

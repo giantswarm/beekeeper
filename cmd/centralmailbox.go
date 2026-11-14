@@ -45,24 +45,24 @@ type mailEnvelope struct {
 // agent is left to that machine. An expiry notice is said and acked. It
 // reports whether a message waits for delivery or acknowledgement.
 func watchDrainMailbox(w *Watcher, ctx context.Context) bool {
-	host := w.Host.cfg.Identity.Host
-	me := state.Party{Name: w.Host.cfg.Identity.Person, Host: host}
+	host := watchApp(w.Host).cfg.Identity.Host
+	me := state.Party{Name: watchApp(w.Host).cfg.Identity.Person, Host: host}
 	var got struct {
 		Messages []mailbox.Delivery `json:"messages"`
 	}
-	if _, err := w.Host.callCentralRaw(ctx, me, "receive_messages", map[string]any{}, &got); err != nil {
-		w.Check(mailboxKey+" receive", true, "MAILBOX UNREADABLE %s: %s", w.Host.cfg.Central.Context, unreadableReason(err))
+	if _, err := watchApp(w.Host).callCentralRaw(ctx, me, "receive_messages", map[string]any{}, &got); err != nil {
+		w.Check(mailboxKey+" receive", true, "MAILBOX UNREADABLE %s: %s", watchApp(w.Host).cfg.Central.Context, unreadableReason(err))
 		return true
 	}
 	w.Clear(mailboxKey + " receive")
-	quiet := *w.Host
+	quiet := *watchApp(w.Host)
 	quiet.out = io.Discard
 	deliver := w.Deliver
 	if deliver == nil {
 		deliver = func(ctx context.Context, q, msg string) error { return quiet.wakeAgent(ctx, mailboxParty, q, msg, "") }
 	}
 	// An unreadable state delivers each message to the agent it names.
-	st, _ := w.Host.store.Read()
+	st, _ := watchApp(w.Host).store.Read()
 	var acks []int64
 	held := map[string]bool{}
 	for _, d := range got.Messages {
@@ -97,10 +97,10 @@ func watchDrainMailbox(w *Watcher, ctx context.Context) bool {
 		if err != nil && inRole {
 			// As a note's answer on the machine: the role's next holder
 			// is told at its start.
-			if kerr := w.Host.keepRoleLine(rl, body); kerr == nil {
+			if kerr := watchApp(w.Host).keepRoleLine(rl, body); kerr == nil {
 				w.Clear(key)
 				acks = append(acks, d.Seq)
-				_ = w.Host.store.Log(event(mailboxParty, "mailbox.kept", "%s: %s from %s%s, for the %s's next start: %v", name, d.MessageID, d.Sender, via(d.Envelope), rl.Name, err))
+				_ = watchApp(w.Host).store.Log(event(mailboxParty, "mailbox.kept", "%s: %s from %s%s, for the %s's next start: %v", name, d.MessageID, d.Sender, via(d.Envelope), rl.Name, err))
 				w.EmitNow(mailboxKey, "MAILBOX %s to %s waits for the %s's next start (%v): %s", d.MessageID, name, rl.Name, err, firstLine(env.Message.text()))
 				continue
 			}
@@ -115,12 +115,12 @@ func watchDrainMailbox(w *Watcher, ctx context.Context) bool {
 		if holder != name {
 			holder = fmt.Sprintf("%s, the %s now, for %s", holder, rl.Name, name)
 		}
-		_ = w.Host.store.Log(event(mailboxParty, "mailbox.delivered", "%s: %s from %s%s", holder, d.MessageID, d.Sender, via(d.Envelope)))
+		_ = watchApp(w.Host).store.Log(event(mailboxParty, "mailbox.delivered", "%s: %s from %s%s", holder, d.MessageID, d.Sender, via(d.Envelope)))
 		w.EmitNow(mailboxKey, "MAILBOX to %s: %s from %s%s: %s", holder, d.MessageID, d.Sender, via(d.Envelope), firstLine(env.Message.text()))
 	}
 	if len(acks) > 0 {
 		// A watch that stops meanwhile still acks what it delivered.
-		if _, err := w.Host.callCentralRaw(context.WithoutCancel(ctx), me, "ack_messages", map[string]any{paramIDs: acks}, nil); err != nil {
+		if _, err := watchApp(w.Host).callCentralRaw(context.WithoutCancel(ctx), me, "ack_messages", map[string]any{paramIDs: acks}, nil); err != nil {
 			w.EmitNow(mailboxKey, "MAILBOX: %d delivered not acked, delivered again: %s", len(acks), unreadableReason(err))
 			return true
 		}

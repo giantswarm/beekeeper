@@ -19,7 +19,7 @@ type SuspendWake struct {
 
 // Suspends runs in the command, which holds what it needs (watchSuspends).
 func (w *Watcher) Suspends(ctx context.Context, since time.Time, sessions []*claude.Session) {
-	watchSuspends(w, ctx, since, sessions)
+	Cmd.WatchSuspends(w, ctx, since, sessions)
 }
 
 func (w *Watcher) Resumed(st *state.State, sessions []*claude.Session, entry, exit time.Time) {
@@ -28,7 +28,7 @@ func (w *Watcher) Resumed(st *state.State, sessions []*claude.Session, entry, ex
 		w.SuspendRecovery = map[string]SuspendWake{}
 	}
 	for _, ag := range st.Agents {
-		if ag.Execution != nil || ag.Task == "" || ag.Done || ag.Park != nil || pastRun(st, ag.Party, exit) || holdsRole(st, ag.Party) {
+		if ag.Execution != nil || ag.Task == "" || ag.Done || ag.Park != nil || Cmd.PastRun(st, ag.Party, exit) || Cmd.HoldsRole(st, ag.Party) {
 			continue
 		}
 		if _, live := claude.Live(sessions, ag.Party); live {
@@ -45,17 +45,17 @@ func (w *Watcher) Resumed(st *state.State, sessions []*claude.Session, entry, ex
 		}
 	}
 	if w.Standby && st.Stop == nil {
-		if holder := guideRole.Get(st).Holder; holder != nil {
+		if holder := Cmd.GuideRole().Get(st).Holder; holder != nil {
 			for name, wake := range w.SuspendRecovery {
 				if wake.Guide {
 					delete(w.SuspendRecovery, name)
 				}
 			}
-			w.SuspendRecovery[holder.Name] = SuspendWake{Party: holder.Party, message: guideRole.ResumeMessage("the machine resumed from suspend; check the workers and timers that passed during the gap"), Guide: true}
+			w.SuspendRecovery[holder.Name] = SuspendWake{Party: holder.Party, message: Cmd.GuideRole().ResumeMessage("the machine resumed from suspend; check the workers and timers that passed during the gap"), Guide: true}
 		}
 	}
 	slices.Sort(timers)
-	w.EmitNow("suspend", "SUSPENDED / RESUMED: %s to %s (gap %s); stopped agents: %s; timers passed: %s", entry.Format(time.RFC3339), exit.Format(time.RFC3339), dur(exit.Sub(entry)), suspendNames(stopped), suspendItems(timers))
+	w.EmitNow("suspend", "SUSPENDED / RESUMED: %s to %s (gap %s); stopped agents: %s; timers passed: %s", entry.Format(time.RFC3339), exit.Format(time.RFC3339), Cmd.Dur(exit.Sub(entry)), suspendNames(stopped), suspendItems(timers))
 }
 
 func suspendNames(names []string) string {
@@ -79,7 +79,7 @@ func (w *Watcher) RecoverSuspend(ctx context.Context) {
 	if !w.Standby || len(w.SuspendRecovery) == 0 || !w.Stand.Busy.CompareAndSwap(false, true) {
 		return
 	}
-	now := w.Host.now
+	now := w.Host.Now()
 	pending := w.SuspendRecovery
 	w.SuspendRecovery = nil
 	w.Stand.Inflight.Add(1)
@@ -90,7 +90,7 @@ func (w *Watcher) RecoverSuspend(ctx context.Context) {
 		for _, wake := range pending {
 			// Recheck authority immediately before each delivery: a relay may
 			// have completed while the batch waited for the delivery slot.
-			st, err := w.Host.store.Read()
+			st, err := w.Host.Store().Read()
 			if err != nil {
 				w.EmitNow("suspend-recovery", "RESUME FAILED: %q: read current state: %v", wake.Party.Name, err)
 				continue
@@ -99,12 +99,12 @@ func (w *Watcher) RecoverSuspend(ctx context.Context) {
 				return
 			}
 			if wake.Guide {
-				holder := guideRole.Get(st).Holder
+				holder := Cmd.GuideRole().Get(st).Holder
 				if holder == nil {
 					continue
 				}
 				wake.Party = holder.Party
-			} else if pastRun(st, wake.Party, now) || holdsRole(st, wake.Party) {
+			} else if Cmd.PastRun(st, wake.Party, now) || Cmd.HoldsRole(st, wake.Party) {
 				continue
 			}
 			if slices.ContainsFunc(attempted, func(p state.Party) bool { return p.Is(wake.Party) }) {
@@ -114,9 +114,9 @@ func (w *Watcher) RecoverSuspend(ctx context.Context) {
 			if w.SuspendDeliver != nil {
 				err = w.SuspendDeliver(ctx, wake)
 			} else if wake.Guide && w.Stand.Revive != nil {
-				err = w.Stand.Revive(ctx, guideRole, wake.Party, wake.message)
+				err = w.Stand.Revive(ctx, Cmd.GuideRole(), wake.Party, wake.message)
 			} else {
-				err = w.Host.wakeAgent(ctx, WatchParty, wake.Party.Name, wake.message, "")
+				err = w.Host.WakeAgent(ctx, WatchParty, wake.Party.Name, wake.message, "")
 			}
 			if err != nil {
 				w.EmitNow("suspend-recovery", "RESUME FAILED: %q: %v", wake.Party.Name, err)

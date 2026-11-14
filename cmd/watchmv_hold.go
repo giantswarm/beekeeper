@@ -30,8 +30,8 @@ func LiftProbed(st *state.State, passed map[string]string) ([]string, []state.Ev
 		if probe, ok := passed[h.Target]; !ok || probe != h.LiftWhen {
 			return false
 		}
-		lines = append(lines, fmt.Sprintf("HOLD LIFTED: %s, its probe passed: %s", holdTarget(h), truncate(h.Reason, 200)))
-		evs = append(evs, event(WatchParty, "hold.lift", "%s: its probe passed (%s)", h.Target, h.LiftWhen))
+		lines = append(lines, fmt.Sprintf("HOLD LIFTED: %s, its probe passed: %s", Cmd.HoldTarget(h), Cmd.Truncate(h.Reason, 200)))
+		evs = append(evs, Cmd.Event(WatchParty, "hold.lift", "%s: its probe passed (%s)", h.Target, h.LiftWhen))
 		return true
 	})
 	return lines, evs

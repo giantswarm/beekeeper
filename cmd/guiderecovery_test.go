@@ -33,12 +33,12 @@ func TestGuideRecoversWhileMainWatchIsBlocked(t *testing.T) {
 	w, out := loopWatcher(t, "30s", "", nil)
 	clk := newFakeClock(t)
 	w.Clock = clk
-	w.Host.now = clk.Now()
+	watchApp(w.Host).now = clk.Now()
 	guide := state.Party{Session: bgID, Name: guideSeven}
-	seed(t, w.Host, func(st *state.State) {
+	seed(t, watchApp(w.Host), func(st *state.State) {
 		st.Guide = &state.Role{
-			Holder: &state.Supervisor{Party: guide, Since: w.Host.now.Add(-time.Hour)},
-			CLI:    &state.CLI{Supervisor: guide, Since: w.Host.now.Add(-time.Hour), PID: 77},
+			Holder: &state.Supervisor{Party: guide, Since: watchApp(w.Host).now.Add(-time.Hour)},
+			CLI:    &state.CLI{Supervisor: guide, Since: watchApp(w.Host).now.Add(-time.Hour), PID: 77},
 			Run:    7,
 		}
 		st.Starts = []state.Start{{Party: guide, Role: guideName, Dir: t.TempDir(), Background: true}}
@@ -85,7 +85,7 @@ func TestGuideRecoversWhileMainWatchIsBlocked(t *testing.T) {
 
 func TestGuideRecoveryHonorsStopAndUnknownProcesses(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), true)
-	seed(t, w.Host, func(st *state.State) {
+	seed(t, watchApp(w.Host), func(st *state.State) {
 		st.Guide = rebootedGuide()
 		st.Guide.CLI.Gone = relayNow.Add(-time.Hour)
 	})
@@ -102,7 +102,7 @@ func TestGuideRecoveryHonorsStopAndUnknownProcesses(t *testing.T) {
 	if !strings.Contains(out.String(), "unreadable process snapshot") {
 		t.Fatalf("missing failure diagnostic: %s", out.String())
 	}
-	seed(t, w.Host, func(st *state.State) { st.Stop = &state.Stop{} })
+	seed(t, watchApp(w.Host), func(st *state.State) { st.Stop = &state.Stop{} })
 	plat.Machine = daemonSnapshotMachine{Machine: old, snapshot: func() (*proc.Table, error) { return proc.NewTable(), nil }}
 	g.RecoverGuide(t.Context())
 	g.Stand.Inflight.Wait()

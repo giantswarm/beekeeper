@@ -39,7 +39,7 @@ func TmpfsLargest(root string, table *proc.Table, owners map[int]string, refs fu
 		for pid, p := range table.ByPID {
 			paths, _ := refs(pid)
 			label := fmt.Sprintf("%s pid %d", p.Comm, pid)
-			if s := owner(table, pid, owners); s != "" {
+			if s := Cmd.Owner(table, pid, owners); s != "" {
 				label += fmt.Sprintf(" (%q)", s)
 			}
 			for _, e := range largest {
@@ -69,7 +69,7 @@ func TmpfsLargest(root string, table *proc.Table, owners map[int]string, refs fu
 				who += fmt.Sprintf(", +%d processes", len(labels)-len(shown))
 			}
 		}
-		size := sizeStr(e.bytes)
+		size := Cmd.SizeStr(e.bytes)
 		if e.partial {
 			size += "+ (partly unreadable)"
 		}

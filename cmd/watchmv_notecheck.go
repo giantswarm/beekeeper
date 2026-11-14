@@ -41,8 +41,8 @@ func CloseProbed(st *state.State, passed []int) ([]string, []state.Event) {
 		if n.Kind != noteLogin || !slices.Contains(passed, n.ID) {
 			return false
 		}
-		lines = append(lines, fmt.Sprintf("NOTE CLOSED: #%d, its probe passed: %s", n.ID, truncate(n.Text, 200)))
-		evs = append(evs, event(WatchParty, noteDone, "#%d closed, its probe passed (%s): %s", n.ID, n.Until, n.Text))
+		lines = append(lines, fmt.Sprintf("NOTE CLOSED: #%d, its probe passed: %s", n.ID, Cmd.Truncate(n.Text, 200)))
+		evs = append(evs, Cmd.Event(WatchParty, noteDone, "#%d closed, its probe passed (%s): %s", n.ID, n.Until, n.Text))
 		return true
 	})
 	return lines, evs

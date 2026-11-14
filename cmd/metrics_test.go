@@ -18,23 +18,23 @@ func TestWatchSaysARunawayOnce(t *testing.T) {
 	dir := t.TempDir()
 	w, _, out := notifyingWatch(t, dir, false)
 	w.Notifier = nil
-	w.Host.cfg.LeaseDir = filepath.Join(dir, "leases")
-	w.Host.now = time.Now()
-	ts := w.Host.now.Add(-time.Minute).UTC().Format(time.RFC3339)
+	watchApp(w.Host).cfg.LeaseDir = filepath.Join(dir, "leases")
+	watchApp(w.Host).now = time.Now()
+	ts := watchApp(w.Host).now.Add(-time.Minute).UTC().Format(time.RFC3339)
 	tr := filepath.Join(dir, "s1.jsonl")
 	line := `{"type":"assistant","timestamp":"` + ts + `","message":{"id":"m1","model":"claude-opus-5-5","usage":{"input_tokens":10,"cache_read_input_tokens":950000},"content":[]}}` + "\n"
 	if err := os.WriteFile(tr, []byte(line), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	one := state.Party{Session: "s1", Name: sessionOne}
-	if err := w.Host.store.Update(func(*state.State) ([]state.Event, error) {
+	if err := watchApp(w.Host).store.Update(func(*state.State) ([]state.Event, error) {
 		return []state.Event{event(one, "merge.queued", "o/r#1 in lane l"), event(one, testMergedWord, "o/r#1 exit 0, release v1")}, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	live := []*claude.Session{{ID: "s1", Name: sessionOne, Transcript: tr, LastActive: w.Host.now}}
+	live := []*claude.Session{{ID: "s1", Name: sessionOne, Transcript: tr, LastActive: watchApp(w.Host).now}}
 
-	_, ms := w.Host.sessionMetrics(live, nil, nil)
+	_, ms := watchApp(w.Host).sessionMetrics(live, nil, nil)
 	if m := ms[0]; m.Merges != (merges{Queued: 1, Merged: 1}) || m.Context != 950010 || m.LastHour.CostUSD == nil {
 		t.Errorf("metrics %+v", m)
 	}

@@ -312,7 +312,7 @@ func watchDeliverWakeTimer(w *Watcher, ctx context.Context, st *state.State, ori
 			}
 		}
 		if !handed {
-			quiet := *w.Host
+			quiet := *watchApp(w.Host)
 			quiet.out = io.Discard
 			if err := quiet.queueContinuation(WatchParty, ag, f.Message()); err != nil {
 				return timerWakeOutcome{
@@ -324,7 +324,7 @@ func watchDeliverWakeTimer(w *Watcher, ctx context.Context, st *state.State, ori
 		return timerWakeOutcome{Fire: original, CloseCI: true}
 	}
 
-	quiet := *w.Host // the wake's own report is not a watch line
+	quiet := *watchApp(w.Host) // the wake's own report is not a watch line
 	quiet.out = io.Discard
 	if !f.T.Due.IsZero() {
 		quiet.executionRequestID = fmt.Sprintf("timer/%d/%s/%s", f.T.ID, f.T.Due.UTC().Format(time.RFC3339Nano), execution.Digest([]byte(f.Message())))

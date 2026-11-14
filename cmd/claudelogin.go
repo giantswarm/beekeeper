@@ -114,7 +114,7 @@ func (a *app) claudeLoginCmd() *cobra.Command {
 }
 
 func watchClaudeLogin(w *Watcher) {
-	v := readClaudeLogin(w.Host.now)
+	v := readClaudeLogin(watchApp(w.Host).now)
 	// A changed expiry gets a new status line even if the state stays healthy.
 	key := claudeLoginKey + " " + v.State + " " + v.Expires.Format(time.RFC3339)
 	if v.needsLogin() || v.Expires.IsZero() {
@@ -127,7 +127,7 @@ func watchClaudeLogin(w *Watcher) {
 		}
 	}
 	w.LastClaudeLogin = key
-	if !v.needsLogin() || w.Host.cfg.Guide.Person == "" {
+	if !v.needsLogin() || watchApp(w.Host).cfg.Guide.Person == "" {
 		return
 	}
 	self, err := os.Executable()
@@ -138,14 +138,14 @@ func watchClaudeLogin(w *Watcher) {
 	if dir := os.Getenv("CLAUDE_CONFIG_DIR"); dir != "" {
 		probe = "CLAUDE_CONFIG_DIR=" + guard.ShellQuote(dir) + " " + probe
 	}
-	if err := w.Host.store.Update(func(st *state.State) ([]state.Event, error) {
+	if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 		for _, n := range st.Notes {
 			if n.Kind == noteLogin && n.Until == probe {
 				return nil, nil
 			}
 		}
 		st.NextNote++
-		n := state.Note{ID: st.NextNote, For: w.Host.cfg.Guide.Person, By: WatchParty, At: w.Host.now.UTC(), Due: w.Host.now.UTC(), Kind: noteLogin, Until: probe, Text: v.line(), Default: "headless Claude turns may fail until the CLI login is renewed"}
+		n := state.Note{ID: st.NextNote, For: watchApp(w.Host).cfg.Guide.Person, By: WatchParty, At: watchApp(w.Host).now.UTC(), Due: watchApp(w.Host).now.UTC(), Kind: noteLogin, Until: probe, Text: v.line(), Default: "headless Claude turns may fail until the CLI login is renewed"}
 		st.Notes = append(st.Notes, n)
 		return []state.Event{event(WatchParty, "note.add", "#%d %s", n.ID, n.Text)}, nil
 	}); err != nil {

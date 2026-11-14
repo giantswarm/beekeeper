@@ -25,7 +25,7 @@ func TestAKilledGateWithALiveChildStaysInItsLane(t *testing.T) {
 	w, woke := cutWatch(t, state.Merge{Repo: scratchRepo, PR: 7, Lane: hungLane, By: four,
 		PID: deadPID(t), Child: os.Getpid(), Phase: state.Running, Started: relayNow})
 	polls(w, 3)
-	st, err := w.Host.store.Read()
+	st, err := watchApp(w.Host).store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,12 +33,12 @@ func TestAKilledGateWithALiveChildStaysInItsLane(t *testing.T) {
 		t.Fatalf("merges %+v, wakes %q", st.Merges, *woke)
 	}
 	var out bytes.Buffer
-	w.Host.out = &out
-	w.Host.printLanes(w.Host.laneViews(st))
+	watchApp(w.Host).out = &out
+	watchApp(w.Host).printLanes(watchApp(w.Host).laneViews(st))
 	if !strings.Contains(out.String(), "running o/r#7") {
 		t.Fatalf("surviving merge missing from lanes: %s", out.String())
 	}
-	evs, err := w.Host.store.Events(0, func(e state.Event) bool { return e.Verb == "merge.lost" || e.Verb == "merge.cut" })
+	evs, err := watchApp(w.Host).store.Events(0, func(e state.Event) bool { return e.Verb == "merge.lost" || e.Verb == "merge.cut" })
 	if err != nil || len(evs) != 0 {
 		t.Fatalf("premature loss events %+v: %v", evs, err)
 	}

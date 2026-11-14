@@ -57,7 +57,7 @@ func (rl role) SuccessorBrief(cfg config.Role, name, from string) string {
 This first turn runs headless from the command line. In it, only take the role: run `+"`beekeeper %s start`"+`, then end the turn. Arm no Monitor, watch or background task in it: the desktop gets this session's CLI only once this turn has ended.
 
 Once the desktop runs your CLI, a message tells you so there: then run `+"`%s`"+` and follow it. Peers message you as %q.`,
-		roleSlash(cfg), name, rl.Name, rl.Duty, fromText(from), rl.Name, rl.Handover, name)
+		Cmd.RoleSlash(cfg), name, rl.Name, rl.Duty, fromText(from), rl.Name, rl.Handover, name)
 }
 
 // fromText names the holder a run takes over from, "" when none is
@@ -76,5 +76,5 @@ func (rl role) BackgroundSuccessorBrief(cfg config.Role, name, from string) stri
 	return fmt.Sprintf(`%sYou are %q, the next %s run, a fresh background session beekeeper started to take over %s%s.
 
 Take the role: run `+"`beekeeper %s start`"+`, then run `+"`%s`"+` and follow it. Peers message you as %q.`,
-		roleSlash(cfg), name, rl.Name, rl.Duty, fromText(from), rl.Name, rl.Handover, name)
+		Cmd.RoleSlash(cfg), name, rl.Name, rl.Duty, fromText(from), rl.Name, rl.Handover, name)
 }

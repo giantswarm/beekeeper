@@ -104,8 +104,8 @@ func TestStandbyRelaysAHolderOverItsRelayAt(t *testing.T) {
 	for _, rl := range roles {
 		t.Run(rl.Name, func(t *testing.T) {
 			w, _, out := notifyingWatch(t, t.TempDir(), true)
-			w.Host.cfg.LeaseDir = t.TempDir()
-			w.Host.cfg.Guide.RelayAt = 150_000
+			watchApp(w.Host).cfg.LeaseDir = t.TempDir()
+			watchApp(w.Host).cfg.Guide.RelayAt = 150_000
 			var from atomic.Value
 			var started atomic.Int32
 			w.Stand = standbyWatch{Succeed: func(_ context.Context, got role, holder state.Party) (state.Party, error) {
@@ -132,7 +132,7 @@ func TestStandbyRelaysAHolderOverItsRelayAt(t *testing.T) {
 				t.Fatalf("watch lines:\n%s", l)
 			}
 			w.RelayOverdue(context.Background(), rl, st, sessions)
-			w.Host.now = w.Host.now.Add(successorBackoff)
+			watchApp(w.Host).now = watchApp(w.Host).now.Add(successorBackoff)
 			w.RelayOverdue(context.Background(), rl, st, sessions)
 			w.Stand.Inflight.Wait()
 			if n := started.Load(); n != 2 {
@@ -145,8 +145,8 @@ func TestStandbyRelaysAHolderOverItsRelayAt(t *testing.T) {
 // Under its relayAt, the holder is not relayed.
 func TestStandbyLeavesAHolderUnderItsRelayAt(t *testing.T) {
 	w, _, _ := notifyingWatch(t, t.TempDir(), true)
-	w.Host.cfg.LeaseDir = t.TempDir()
-	w.Host.cfg.Guide.RelayAt = 400_000
+	watchApp(w.Host).cfg.LeaseDir = t.TempDir()
+	watchApp(w.Host).cfg.Guide.RelayAt = 400_000
 	w.Stand = standbyWatch{Succeed: func(context.Context, role, state.Party) (state.Party, error) {
 		t.Error("relayed a guide under its relayAt")
 		return state.Party{}, nil

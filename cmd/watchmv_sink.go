@@ -24,24 +24,24 @@ const sinkKey = "sink"
 // logged (sink.dispatched); a failed one is said (SINK FAILED, sink.failed)
 // and given back, so the next poll tries it again within the window.
 func (w *Watcher) Sink(ctx context.Context) {
-	s := w.Host.cfg.Sink
+	s := w.Host.Cfg().Sink
 	if !s.Enabled() || !w.Chores {
 		return
 	}
 	if w.sinkLedger == nil {
 		// Started now, the ledger dispatches what is logged from now on.
-		l := sink.NewLedger(w.Host.store.Dir())
-		if _, err := l.Claim(ctx, w.Host.now, nil); err != nil {
+		l := sink.NewLedger(w.Host.Store().Dir())
+		if _, err := l.Claim(ctx, w.Host.Now(), nil); err != nil {
 			w.Fail(sinkKey, "SINK FAILED: cannot start its ledger: %v", err)
 			return
 		}
 		w.sinkLedger = l
 	}
-	evs, err := w.Host.store.Follow("watch.sink", func(e state.Event) bool { return e.Subject != "" && s.Selects(e.Verb) })
+	evs, err := w.Host.Store().Follow("watch.sink", func(e state.Event) bool { return e.Subject != "" && s.Selects(e.Verb) })
 	if err != nil {
 		return // the next poll reads them again
 	}
-	w.sinkPending = slices.DeleteFunc(append(w.sinkPending, evs...), func(e state.Event) bool { return w.Host.now.Sub(e.At) > sink.Window })
+	w.sinkPending = slices.DeleteFunc(append(w.sinkPending, evs...), func(e state.Event) bool { return w.Host.Now().Sub(e.At) > sink.Window })
 	if len(w.sinkPending) == 0 {
 		return
 	}
@@ -66,10 +66,10 @@ func (w *Watcher) dispatch(ctx context.Context, s config.Sink, pending []state.E
 			// its lock wait even without the dispatch's cancellation.
 			_ = w.sinkLedger.Unclaim(context.WithoutCancel(ctx), now, e)
 			w.Fail(sinkKey, "SINK FAILED: %s %s: %v", e.Verb, e.Subject, err)
-			_ = w.Host.store.Log(event(WatchParty, "sink.failed", "%s %s: %v", e.Verb, e.Subject, err))
+			_ = w.Host.Store().Log(Cmd.Event(WatchParty, "sink.failed", "%s %s: %v", e.Verb, e.Subject, err))
 			continue
 		}
-		_ = w.Host.store.Log(event(WatchParty, "sink.dispatched", "%s %s: %s %s", e.Verb, e.Subject, s.Repo, s.Workflow))
+		_ = w.Host.Store().Log(Cmd.Event(WatchParty, "sink.dispatched", "%s %s: %s %s", e.Verb, e.Subject, s.Repo, s.Workflow))
 	}
 	if !failed {
 		w.Clear(sinkKey)

@@ -9,5 +9,5 @@ import (
 
 // StopParked runs in the command, which holds what it needs (watchStopParked).
 func (w *Watcher) StopParked(ctx context.Context, st *state.State, sessions []*claude.Session) {
-	watchStopParked(w, ctx, st, sessions)
+	Cmd.WatchStopParked(w, ctx, st, sessions)
 }

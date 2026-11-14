@@ -101,9 +101,9 @@ func mailboxWatchVia(t *testing.T, mb *mailboxStandIn, refuse ...string) (*Watch
 	w.Notifier = nil
 	m := centraltest.New(t, mb.url(t), mailServer)
 	bin, _ := centraltest.Binary(t, m.URL, "token")
-	w.Host.cfg.Central.Context, w.Host.cfg.Central.Server = lab, mailServer
-	w.Host.cfg.Central.Muster, w.Host.cfg.Central.Timeout.Duration = bin, 10*time.Second
-	w.Host.cfg.Identity.Person, w.Host.cfg.Identity.Host = "Ada@example.com", mailHost
+	watchApp(w.Host).cfg.Central.Context, watchApp(w.Host).cfg.Central.Server = lab, mailServer
+	watchApp(w.Host).cfg.Central.Muster, watchApp(w.Host).cfg.Central.Timeout.Duration = bin, 10*time.Second
+	watchApp(w.Host).cfg.Identity.Person, watchApp(w.Host).cfg.Identity.Host = "Ada@example.com", mailHost
 	var sent []string
 	w.Deliver = func(_ context.Context, q, msg string) error {
 		if slices.Contains(refuse, q) {
@@ -187,7 +187,7 @@ func TestConverseSaysItAsTheCallingAgent(t *testing.T) {
 	mb := &mailboxStandIn{}
 	w, _, _ := mailboxWatch(t, mb)
 	var out strings.Builder
-	a := *w.Host
+	a := *watchApp(w.Host)
 	a.out, a.as = &out, mailGuide
 	if err := a.converse("which one, 1 or 2?"); err != nil {
 		t.Fatal(err)
@@ -204,7 +204,7 @@ func TestConverseSaysItAsTheCallingAgent(t *testing.T) {
 func TestMailboxWatchDrainsOnEachUpdate(t *testing.T) {
 	mb := &mailboxStandIn{queue: []mailbox.Delivery{slackReply(t, 1, "local:desk/Guide", "first")}}
 	w, _, out, m := mailboxWatchVia(t, mb)
-	w.Host.cfg.Watch.Interval.Duration = time.Hour
+	watchApp(w.Host).cfg.Watch.Interval.Duration = time.Hour
 	delivered := make(chan string, 10)
 	w.Deliver = func(_ context.Context, _, msg string) error {
 		delivered <- firstLine(msg)
@@ -267,7 +267,7 @@ func TestMailboxDrainRetriesFailedAcknowledgement(t *testing.T) {
 func TestMailboxWatchRetriesFailedAcknowledgement(t *testing.T) {
 	mb := &mailboxStandIn{ackFailures: 1}
 	w, _, _, m := mailboxWatchVia(t, mb)
-	w.Host.cfg.Watch.Interval.Duration = 20 * time.Millisecond
+	watchApp(w.Host).cfg.Watch.Interval.Duration = 20 * time.Millisecond
 	delivered := make(chan string, 10)
 	w.Deliver = func(_ context.Context, _, msg string) error {
 		delivered <- msg
@@ -376,7 +376,7 @@ func TestMailboxNoteAnswerReachesTheRolesHolderNow(t *testing.T) {
 	)
 	mb := &mailboxStandIn{queue: []mailbox.Delivery{noteAnswerMail(13, "note-10-3dbd89ea0570", "local:"+mailHost+"/"+ended, answer)}}
 	w, sent, out := mailboxWatch(t, mb)
-	if err := w.Host.store.Update(func(st *state.State) ([]state.Event, error) {
+	if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Guide = &state.Role{Holder: &state.Supervisor{Party: state.Party{Session: "s269", Name: current}, Since: relayNow}}
 		return nil, nil
 	}); err != nil {
@@ -395,7 +395,7 @@ func TestMailboxNoteAnswerReachesTheRolesHolderNow(t *testing.T) {
 		t.Errorf("no %q in:\n%s", line, out())
 	}
 
-	if err := w.Host.store.Update(func(st *state.State) ([]state.Event, error) {
+	if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Guide = nil
 		return nil, nil
 	}); err != nil {
@@ -409,7 +409,7 @@ func TestMailboxNoteAnswerReachesTheRolesHolderNow(t *testing.T) {
 	if len(*sent) != 0 || !slices.Equal(mb.acked, []int64{13, 14}) {
 		t.Errorf("sent %q, acked %v: want none sent, 14 acked", *sent, mb.acked)
 	}
-	st, err := w.Host.store.Read()
+	st, err := watchApp(w.Host).store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}

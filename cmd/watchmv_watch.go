@@ -36,7 +36,7 @@ import (
 )
 
 type Watcher struct {
-	Host *app
+	Host Host
 	// batchEvery is immutable once the loops start; batch is guarded by mu.
 	BatchEvery time.Duration
 	batch      []string
@@ -329,19 +329,19 @@ func (w *Watcher) Run(ctx context.Context, once bool) error {
 	if once {
 		w.BatchEvery = 0
 	} else if w.BatchEvery == 0 {
-		w.BatchEvery = w.Host.cfg.Watch.BatchInterval.Duration
+		w.BatchEvery = w.Host.Cfg().Watch.BatchInterval.Duration
 	}
-	w.lastPoll = w.Clk().Now().Add(-w.Host.cfg.Watch.Interval.Duration)
-	s, err := plat.Machine.DesktopScope()
+	w.lastPoll = w.Clk().Now().Add(-w.Host.Cfg().Watch.Interval.Duration)
+	s, err := Cmd.Plat().Machine.DesktopScope()
 	if s != nil {
 		w.scopeOOM = s.OOMKills
 	}
 	if !w.Unavailable(secScope, err) {
 		w.Check("noscope", s == nil, "no Claude Desktop scope found; watching the machine numbers only")
 	}
-	interval := w.Host.cfg.Watch.Interval.Duration
+	interval := w.Host.Cfg().Watch.Interval.Duration
 	if once {
-		w.Host.ctx = ctx
+		w.Host.SetCtx(ctx)
 		w.UpgradeCycle(ctx)
 		w.Sample(ctx)
 		w.lastSweep = clk.Now() // swept here, not in the poll's background
@@ -363,7 +363,7 @@ func (w *Watcher) Run(ctx context.Context, once bool) error {
 	w.ReadFreeMark()
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
-	w.Host.ctx = ctx
+	w.Host.SetCtx(ctx)
 	var wg sync.WaitGroup
 	if w.Standby {
 		w.guideRecovery = true
@@ -394,15 +394,15 @@ func (w *Watcher) Run(ctx context.Context, once bool) error {
 	})
 	if !w.Standby {
 		wg.Go(func() { w.watchAlerts(ctx) })
-		if w.Host.cfg.Alerts.PagerDuty.Enabled() {
+		if w.Host.Cfg().Alerts.PagerDuty.Enabled() {
 			wg.Go(func() { w.watchPagerDuty(ctx) })
 		}
-		if w.Host.cfg.Alerts.Discover.Enabled() {
+		if w.Host.Cfg().Alerts.Discover.Enabled() {
 			wg.Go(func() { w.watchDiscovery(ctx) })
 		}
 	}
-	if w.Host.cfg.Central.Enabled() {
-		w.Host.hub() // made before the feed, the mailbox and the roster sync share it
+	if w.Host.Cfg().Central.Enabled() {
+		w.Host.Hub() // made before the feed, the mailbox and the roster sync share it
 		wg.Go(func() { w.WatchFeed(ctx) })
 		if w.Standby {
 			wg.Go(func() { w.WatchMailbox(ctx) })
@@ -428,7 +428,7 @@ func (w *Watcher) Run(ctx context.Context, once bool) error {
 		if req := w.restartDue(); req != nil {
 			w.checkInstalledGate(ctx, req.Binary)
 			w.RestartFor = req
-			cancel(errRestart)
+			cancel(Cmd.ErrRestart())
 		}
 	})
 	// Every shutdown waits for the runs the watch started, including saves
@@ -442,7 +442,7 @@ func (w *Watcher) Run(ctx context.Context, once bool) error {
 	}
 	// A restarted watch's mark says nothing twice.
 	w.SaveMark()
-	return errRestart
+	return Cmd.ErrRestart()
 }
 
 // restartDue is the install's request this watch restarts for, nil when
@@ -532,15 +532,15 @@ func (w *Watcher) InFlight(ctx context.Context, wait time.Duration, running *ato
 // baseline; another watch that owns it is said once, and this one takes over
 // when it ends.
 func (w *Watcher) watchAlerts(ctx context.Context) {
-	store := alerts.NewStore(w.Host.cfg.StateDir)
+	store := alerts.NewStore(w.Host.Cfg().StateDir)
 	defer func() { _ = store.Release() }()
 	// One port-forward per installation, kept from tick to tick: a tick
 	// is then HTTP requests, not kubectl and tsh processes.
-	reader := w.Host.alertReader()
+	reader := w.Host.AlertReader()
 	reader.Keep = true
 	defer reader.Close()
 	other := 0
-	w.Loop(ctx, w.Host.cfg.Alerts.Every.Duration, true, func(ctx context.Context) {
+	w.Loop(ctx, w.Host.Cfg().Alerts.Every.Duration, true, func(ctx context.Context) {
 		owned, owner, err := store.Own()
 		switch {
 		case err != nil:
@@ -561,7 +561,7 @@ func (w *Watcher) watchAlerts(ctx context.Context) {
 				other = 0
 				w.EmitNow("alerts", "ALERTS taken over by this watch")
 			}
-			lines, noContext := w.Host.alertCycle(ctx, store, reader)
+			lines, noContext := w.Host.AlertCycle(ctx, store, reader)
 			if base, err := store.Load(); err == nil {
 				w.PublishAlerts(base.Firing(""))
 			}
@@ -584,7 +584,7 @@ func (w *Watcher) Emit(key, format string, args ...any) string {
 		w.Active = map[string]Condition{}
 	}
 	_, active := w.Active[key]
-	if active && now.Sub(w.Last[key]) < w.Host.cfg.Watch.Repeat.Duration {
+	if active && now.Sub(w.Last[key]) < w.Host.Cfg().Watch.Repeat.Duration {
 		w.Mu.Unlock()
 		return ""
 	}
@@ -635,8 +635,8 @@ func (w *Watcher) Clear(key string) {
 	w.Dirty = w.Dirty || active
 	w.Mu.Unlock()
 	if active {
-		if w.Host.store != nil {
-			_ = w.Host.store.Record(event(WatchParty, "watch.clear", "%s", key))
+		if w.Host.Store() != nil {
+			_ = w.Host.Store().Record(Cmd.Event(WatchParty, "watch.clear", "%s", key))
 		}
 		w.EmitNow("ended", "ENDED %s (since %s)", c.Label, c.Since.Local().Format("15:04"))
 	}
@@ -708,13 +708,13 @@ func (w *Watcher) SaveMark() {
 		return
 	}
 	w.Dirty = false
-	_ = w.Host.store.WriteFile(w.MarkFile, WatchMark{Conditions: w.Active, Reported: w.Reported, FeedID: w.FeedID, UsageReported: w.UsageReported})
+	_ = w.Host.Store().WriteFile(w.MarkFile, WatchMark{Conditions: w.Active, Reported: w.Reported, FeedID: w.FeedID, UsageReported: w.UsageReported})
 }
 
 // Notify sends one event that needs a person (--notify): a lasting kind
 // takes no key.
 func (w *Watcher) Notify(ctx context.Context, kind, key, summary, body string) {
-	w.NotifyAt(ctx, w.Host.now, kind, key, summary, body)
+	w.NotifyAt(ctx, w.Host.Now(), kind, key, summary, body)
 }
 
 // NotifyAt is notify for a loop of its own, which keeps its own time.
@@ -756,7 +756,7 @@ func (t SwapTrend) Pressing() bool { return t.Rated && t.DiskPerHourMiB > 0 && t
 // SwapTrend records a reading and returns the movement over
 // watch.swapWindow.
 func (w *Watcher) SwapTrend(now time.Time, m machine.Mem) SwapTrend {
-	window := w.Host.cfg.Watch.SwapWindow.Duration
+	window := w.Host.Cfg().Watch.SwapWindow.Duration
 	w.SwapSamples = append(w.SwapSamples, swapSample{now, m.SwapUsedMiB, m.DiskSwapMiB(), m.ZswapWrittenBackMiB, m.AvailableMiB})
 	i := 0
 	for i < len(w.SwapSamples)-1 && now.Sub(w.SwapSamples[i].at) > window {
@@ -794,7 +794,7 @@ func SwapLine(m machine.Mem, oomd *machine.OOMDSwap, t SwapTrend) string {
 	if !t.Rated {
 		return line + ", growth not yet measured"
 	}
-	line += fmt.Sprintf(", disk %+d MiB/h, zswap writeback %d MiB/h over the last %s", t.DiskPerHourMiB, t.WritebackPerHourMiB, dur(t.Window))
+	line += fmt.Sprintf(", disk %+d MiB/h, zswap writeback %d MiB/h over the last %s", t.DiskPerHourMiB, t.WritebackPerHourMiB, Cmd.Dur(t.Window))
 	if t.Pressing() {
 		line += " while MemAvailable falls"
 	}
@@ -824,7 +824,7 @@ func (w *Watcher) OomdImminent(m machine.Mem, oomd *machine.OOMDSwap, t SwapTren
 	if oomd == nil || !oomd.Watched() || !t.Pressing() {
 		return false
 	}
-	th := w.Host.cfg.Watch
+	th := w.Host.Cfg().Watch
 	headroom := oomd.HeadroomMiB(m)
 	if headroom < th.OOMDHeadroomMin(m.SwapTotalMiB) {
 		return true
@@ -835,15 +835,15 @@ func (w *Watcher) OomdImminent(m machine.Mem, oomd *machine.OOMDSwap, t SwapTren
 // modelServer says the host models no model-server lease covers and
 // unloads those a lab loaded or a budget exceeds, unless ollama.nameOnly.
 func (w *Watcher) modelServer(ctx context.Context, models []machine.HostModel) {
-	holders, err := lease.Dir(w.Host.cfg.LeaseDir).List()
+	holders, err := lease.Dir(w.Host.Cfg().LeaseDir).List()
 	if err != nil {
 		return
 	}
-	bs := ModelBreaches(models, holders, w.Host.cfg.Resources, w.Host.cfg.Ollama.BudgetGiB)
+	bs := ModelBreaches(models, holders, w.Host.Cfg().Resources, w.Host.Cfg().Ollama.BudgetGiB)
 	unloaded := map[string]error{}
 	for _, b := range bs {
-		if b.Unload && !w.Host.cfg.Ollama.NameOnly {
-			unloaded[b.Model.Name] = b.Model.Unload(ctx, ServerURL(w.Host.cfg, b.Model))
+		if b.Unload && !w.Host.Cfg().Ollama.NameOnly {
+			unloaded[b.Model.Name] = b.Model.Unload(ctx, ServerURL(w.Host.Cfg(), b.Model))
 		}
 	}
 	w.Check("modelserver", len(bs) > 0, "MODEL SERVER: %s", ModelServerLine(bs, unloaded))
@@ -862,10 +862,10 @@ func (w *Watcher) emitLinesNow(key string, lines []string) {
 			continue
 		}
 		kept = append(kept, line)
-		evs = append(evs, event(WatchParty, "watch."+key, "%s", line))
+		evs = append(evs, Cmd.Event(WatchParty, "watch."+key, "%s", line))
 	}
-	if w.Host.store != nil && len(evs) > 0 {
-		_ = w.Host.store.Record(evs...)
+	if w.Host.Store() != nil && len(evs) > 0 {
+		_ = w.Host.Store().Record(evs...)
 	}
 	for _, line := range kept {
 		w.OutputEvent(line)
@@ -877,34 +877,34 @@ func (w *Watcher) emitLinesNow(key string, lines []string) {
 // is strained. It keeps its own time: it runs in a loop of its own.
 func (w *Watcher) Sample(ctx context.Context) {
 	now := clk.Now()
-	if st, err := w.Host.readSnapshot(); err == nil {
-		w.SayAppDrifts(w.Host.appDrifts(ctx, st.Apps))
+	if st, err := w.Host.ReadSnapshot(); err == nil {
+		w.SayAppDrifts(w.Host.AppDrifts(ctx, st.Apps))
 	}
-	th := w.Host.cfg.Watch
+	th := w.Host.Cfg().Watch
 
 	// GTT is RAM the iGPU pins outside every cgroup: above its threshold
 	// it is named as the cause of low memory, with the model servers' models.
-	models, merr := hostModels(ctx, w.Host.cfg)
+	models, merr := Cmd.HostModels(ctx, w.Host.Cfg())
 	if merr == nil {
 		w.modelServer(ctx, models)
 	}
 	// One process table a sample: the swapoff and the CPU lines read it;
 	// nil when it is unreadable.
-	table, terr := plat.Machine.Processes()
+	table, terr := Cmd.Plat().Machine.Processes()
 	if terr != nil {
 		table = nil
 	}
-	m, merr := plat.Machine.Mem()
+	m, merr := Cmd.Plat().Machine.Mem()
 	w.Unavailable(secMemory, merr)
 	var cause string
 	if gpus := machine.ReadGPUs(); machine.GTTUsedMiB(gpus) > th.GTTMax(m.TotalMiB) {
-		cause = gttLine(gpus, models)
+		cause = Cmd.GttLine(gpus, models)
 	}
 	w.Check("gtt", cause != "", "IGPU %s", strings.TrimPrefix(cause, "iGPU "))
 	if merr == nil {
 		w.Check("avail", m.AvailableMiB < th.AvailMin(m.TotalMiB), "LOW RAM: %d MiB available, swap %s%s", m.AvailableMiB, m.SwapSplit(), Because(cause))
 		var oomd *machine.OOMDSwap
-		if o, err := plat.Machine.OOMDSwap(ctx); err == nil {
+		if o, err := Cmd.Plat().Machine.OOMDSwap(ctx); err == nil {
 			oomd = &o
 		}
 		t := w.SwapTrend(now, m)
@@ -921,7 +921,7 @@ func (w *Watcher) Sample(ctx context.Context) {
 			PerHourMiB: t.DiskPerHourMiB, WritebackPerHourMiB: t.WritebackPerHourMiB, Rated: t.Rated})
 	}
 	w.SampleCPU(now, table)
-	psi, err := plat.Machine.MemoryPressure()
+	psi, err := Cmd.Plat().Machine.MemoryPressure()
 	w.Unavailable(secPressure, err)
 	if err == nil {
 		w.Check("psi", psi > th.PSIMax, "MEMORY PRESSURE: full avg60 %.0f%%", psi)
@@ -952,7 +952,7 @@ func (w *Watcher) Sample(ctx context.Context) {
 	w.DiskPrune(now, false)
 	w.StateHolders(now)
 	w.SlotOrphans(now, table)
-	s, err := plat.Machine.DesktopScope()
+	s, err := Cmd.Plat().Machine.DesktopScope()
 	w.Unavailable(secScope, err)
 	if s != nil {
 		w.Check("scopeanon", s.AnonMiB > th.ScopeAnonMax(m.TotalMiB), "DESKTOP SCOPE anon: %d MiB", s.AnonMiB)
@@ -973,12 +973,12 @@ func (w *Watcher) Sample(ctx context.Context) {
 // with the top CPU consumers since the last sample; and READS SLOWED while
 // the machine is strained.
 func (w *Watcher) SampleCPU(now time.Time, t *proc.Table) {
-	th := w.Host.cfg.Watch
+	th := w.Host.Cfg().Watch
 	cores := runtime.NumCPU()
 	limit := th.LoadLimit(cores)
-	load, err := plat.Machine.Load()
+	load, err := Cmd.Plat().Machine.Load()
 	w.Unavailable(secLoad, err)
-	cpu, err := plat.Machine.CPUPressure()
+	cpu, err := Cmd.Plat().Machine.CPUPressure()
 	w.Unavailable(secPressure, err)
 	if cpu > th.CPUPSIMax {
 		w.cpuOver++
@@ -1027,7 +1027,7 @@ const WatchOwner = "beekeeper watch"
 // with an ENDED line when it ends.
 // prev is the process table the last sample read, span ago.
 func (w *Watcher) SampleProcs(now time.Time, span time.Duration, prev, t *proc.Table) {
-	th := w.Host.cfg.Watch
+	th := w.Host.Cfg().Watch
 	owners := map[int]string{}
 	if o := w.Owners.Load(); o != nil {
 		maps.Copy(owners, *o)
@@ -1037,7 +1037,7 @@ func (w *Watcher) SampleProcs(now time.Time, span time.Duration, prev, t *proc.T
 	owners[cmp.Or(w.Self, os.Getpid())] = WatchOwner
 	read := w.ReadForks
 	if read == nil {
-		read = plat.Machine.Forks
+		read = Cmd.Plat().Machine.Forks
 	}
 	forks, err := read()
 	if err == nil && w.forks > 0 && span > 0 && forks >= w.forks {
@@ -1099,7 +1099,7 @@ func (w *Watcher) PollSessions(ctx context.Context, since time.Time, t *proc.Tab
 		return
 	}
 	w.Table = t
-	sessions := discover(w.Host.cfg, t, w.Host.now)
+	sessions := Cmd.Discover(w.Host.Cfg(), t, w.Host.Now())
 	owners := make(map[int]string, len(sessions))
 	for _, s := range sessions {
 		owners[s.PID] = s.Name
@@ -1159,7 +1159,7 @@ func (w *Watcher) Twins(sessions []*claude.Session, t *proc.Table) {
 			continue
 		}
 		for id := range names {
-			if resumes(p.Args, id) || startsSession(p, id) {
+			if Cmd.Resumes(p.Args, id) || Cmd.StartsSession(p, id) {
 				byID[id] = append(byID[id], p)
 			}
 		}
@@ -1167,7 +1167,7 @@ func (w *Watcher) Twins(sessions []*claude.Session, t *proc.Table) {
 	found := map[string]bool{}
 	for _, id := range slices.Sorted(maps.Keys(byID)) {
 		cli := byID[id]
-		if len(cli) < 2 || slices.ContainsFunc(cli, func(p *proc.Process) bool { return w.Host.now.Sub(p.Start) < twinGrace }) {
+		if len(cli) < 2 || slices.ContainsFunc(cli, func(p *proc.Process) bool { return w.Host.Now().Sub(p.Start) < twinGrace }) {
 			continue
 		}
 		slices.SortFunc(cli, func(a, b *proc.Process) int { return cmp.Compare(a.PID, b.PID) })
@@ -1188,12 +1188,12 @@ func (w *Watcher) Twins(sessions []*claude.Session, t *proc.Table) {
 // probe for one watch.interval at most.
 func (w *Watcher) Poll(ctx context.Context) {
 	w.Polls.Add(1)
-	w.Host.now = w.Clk().Now()
+	w.Host.SetNow(w.Clk().Now())
 	since := w.lastPoll
-	w.lastPoll = w.Host.now
-	th := w.Host.cfg.Watch
+	w.lastPoll = w.Host.Now()
+	th := w.Host.Cfg().Watch
 
-	t, err := plat.Machine.Processes()
+	t, err := Cmd.Plat().Machine.Processes()
 	switch {
 	case w.Unavailable(secSessions, err):
 		// No session is known: what reads them is left out, not guessed.
@@ -1210,7 +1210,7 @@ func (w *Watcher) Poll(ctx context.Context) {
 	w.StaleMerges()
 	w.LostMerges(ctx)
 	w.OwedOutcomes(ctx)
-	w.Host.pollToolWindow(ctx, WatchParty)
+	w.Host.PollToolWindow(ctx, WatchParty)
 	w.Stalls()
 	w.SlotHolds()
 	w.Unbrokered()
@@ -1219,11 +1219,11 @@ func (w *Watcher) Poll(ctx context.Context) {
 		return
 	}
 	w.Sink(ctx)
-	now := w.Host.now
+	now := w.Host.Now()
 	if now.Sub(w.lastSettle) >= w.readEvery(th.Interval.Duration) {
 		w.lastSettle = now
 		w.InFlight(w.readCtx(ctx), th.Interval.Duration, &w.settling, func(ctx context.Context) {
-			_ = w.Host.checkPlaces(ctx, WatchParty, now, "", "", 0, th.Interval.Duration)
+			_ = w.Host.CheckPlaces(ctx, WatchParty, now, "", "", 0, th.Interval.Duration)
 			w.HungMerges(ctx, now)
 			w.Settled(ctx, now)
 		})
@@ -1247,14 +1247,14 @@ func (w *Watcher) Poll(ctx context.Context) {
 		// A drain of a self-hosted model waits for its sessions: the watch
 		// runs the switch the constraint asked for once they are gone.
 		w.InFlight(ctx, th.Interval.Duration, &w.serving, func(ctx context.Context) {
-			_ = w.Host.reconcileServeModes(ctx)
+			_ = w.Host.ReconcileServeModes(ctx)
 		})
 	}
-	if w.Host.cfg.Central.Enabled() && now.Sub(w.lastCentral) >= w.readEvery(th.Interval.Duration) {
+	if w.Host.Cfg().Central.Enabled() && now.Sub(w.lastCentral) >= w.readEvery(th.Interval.Duration) {
 		w.lastCentral = now
 		w.InFlight(ctx, th.Interval.Duration, &w.centraling, w.SyncRoster)
 	}
-	if now.Sub(w.lastSweep) >= w.readEvery(w.Host.cfg.Outbound.SweepEvery.Duration) {
+	if now.Sub(w.lastSweep) >= w.readEvery(w.Host.Cfg().Outbound.SweepEvery.Duration) {
 		w.lastSweep = now
 		// The sweep takes a while on a big home directory: the poll does not wait.
 		w.InFlight(ctx, 0, &w.Sweeping, func(context.Context) { w.Exposures() })
@@ -1264,13 +1264,13 @@ func (w *Watcher) Poll(ctx context.Context) {
 	}
 	w.SaveMark()
 	if w.Notifier != nil {
-		w.Notifier.Flush(ctx, w.Host.now)
+		w.Notifier.Flush(ctx, w.Host.Now())
 	}
 }
 
 // teleport runs in the command, which holds what it needs (watchTeleport).
 func (w *Watcher) teleport(ctx context.Context) {
-	watchTeleport(w, ctx)
+	Cmd.WatchTeleport(w, ctx)
 }
 
 // vaultKey starts the condition key of a call waiting on the vault, and
@@ -1294,7 +1294,7 @@ const (
 // and once it goes on its ENDED line, or a line that it timed out with the
 // vault still locked. Nothing asks the person.
 func (w *Watcher) VaultWaits() {
-	if !w.Host.cfg.Secret.Session {
+	if !w.Host.Cfg().Secret.Session {
 		return
 	}
 	statePath, err := secret.StatePath()
@@ -1350,8 +1350,8 @@ const exposedKey = "exposed "
 // EXPOSED line naming the file when it is found, never its content, and one
 // ENDED line once it is fixed.
 func (w *Watcher) Exposures() {
-	ctx := w.Host.context()
-	o := w.Host.cfg.Outbound
+	ctx := w.Host.Context()
+	o := w.Host.Cfg().Outbound
 	found := map[string]bool{}
 	for _, e := range guard.SweepContext(ctx, o.SweepRoots, o.SweepDepth) {
 		key := exposedKey + e.Path
@@ -1366,17 +1366,17 @@ func (w *Watcher) Exposures() {
 
 // Budget runs in the command, which holds what it needs (watchBudget).
 func (w *Watcher) Budget(ctx context.Context, now time.Time) {
-	watchBudget(w, ctx, now)
+	Cmd.WatchBudget(w, ctx, now)
 }
 
 // CallersText runs in the command, which holds what it needs (watchCallersText).
 func (w *Watcher) CallersText() string {
-	return watchCallersText(w)
+	return Cmd.WatchCallersText(w)
 }
 
 // Stalls runs in the command, which holds what it needs (watchStalls).
 func (w *Watcher) Stalls() {
-	watchStalls(w)
+	Cmd.WatchStalls(w)
 }
 
 // LostMerges records the outcome of each running merge whose gate process
@@ -1386,7 +1386,7 @@ func (w *Watcher) Stalls() {
 // next merge arrives, and until then the lane shows a merge running that no
 // process runs.
 func (w *Watcher) LostMerges(ctx context.Context) {
-	recorded, cut, lost := w.Host.recordGone(ctx)
+	recorded, cut, lost := w.Host.RecordGone(ctx)
 	for _, d := range cut {
 		w.EmitNow("lanes", "MERGE CUT: %s", d)
 	}
@@ -1395,13 +1395,13 @@ func (w *Watcher) LostMerges(ctx context.Context) {
 	}
 	for _, m := range lost {
 		w.EmitNow("lanes", "MERGE LOST: %s in lane %s by %q: its gate (pid %d) and devctl are gone, whether it merged is unknown; the lane settles until %s, then frees once its HelmReleases are Ready",
-			m.Key(), m.Lane, m.By.Name, m.PID, clock(w.Host.now, w.Host.now.Add(w.Host.cfg.Merge.Settle.Duration)))
+			m.Key(), m.Lane, m.By.Name, m.PID, Cmd.Clock(w.Host.Now(), w.Host.Now().Add(w.Host.Cfg().Merge.Settle.Duration)))
 	}
 }
 
 // HungMerges runs in the command, which holds what it needs (watchHungMerges).
 func (w *Watcher) HungMerges(ctx context.Context, now time.Time) {
-	watchHungMerges(w, ctx, now)
+	Cmd.WatchHungMerges(w, ctx, now)
 }
 
 // Settled drops the settling merges whose lane has settled, so lanes shows
@@ -1412,7 +1412,7 @@ func (w *Watcher) HungMerges(ctx context.Context, now time.Time) {
 // merge.settleTimeout is one LANE STUCK line with what the lane waits for,
 // and one ENDED line once it settles or the lane is cleared.
 func (w *Watcher) Settled(ctx context.Context, now time.Time) {
-	st, err := w.Host.readSnapshot()
+	st, err := w.Host.ReadSnapshot()
 	if err != nil {
 		return
 	}
@@ -1427,14 +1427,14 @@ func (w *Watcher) Settled(ctx context.Context, now time.Time) {
 		if m.Phase != state.Settling {
 			continue
 		}
-		lane, ok := w.Host.cfg.LaneNamed(m.Lane)
+		lane, ok := w.Host.Cfg().LaneNamed(m.Lane)
 		if !ok || lane.Installation == "" {
 			// A release its gate confirms settles with the verdict, one
 			// unknown by the settle rule: it may be cutting.
 			if merge.Confirming(m, proc.Alive) {
 				continue
 			}
-			if ready, _ := merge.Ready(lane, nil, &m, now, w.Host.cfg.Merge.Settle.Duration); ready {
+			if ready, _ := merge.Ready(lane, nil, &m, now, w.Host.Cfg().Merge.Settle.Duration); ready {
 				done[m.Key()] = "no installation to roll"
 			}
 			continue
@@ -1447,7 +1447,7 @@ func (w *Watcher) Settled(ctx context.Context, now time.Time) {
 		why := ""
 		if r.err != nil {
 			why = fmt.Sprintf("the HelmReleases of %s cannot be read (%v)", lane.Installation, r.err)
-		} else if ready, wait := merge.Ready(lane, r.hrs, &m, now, w.Host.cfg.Merge.Settle.Duration); ready {
+		} else if ready, wait := merge.Ready(lane, r.hrs, &m, now, w.Host.Cfg().Merge.Settle.Duration); ready {
 			done[m.Key()] = "rolled, HelmReleases of " + lane.Installation + " Ready"
 			if wait != "" {
 				done[m.Key()] = "settled without a roll, " + wait
@@ -1456,14 +1456,14 @@ func (w *Watcher) Settled(ctx context.Context, now time.Time) {
 		} else {
 			why = wait
 		}
-		if since := now.Sub(m.Finished); since > w.Host.cfg.Merge.SettleTimeout.Duration {
+		if since := now.Sub(m.Finished); since > w.Host.Cfg().Merge.SettleTimeout.Duration {
 			key := "stuck:" + lane.Name + ":" + m.Key()
 			stuck[key] = true
 			if m.Release == "" && !m.ReleaseFailed {
 				why += fmt.Sprintf("; recover with devctl release wait %s --pr %d, then name the release with beekeeper lanes settle %s %d --release <version>", m.Repo, m.PR, m.Repo, m.PR)
 			}
 			w.Emit(key, "LANE STUCK %s: %s has not settled %s after its merge: %s; fix the installation or clear the lane (beekeeper lanes clear %s)",
-				lane.Name, m.Key(), dur(since), why, lane.Name)
+				lane.Name, m.Key(), Cmd.Dur(since), why, lane.Name)
 		}
 	}
 	w.ClearMissing("stuck:", stuck)
@@ -1471,7 +1471,7 @@ func (w *Watcher) Settled(ctx context.Context, now time.Time) {
 		return
 	}
 	var settled []state.Merge
-	_ = w.Host.store.Update(func(st *state.State) ([]state.Event, error) {
+	_ = w.Host.Store().Update(func(st *state.State) ([]state.Event, error) {
 		var ev []state.Event
 		st.Merges = slices.DeleteFunc(st.Merges, func(m state.Merge) bool {
 			why, ok := done[m.Key()]
@@ -1479,19 +1479,19 @@ func (w *Watcher) Settled(ctx context.Context, now time.Time) {
 				return false
 			}
 			settled = append(settled, m)
-			ev = append(ev, event(WatchParty, verbLaneSettled, "%s: %s %s", m.Lane, m.Key(), why))
+			ev = append(ev, Cmd.Event(WatchParty, verbLaneSettled, "%s: %s %s", m.Lane, m.Key(), why))
 			return true
 		})
 		return ev, nil
 	})
 	for _, m := range settled {
-		w.Host.leaveCentral(ctx, []state.Merge{m}, done[m.Key()])
+		w.Host.LeaveCentral(ctx, []state.Merge{m}, done[m.Key()])
 	}
 }
 
 // kills runs in the command, which holds what it needs (watchKills).
 func (w *Watcher) kills(ctx context.Context, since time.Time, sessions []*claude.Session, t *proc.Table) {
-	watchKills(w, ctx, since, sessions, t)
+	Cmd.WatchKills(w, ctx, since, sessions, t)
 }
 
 func (w *Watcher) SessionChanges(sessions []*claude.Session) {
@@ -1532,7 +1532,7 @@ func (w *Watcher) SessionChanges(sessions []*claude.Session) {
 			quiet = append(quiet, fmt.Sprintf("SESSIONS %s: %s (quiet: watch.quietSessions)", c.what, quoted(held)))
 		}
 	}
-	w.Host.logQuiet(quiet...)
+	w.Host.LogQuiet(quiet...)
 	w.Sessions = cur
 }
 
@@ -1550,7 +1550,7 @@ func quoted(names []string) string {
 // short-lived ones in watch.quietSessions.
 func (w *Watcher) quietSessions(names []string) (loud, quiet []string) {
 	for _, n := range names {
-		if slices.ContainsFunc(w.Host.cfg.Watch.QuietSessions, func(p string) bool { return alerts.Glob(p, n) }) {
+		if slices.ContainsFunc(w.Host.Cfg().Watch.QuietSessions, func(p string) bool { return alerts.Glob(p, n) }) {
 			quiet = append(quiet, n)
 		} else {
 			loud = append(loud, n)
@@ -1570,7 +1570,7 @@ func (w *Watcher) Pending(ctx context.Context, sessions []*claude.Session) {
 	if ctx.Err() != nil {
 		return
 	}
-	st, err := w.Host.readSnapshot()
+	st, err := w.Host.ReadSnapshot()
 	if err != nil {
 		w.Fail("state-read", "cannot read the state: %v", err)
 		return
@@ -1595,9 +1595,9 @@ func (w *Watcher) Pending(ctx context.Context, sessions []*claude.Session) {
 	if w.Standby {
 		if !w.guideRecovery {
 			w.GuideGone(ctx, st, sessions)
-			w.ResumeRestarted(ctx, guideRole, st, sessions)
+			w.ResumeRestarted(ctx, Cmd.GuideRole(), st, sessions)
 		}
-		for _, rl := range roles {
+		for _, rl := range Cmd.Roles() {
 			w.RelayOverdue(ctx, rl, st, sessions)
 		}
 		w.importRows(ctx, st)
@@ -1639,7 +1639,7 @@ func (w *Watcher) Pending(ctx context.Context, sessions []*claude.Session) {
 		return
 	}
 	signedIn := ProbeLogins(ctx, st.Notes)
-	probed := ProbeHoldLifts(ctx, st.Holds, w.Host.now)
+	probed := ProbeHoldLifts(ctx, st.Holds, w.Host.Now())
 	if ctx.Err() != nil {
 		return
 	}
@@ -1650,7 +1650,7 @@ func (w *Watcher) Pending(ctx context.Context, sessions []*claude.Session) {
 			return nil
 		}
 		if w.LoopOwned {
-			if err := w.Host.loopGitHub(ctx, "watch", readRefs); err != nil {
+			if err := w.Host.LoopGitHub(ctx, "watch", readRefs); err != nil {
 				over, kept = nil, nil
 			}
 		} else {
@@ -1668,12 +1668,12 @@ func (w *Watcher) Pending(ctx context.Context, sessions []*claude.Session) {
 		w.wouldOvertake(st, over, kept)
 		over, kept = nil, nil
 	}
-	githubHeld := loop.BoardBudgetLow(st.Budget, w.Host.cfg.GitHub.Floor, w.Host.now) || w.Host.resetFirst(st)
+	githubHeld := loop.BoardBudgetLow(st.Budget, w.Host.Cfg().GitHub.Floor, w.Host.Now()) || w.Host.ResetFirst(st)
 	var found map[int]checkResult
 	if w.LoopOwned {
-		found = w.Host.loopTimerChecks(ctx, st.Timers, w.Host.now, githubHeld)
+		found = w.Host.LoopTimerChecks(ctx, st.Timers, w.Host.Now(), githubHeld)
 	} else {
-		found = checkTimers(ctx, st.Timers, w.Host.now, githubHeld)
+		found = Cmd.CheckTimers(ctx, st.Timers, w.Host.Now(), githubHeld)
 	}
 	if ctx.Err() != nil {
 		return
@@ -1695,21 +1695,21 @@ func (w *Watcher) Pending(ctx context.Context, sessions []*claude.Session) {
 		lines, evs := CloseProbed(st, signedIn)
 		hl, he := LiftProbed(st, probed)
 		lines, evs = append(lines, hl...), append(evs, he...)
-		nl, ne, nd := closeDefaulted(st, w.Host.cfg.Guide.Person, WatchParty, w.Host.now)
+		nl, ne, nd := Cmd.CloseDefaulted(st, w.Host.Cfg().Guide.Person, WatchParty, w.Host.Now())
 		lines, evs, defaulted = append(lines, nl...), append(evs, ne...), nd
 		overtaken = heldAmong(st.Notes, over)
 		ol, oe := closeOvertaken(st, over, WatchParty)
 		lines, evs = append(lines, ol...), append(evs, oe...)
 		ol, oe = keepOpen(st, kept, WatchParty)
 		lines, evs = append(lines, ol...), append(evs, oe...)
-		kl, ke := MarkResumable(st, w.Host.recheckLeaseParks(st, parks), w.Host.cfg.Agents.AutoResume, w.Host.now)
+		kl, ke := MarkResumable(st, w.Host.RecheckLeaseParks(st, parks), w.Host.Cfg().Agents.AutoResume, w.Host.Now())
 		lines, evs = append(lines, kl...), append(evs, ke...)
-		tl, te, tf, touched := settleTimersMatching(st, found, w.Host.now, w.Host.cfg.Watch.Interval.Duration, settles)
+		tl, te, tf, touched := Cmd.SettleTimersMatching(st, found, w.Host.Now(), w.Host.Cfg().Watch.Interval.Duration, settles)
 		lines, evs, fires = append(lines, tl...), append(evs, te...), tf
 		seen := touched
-		pl, pe := FirePending(st, sessions, w.Host.now)
+		pl, pe := FirePending(st, sessions, w.Host.Now())
 		lines, evs = append(lines, pl...), append(evs, pe...)
-		ppl, ppe := ParkedNews(st, w.Host.cfg.Guide.Person, w.Host.now)
+		ppl, ppe := ParkedNews(st, w.Host.Cfg().Guide.Person, w.Host.Now())
 		lines, evs = append(lines, ppl...), append(evs, ppe...)
 		return lines, evs, seen || len(lines) > 0 || len(evs) > 0
 	}
@@ -1719,15 +1719,15 @@ func (w *Watcher) Pending(ctx context.Context, sessions []*claude.Session) {
 	var lines []string
 	var due []dueItem
 	var verdicts []state.WorkerReport
-	err = w.Host.store.Update(func(st *state.State) ([]state.Event, error) {
+	err = w.Host.Store().Update(func(st *state.State) ([]state.Event, error) {
 		var evs []state.Event
 		verdicts = slices.DeleteFunc(slices.Clone(st.WorkerReports), func(r state.WorkerReport) bool { return r.TellTo == (state.Party{}) })
 		lines, evs, _ = fire(st)
 		for _, l := range lines {
-			evs = append(evs, event(WatchParty, "watch.pending", "%s", l))
+			evs = append(evs, Cmd.Event(WatchParty, "watch.pending", "%s", l))
 		}
 		w.Records = st.Records
-		due = firedNow(st, w.Host.now)
+		due = firedNow(st, w.Host.Now())
 		return evs, nil
 	})
 	if err != nil {
@@ -1747,7 +1747,7 @@ func (w *Watcher) Pending(ctx context.Context, sessions []*claude.Session) {
 	}
 	for _, f := range fires {
 		if f.T.Wake == "" && f.T.Run == "" {
-			w.Notify(ctx, notify.Due, fmt.Sprintf("timer#%d", f.T.ID), fmt.Sprintf("beekeeper: timer #%d: %s", f.T.ID, truncate(f.Reason, 60)), truncate(f.T.What, 200))
+			w.Notify(ctx, notify.Due, fmt.Sprintf("timer#%d", f.T.ID), fmt.Sprintf("beekeeper: timer #%d: %s", f.T.ID, Cmd.Truncate(f.Reason, 60)), Cmd.Truncate(f.T.What, 200))
 		}
 	}
 	w.ActTimers(ctx, fires)
@@ -1767,7 +1767,7 @@ func (w *Watcher) Pending(ctx context.Context, sessions []*claude.Session) {
 // emitReleased releases the board items the closed decision n held and
 // says so, one line each.
 func (w *Watcher) emitReleased(ctx context.Context, n *state.Note, how string) {
-	for _, l := range w.Host.release(ctx, WatchParty, n, how) {
+	for _, l := range w.Host.Release(ctx, WatchParty, n, how) {
 		w.EmitNow("pending", "%s", l)
 	}
 }
@@ -1782,7 +1782,7 @@ func (w *Watcher) noteAnswers(st *state.State) {
 	prev := w.openNotes
 	w.openNotes = open
 	if prev == nil {
-		w.answersSince = w.Host.now
+		w.answersSince = w.Host.Now()
 		return
 	}
 	closed := false
@@ -1793,14 +1793,14 @@ func (w *Watcher) noteAnswers(st *state.State) {
 		return
 	}
 	since := w.answersSince
-	evs, err := w.Host.store.Events(0, func(e state.Event) bool { return e.Verb == answerRecorded && e.At.After(since) })
+	evs, err := w.Host.Store().Events(0, func(e state.Event) bool { return e.Verb == answerRecorded && e.At.After(since) })
 	if err != nil {
 		return // the next close reads them again
 	}
 	for _, e := range evs {
 		w.answersSince = e.At
-		if an, ok := parseAnswered(e); ok && an.ID != 0 && prev[an.ID] {
-			w.EmitNow("pending", "%s", answeredLine(an.ID, cmp.Or(e.By.Person, e.By.Name), truncate(an.Answer, 300)))
+		if an, ok := Cmd.ParseAnswered(e); ok && an.ID != 0 && prev[an.ID] {
+			w.EmitNow("pending", "%s", Cmd.AnsweredLine(an.ID, cmp.Or(e.By.Person, e.By.Name), Cmd.Truncate(an.Answer, 300)))
 		}
 	}
 }
@@ -1808,23 +1808,23 @@ func (w *Watcher) noteAnswers(st *state.State) {
 // Refusals reports upstream refusals and recovered hook panics since the
 // last reading. The first reading establishes a baseline and says none.
 func (w *Watcher) Refusals() {
-	evs, err := w.Host.store.Follow("watch.refused", func(e state.Event) bool { return e.Verb == verbHookRefused || e.Verb == "hook.panic" })
+	evs, err := w.Host.Store().Follow("watch.refused", func(e state.Event) bool { return e.Verb == verbHookRefused || e.Verb == "hook.panic" })
 	if err != nil {
 		return // the next reading reads them again
 	}
 	since := w.RefusedSince
 	if since.IsZero() {
-		w.RefusedSince = w.Host.now
+		w.RefusedSince = w.Host.Now()
 		return
 	}
 	for _, e := range evs {
 		if e.At.After(since) {
 			w.RefusedSince = e.At
 			if e.Verb == "hook.panic" {
-				w.EmitNow("hook.panic", "HOOK PANIC %s", truncate(e.Detail, 400))
+				w.EmitNow("hook.panic", "HOOK PANIC %s", Cmd.Truncate(e.Detail, 400))
 				continue
 			}
-			w.EmitNow("refused", "REFUSED %s: %s", cmp.Or(e.By.Name, e.By.Session), truncate(e.Detail, 400))
+			w.EmitNow("refused", "REFUSED %s: %s", cmp.Or(e.By.Name, e.By.Session), Cmd.Truncate(e.Detail, 400))
 		}
 	}
 }
@@ -1839,30 +1839,30 @@ func (w *Watcher) StoppedAgents(st *state.State, sessions []*claude.Session) {
 		if st.Report.Running() && ag.Is(st.Report.Party) {
 			continue // the reporter's turn ended: tendReporter ends it, nobody resumes it
 		}
-		if keptBy(st, ag, w.Host.now) != "" {
+		if Cmd.KeptBy(st, ag, w.Host.Now()) != "" {
 			continue // parked on purpose: a person or its timer brings it back
 		}
 		k := cmp.Or(ag.Session, ag.Name)
-		last, gone := goneAgent(w.Host.cfg, st, sessions, ag, w.Host.cfg.Agents.StaleAfter.Duration, w.Host.now)
+		last, gone := Cmd.GoneAgent(w.Host.Cfg(), st, sessions, ag, w.Host.Cfg().Agents.StaleAfter.Duration, w.Host.Now())
 		if gone {
 			k += "/gone"
 		}
 		stopped[k] = true
 		if !w.stopped[k] {
-			hint := resumeHint(ag)
-			switch on := parkedOn(waitsOf(st.Records, ag), w.Host.cfg.Guide.Person); {
+			hint := Cmd.ResumeHint(ag)
+			switch on := Cmd.ParkedOn(Cmd.WaitsOf(st.Records, ag), w.Host.Cfg().Guide.Person); {
 			case ag.Undelivered != "":
 				hint = fmt.Sprintf("task not delivered: %s; beekeeper agents wake %q <message> delivers it", ag.Undelivered, ag.Name)
-			case ag.Import.Pending(w.Host.now):
-				hint = importStatus(ag, w.Host.now)
+			case ag.Import.Pending(w.Host.Now()):
+				hint = Cmd.ImportStatus(ag, w.Host.Now())
 			case on != "":
 				hint = fmt.Sprintf("parked on a person: %s; their answer resumes it", on)
 			case resumedForTask(ag):
-				hint = fmt.Sprintf("ended on a wait again after its resume at %s on %s: %s", clock(w.Host.now, ag.ResumedWait), ag.ResumedOn, hint)
+				hint = fmt.Sprintf("ended on a wait again after its resume at %s on %s: %s", Cmd.Clock(w.Host.Now(), ag.ResumedWait), ag.ResumedOn, hint)
 			}
 			if gone {
 				hint = goneActivityPrefix + last.UTC().Format(time.RFC3339) + "; doctor retires it; " + hint
-				if qerr := agyQuotaError(w.Host.cfg, ag); qerr != nil {
+				if qerr := Cmd.AgyQuotaError(w.Host.Cfg(), ag); qerr != nil {
 					hint = qerr.Error() + "; slot freed; doctor retires it and supervisor re-queues its task"
 				}
 			}
@@ -1883,13 +1883,13 @@ func (w *Watcher) ImportWaits(st *state.State) {
 	waits := map[string]time.Time{}
 	var now []string
 	for _, ag := range st.Agents {
-		if !ag.Import.Pending(w.Host.now) {
+		if !ag.Import.Pending(w.Host.Now()) {
 			continue
 		}
 		k := cmp.Or(ag.Session, ag.Name)
 		waits[k] = ag.Import.Since
 		if !w.waits[k].Equal(ag.Import.Since) {
-			now = append(now, fmt.Sprintf("%q (%s)", ag.Name, importStatus(ag, w.Host.now)))
+			now = append(now, fmt.Sprintf("%q (%s)", ag.Name, Cmd.ImportStatus(ag, w.Host.Now())))
 		}
 	}
 	w.waits = waits
@@ -1903,11 +1903,11 @@ type dueItem struct{ key, summary, body string }
 
 // defaultedItem is the notification of a decision closed with its default.
 func defaultedItem(n *state.Note) dueItem {
-	body := truncate(n.Text, 200)
+	body := Cmd.Truncate(n.Text, 200)
 	if n.For != "" {
 		body = "for " + n.For + ": " + body
 	}
-	return dueItem{fmt.Sprintf("note#%d", n.ID), fmt.Sprintf("beekeeper: note #%d defaulted", n.ID), body + "\napplied: " + truncate(n.Default, 120)}
+	return dueItem{fmt.Sprintf("note#%d", n.ID), fmt.Sprintf("beekeeper: note #%d defaulted", n.ID), body + "\napplied: " + Cmd.Truncate(n.Default, 120)}
 }
 
 // firedNow are the notes and timers fired at now.
@@ -1915,20 +1915,20 @@ func firedNow(st *state.State, now time.Time) []dueItem {
 	var out []dueItem
 	for _, n := range st.Notes {
 		if n.Fired.Equal(now.UTC()) {
-			body := truncate(n.Text, 200)
+			body := Cmd.Truncate(n.Text, 200)
 			if n.For != "" {
 				body = "for " + n.For + ": " + body
 			}
 			if n.Default != "" {
-				body += "\nif unanswered: " + truncate(n.Default, 120)
+				body += "\nif unanswered: " + Cmd.Truncate(n.Default, 120)
 			}
 			out = append(out, dueItem{fmt.Sprintf("note#%d", n.ID), fmt.Sprintf("beekeeper: note #%d due", n.ID), body + "\nbeekeeper note list"})
 		}
 	}
 	for _, t := range st.Timers {
 		if t.Fired.Equal(now.UTC()) {
-			out = append(out, dueItem{fmt.Sprintf("timer#%d", t.ID), fmt.Sprintf("beekeeper: timer #%d due: %s", t.ID, truncate(t.What, 60)),
-				truncate(t.What, 200) + fmt.Sprintf("\nbeekeeper timer done %d", t.ID)})
+			out = append(out, dueItem{fmt.Sprintf("timer#%d", t.ID), fmt.Sprintf("beekeeper: timer #%d due: %s", t.ID, Cmd.Truncate(t.What, 60)),
+				Cmd.Truncate(t.What, 200) + fmt.Sprintf("\nbeekeeper timer done %d", t.ID)})
 		}
 	}
 	return out
@@ -1951,9 +1951,9 @@ const loopRestartEvery = time.Minute
 // ever started or relayed for it.
 func (w *Watcher) CheckLoop(ctx context.Context, st *state.State) bool {
 	if w.Standby {
-		w.Host.rearmRecovery()
+		w.Host.RearmRecovery()
 	}
-	if line, err := w.Host.checkDeliveries(w.Host.now); err != nil {
+	if line, err := w.Host.CheckDeliveries(w.Host.Now()); err != nil {
 		w.Fail("delivery", "cannot read delivery health")
 	} else {
 		w.Clear("delivery")
@@ -1961,7 +1961,7 @@ func (w *Watcher) CheckLoop(ctx context.Context, st *state.State) bool {
 			w.EmitNow("delivery", "%s", line)
 		}
 	}
-	if line, err := w.Host.checkThroughput(w.Host.now, false); err != nil {
+	if line, err := w.Host.CheckThroughput(w.Host.Now(), false); err != nil {
 		w.Fail(watchThroughputKey, "release throughput unknown: cannot read durable health")
 	} else {
 		w.Clear(watchThroughputKey)
@@ -1971,7 +1971,7 @@ func (w *Watcher) CheckLoop(ctx context.Context, st *state.State) bool {
 	}
 	if w.LoopRunning() {
 		if w.Stand.loopDown {
-			w.EmitNow("supervisor", "SUPERVISOR LOOP BACK: the supervisor loop runs again (down since %s)", clock(w.Host.now, w.Stand.loopSince))
+			w.EmitNow("supervisor", "SUPERVISOR LOOP BACK: the supervisor loop runs again (down since %s)", Cmd.Clock(w.Host.Now(), w.Stand.loopSince))
 		}
 		w.Stand.loopDown, w.Stand.loopSince = false, time.Time{}
 		return true
@@ -1982,18 +1982,18 @@ func (w *Watcher) CheckLoop(ctx context.Context, st *state.State) bool {
 		return false
 	}
 	if w.Stand.loopSince.IsZero() {
-		w.Stand.loopSince = w.Host.now
+		w.Stand.loopSince = w.Host.Now()
 	}
 	restart := ""
 	if w.Standby {
 		restart = w.restartLoop(ctx)
 	}
-	if w.Host.now.Sub(w.Stand.loopSince) < loopDownGrace {
+	if w.Host.Now().Sub(w.Stand.loopSince) < loopDownGrace {
 		return false
 	}
 	key := "loop@" + w.Stand.loopSince.UTC().Format(time.RFC3339)
 	l := fmt.Sprintf("SUPERVISOR LOOP DOWN: the supervisor loop does not run since %s; no pull request is reviewed or merged on its go and no worker starts until it runs (%s)%s",
-		clock(w.Host.now, w.Stand.loopSince), loopServiceHint(), restart)
+		Cmd.Clock(w.Host.Now(), w.Stand.loopSince), Cmd.LoopServiceHint(), restart)
 	if !w.Stand.loopDown {
 		w.Stand.loopDown = true
 		w.EmitNow("supervisor", "%s", l)
@@ -2018,10 +2018,10 @@ func (w *Watcher) restartLoop(ctx context.Context) string {
 	if UnitComingUp(unit.State(ctx)) {
 		return "; its service is starting"
 	}
-	if !w.Stand.loopRestart.IsZero() && w.Host.now.Sub(w.Stand.loopRestart) < loopRestartEvery {
-		return fmt.Sprintf("; the standby watch restarted its service at %s", clock(w.Host.now, w.Stand.loopRestart))
+	if !w.Stand.loopRestart.IsZero() && w.Host.Now().Sub(w.Stand.loopRestart) < loopRestartEvery {
+		return fmt.Sprintf("; the standby watch restarted its service at %s", Cmd.Clock(w.Host.Now(), w.Stand.loopRestart))
 	}
-	w.Stand.loopRestart = w.Host.now
+	w.Stand.loopRestart = w.Host.Now()
 	if err := unit.Start(ctx); err != nil {
 		w.EmitNow("supervisor-restart", "SUPERVISOR LOOP RESTART FAILED: %s: %v (beekeeper install installs it)", loopUnit, err)
 		return fmt.Sprintf("; restarting its service failed: %v", err)
@@ -2052,12 +2052,12 @@ func FirePending(st *state.State, sessions []*claude.Session, now time.Time) ([]
 		if n.For != "" {
 			l += " for " + n.For
 		}
-		l += fmt.Sprintf(", due %s: %s", clock(now, n.Due), truncate(n.Text, 200))
+		l += fmt.Sprintf(", due %s: %s", Cmd.Clock(now, n.Due), Cmd.Truncate(n.Text, 200))
 		if n.Default != "" {
-			l += "; if unanswered: " + truncate(n.Default, 120)
+			l += "; if unanswered: " + Cmd.Truncate(n.Default, 120)
 		}
 		lines = append(lines, l)
-		evs = append(evs, event(WatchParty, "note.due", "#%d %s", n.ID, n.Text))
+		evs = append(evs, Cmd.Event(WatchParty, "note.due", "#%d %s", n.ID, n.Text))
 	}
 	for i := range st.Timers {
 		t := &st.Timers[i]
@@ -2065,22 +2065,22 @@ func FirePending(st *state.State, sessions []*claude.Session, now time.Time) ([]
 			continue
 		}
 		t.Fired = now.UTC()
-		lines = append(lines, fmt.Sprintf("TIMER: #%d due %s: %s (beekeeper timer done %d)", t.ID, clock(now, t.Due), truncate(t.What, 200), t.ID))
-		evs = append(evs, event(WatchParty, "timer.due", "#%d %s", t.ID, t.What))
+		lines = append(lines, fmt.Sprintf("TIMER: #%d due %s: %s (beekeeper timer done %d)", t.ID, Cmd.Clock(now, t.Due), Cmd.Truncate(t.What, 200), t.ID))
+		evs = append(evs, Cmd.Event(WatchParty, "timer.due", "#%d %s", t.ID, t.What))
 	}
 	for i := range st.Records {
 		r := &st.Records[i]
 		_, live := claude.Live(sessions, r.Session)
 		if live && !r.Ended.IsZero() {
 			r.Ended = time.Time{} // resumed: its next end is reported again
-			evs = append(evs, event(WatchParty, "session.resumed", "%s: %s", r.Session.Name, recordText(*r)))
+			evs = append(evs, Cmd.Event(WatchParty, "session.resumed", "%s: %s", r.Session.Name, Cmd.RecordText(*r)))
 		}
-		if live || !r.Ended.IsZero() || rosterKept(st, r.Session, now) != "" {
+		if live || !r.Ended.IsZero() || Cmd.RosterKept(st, r.Session, now) != "" {
 			continue
 		}
 		r.Ended = now.UTC()
-		lines = append(lines, fmt.Sprintf("SESSION ENDED: %q, which %s: re-query %s", r.Session.Name, truncate(recordText(*r), 200), r.Issue))
-		evs = append(evs, event(WatchParty, "session.ended", "%s: %s", r.Session.Name, recordText(*r)))
+		lines = append(lines, fmt.Sprintf("SESSION ENDED: %q, which %s: re-query %s", r.Session.Name, Cmd.Truncate(Cmd.RecordText(*r), 200), r.Issue))
+		evs = append(evs, Cmd.Event(WatchParty, "session.ended", "%s: %s", r.Session.Name, Cmd.RecordText(*r)))
 	}
 	for _, r := range st.WorkerReports {
 		lines = append(lines, reportLines(r)...)
@@ -2096,7 +2096,7 @@ func (w *Watcher) TellReviewVerdicts(ctx context.Context, reports []state.Worker
 	for _, r := range reports {
 		to := cmp.Or(r.TellTo.Session, r.TellTo.HostSession, r.TellTo.Name)
 		msg := fmt.Sprintf("The desk review %q reports:\n%s", r.By.Name, r.Text)
-		if err := w.Host.wakeAgent(ctx, WatchParty, to, msg, ""); err != nil {
+		if err := w.Host.WakeAgent(ctx, WatchParty, to, msg, ""); err != nil {
 			w.EmitNow("pending", "REVIEW VERDICT NOT DELIVERED to %q from %q: %v", r.TellTo.Name, r.By.Name, err)
 		}
 	}
@@ -2109,16 +2109,16 @@ func reportLines(r state.WorkerReport) []string {
 	if r.Text != "" {
 		l := fmt.Sprintf("WORKER REPORT by %q", r.By.Name)
 		if r.Task != "" {
-			l += " (task: " + truncate(r.Task, 80) + ")"
+			l += " (task: " + Cmd.Truncate(r.Task, 80) + ")"
 		}
-		lines = append(lines, l+": "+truncate(r.Text, 2000))
+		lines = append(lines, l+": "+Cmd.Truncate(r.Text, 2000))
 	}
 	for _, p := range r.Problems {
 		next := "file it and hand it to a worker"
 		if superloop.Filed(p) {
 			next = "filed; hand it to a worker"
 		}
-		lines = append(lines, fmt.Sprintf("PROBLEM FOUND by %q: %s; %s", r.By.Name, truncate(p, 400), next))
+		lines = append(lines, fmt.Sprintf("PROBLEM FOUND by %q: %s; %s", r.By.Name, Cmd.Truncate(p, 400), next))
 	}
 	return lines
 }
@@ -2127,13 +2127,13 @@ func reportLines(r state.WorkerReport) []string {
 // waiting on a person's word. Operational targets and untargeted waits do
 // not become person waits merely because their descriptions mention a person.
 func WatchParkOnPerson(p *state.Park, person string) bool {
-	if _, note := parkNote(p.On); note {
+	if _, note := Cmd.ParkNote(p.On); note {
 		return ParkOnPerson(p, person)
 	}
-	if _, _, note := parkCentralNote(p.On); note {
+	if _, _, note := Cmd.ParkCentralNote(p.On); note {
 		return ParkOnPerson(p, person)
 	}
-	if _, ref := parseRef(p.On); !ref {
+	if _, ref := Cmd.ParseRef(p.On); !ref {
 		return false
 	}
 	return ParkOnPerson(p, person)
@@ -2150,16 +2150,16 @@ func ParkOnPerson(p *state.Park, person string) bool {
 	if strings.Contains(strings.ToLower(p.Waits), "desk review") {
 		return false
 	}
-	if _, note := parkNote(p.On); note {
+	if _, note := Cmd.ParkNote(p.On); note {
 		return true
 	}
-	if _, _, note := parkCentralNote(p.On); note {
+	if _, _, note := Cmd.ParkCentralNote(p.On); note {
 		return true
 	}
-	if _, lease := parkLease(p.On); lease {
+	if _, lease := Cmd.ParkLease(p.On); lease {
 		return false
 	}
-	return personWaitWords.MatchString(p.Waits) || namesPerson(p.Waits, person)
+	return personWaitWords.MatchString(p.Waits) || Cmd.NamesPerson(p.Waits, person)
 }
 
 // ParkedNews says once per park which agents parked on a person (a note,
@@ -2175,18 +2175,18 @@ func ParkedNews(st *state.State, person string, now time.Time) ([]string, []stat
 		if p == nil || !p.Told.IsZero() {
 			continue
 		}
-		if res, ok := parkLease(p.On); ok {
+		if res, ok := Cmd.ParkLease(p.On); ok {
 			p.Told = now.UTC()
-			lines = append(lines, fmt.Sprintf("PARKED ON A LEASE: %q %s; %s", ag.Name, parkedText(p, now), leaseQueueText(st, ag.Party, res)))
-			evs = append(evs, event(WatchParty, "agents.parked-on-lease", "%s: %s", ag.Name, res))
+			lines = append(lines, fmt.Sprintf("PARKED ON A LEASE: %q %s; %s", ag.Name, Cmd.ParkedText(p, now), leaseQueueText(st, ag.Party, res)))
+			evs = append(evs, Cmd.Event(WatchParty, "agents.parked-on-lease", "%s: %s", ag.Name, res))
 			continue
 		}
 		if !WatchParkOnPerson(p, person) {
 			continue
 		}
 		p.Told = now.UTC()
-		lines = append(lines, fmt.Sprintf("PARKED ON A PERSON: %q %s; tell the guide, who tells %s", ag.Name, parkedText(p, now), cmp.Or(person, "the person")))
-		evs = append(evs, event(WatchParty, "agents.parked-on-person", "%s: %s", ag.Name, p.Waits))
+		lines = append(lines, fmt.Sprintf("PARKED ON A PERSON: %q %s; tell the guide, who tells %s", ag.Name, Cmd.ParkedText(p, now), cmp.Or(person, "the person")))
+		evs = append(evs, Cmd.Event(WatchParty, "agents.parked-on-person", "%s: %s", ag.Name, p.Waits))
 	}
 	return lines, evs
 }
@@ -2207,32 +2207,32 @@ func leaseQueueText(st *state.State, party state.Party, res string) string {
 
 // Runaways runs in the command, which holds what it needs (watchRunaways).
 func (w *Watcher) Runaways(sessions []*claude.Session, t *proc.Table) {
-	watchRunaways(w, sessions, t)
+	Cmd.WatchRunaways(w, sessions, t)
 }
 
 // SlotHolds says each build slot a run has held longer than
 // memcap.holdBound: one SLOT HELD LONG line naming the slot, its holder and
 // the command when it starts, one ENDED line when the slot is free again.
 func (w *Watcher) SlotHolds() {
-	bound := w.Host.cfg.Memcap.HoldBound.Duration
+	bound := w.Host.Cfg().Memcap.HoldBound.Duration
 	if bound <= 0 {
 		return
 	}
 	found := map[string]bool{}
-	for _, s := range machine.ReadSlots(w.Host.slotView()) {
+	for _, s := range machine.ReadSlots(w.Host.SlotView()) {
 		h, ok := guard.ParseHolder(s.Holder)
-		if s.Free || !ok || h.Since.IsZero() || w.Host.now.Sub(h.Since) < bound {
+		if s.Free || !ok || h.Since.IsZero() || w.Host.Now().Sub(h.Since) < bound {
 			continue
 		}
 		key := fmt.Sprintf("slothold:%d:%d:%s", s.N, h.PID, h.Since.UTC().Format(time.RFC3339))
 		found[key] = true
 		w.Emit(key, "SLOT HELD LONG: slot %d past memcap.holdBound (%s), held by %s — a benchmark or a lab proof runs with beekeeper run --class benchmark|lab, which takes no slot",
-			s.N, dur(bound), guard.HolderText(s.Holder, w.Host.now))
+			s.N, Cmd.Dur(bound), guard.HolderText(s.Holder, w.Host.Now()))
 	}
 	w.ClearMissing("slothold:", found)
 }
 
 // StaleLeases runs in the command, which holds what it needs (watchStaleLeases).
 func (w *Watcher) StaleLeases(ctx context.Context, sessions []*claude.Session) {
-	watchStaleLeases(w, ctx, sessions)
+	Cmd.WatchStaleLeases(w, ctx, sessions)
 }

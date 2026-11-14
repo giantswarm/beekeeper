@@ -20,7 +20,7 @@ var ReadParkRelease = func(ctx context.Context, repo, version string) ([]byte, e
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	c := proc.CommandContext(ctx, merge.Tool, "release", "wait", repo, version, "--timeout", "5s") //nolint:gosec // validated repository and version, no shell
-	c.Env = devctlCommandEnv("")
+	c.Env = Cmd.DevctlCommandEnv("")
 	raw, err := c.Output()
 	var exit *proc.ExitError
 	if errors.As(err, &exit) && exit.ExitCode() == 2 {
@@ -31,18 +31,18 @@ var ReadParkRelease = func(ctx context.Context, repo, version string) ([]byte, e
 }
 
 func (w *Watcher) settledReleaseParks(ctx context.Context, st *state.State) []settledPark {
-	if loop.BoardBudgetLow(st.Budget, w.Host.cfg.GitHub.Floor, w.Host.now) {
+	if loop.BoardBudgetLow(st.Budget, w.Host.Cfg().GitHub.Floor, w.Host.Now()) {
 		return nil
 	}
 	checked := map[string]bool{}
 	available := map[string]bool{}
 	var out []settledPark
-	for _, ag := range parkedAgents(st) {
+	for _, ag := range Cmd.ParkedAgents(st) {
 		p := ag.Park
 		if p == nil || !p.Resumable.IsZero() {
 			continue
 		}
-		repo, version, ok := parseReleaseTarget(p.On)
+		repo, version, ok := Cmd.ParseReleaseTarget(p.On)
 		if !ok {
 			continue
 		}
@@ -65,7 +65,7 @@ func (w *Watcher) settledReleaseParks(ctx context.Context, st *state.State) []se
 			}
 			var err error
 			if w.LoopOwned {
-				err = w.Host.loopGitHub(ctx, "park-release", read)
+				err = w.Host.LoopGitHub(ctx, "park-release", read)
 			} else {
 				err = read()
 			}

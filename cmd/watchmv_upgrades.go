@@ -18,12 +18,12 @@ import (
 // holds it, so its end and the hold's lift are said within one interval.
 // Half an interval of slack lets a reading due at a tick be read at it.
 func (w *Watcher) upgradeFresh(st *state.State, now time.Time) func(string) time.Duration {
-	interval := w.Host.cfg.Watch.Interval.Duration
+	interval := w.Host.Cfg().Watch.Interval.Duration
 	return func(installation string) time.Duration {
 		if _, held := upgrade.Held(st, installation, now); held || w.Upgrades.Running(installation) {
 			return interval / 2
 		}
-		return w.Host.cfg.Upgrades.Every.Duration - interval/2
+		return w.Host.Cfg().Upgrades.Every.Duration - interval/2
 	}
 }
 
@@ -42,8 +42,8 @@ type upgradeBeat struct {
 // slowReads intervals while the machine is strained.
 func (w *Watcher) upgradeWatchLive(now time.Time) bool {
 	var b upgradeBeat
-	found, err := w.Host.store.ReadFile(upgradeWatchFile, &b)
-	return found && err == nil && now.Sub(b.At) < (SlowReads+1)*w.Host.cfg.Watch.Interval.Duration
+	found, err := w.Host.Store().ReadFile(upgradeWatchFile, &b)
+	return found && err == nil && now.Sub(b.At) < (SlowReads+1)*w.Host.Cfg().Watch.Interval.Duration
 }
 
 // UpgradeCycle makes the upgrade holds those of the running upgrades. The
@@ -54,7 +54,7 @@ func (w *Watcher) upgradeWatchLive(now time.Time) bool {
 // named once per watch (sayNoContext). The standby watch runs it only while no
 // supervisor's watch does, and says so once.
 func (w *Watcher) UpgradeCycle(ctx context.Context) {
-	w.UpgradeCycleRead(ctx, w.Host.upgradeStatuses)
+	w.UpgradeCycleRead(ctx, w.Host.UpgradeStatuses)
 }
 
 func (w *Watcher) UpgradeCycleRead(ctx context.Context, read func(context.Context, *state.State, time.Time, upgrade.Readings, func(string) time.Duration) []upgrade.Status) {
@@ -66,13 +66,13 @@ func (w *Watcher) UpgradeCycleRead(ctx context.Context, read func(context.Contex
 			return
 		}
 	} else {
-		_ = w.Host.store.WriteFile(upgradeWatchFile, upgradeBeat{At: now})
+		_ = w.Host.Store().WriteFile(upgradeWatchFile, upgradeBeat{At: now})
 	}
 	// Serialize observation and reconciliation across watches without holding
 	// the desk state lock during Kubernetes reads. Those reads can take minutes;
 	// timers, stop requests and other desk writers must remain able to settle.
 	var statuses []upgrade.Status
-	if dir := w.Host.store.Dir(); dir != "" {
+	if dir := w.Host.Store().Dir(); dir != "" {
 		cycle := flock.New(filepath.Join(dir, "upgrades-cycle.lock"))
 		ok, err := cycle.TryLockContext(ctx, 10*time.Millisecond)
 		if err != nil || !ok {
@@ -82,7 +82,7 @@ func (w *Watcher) UpgradeCycleRead(ctx context.Context, read func(context.Contex
 			return
 		}
 		defer func() { _ = cycle.Unlock() }()
-		observed, err := w.Host.store.Read()
+		observed, err := w.Host.Store().Read()
 		if err != nil {
 			w.Fail("upgrades", "UPGRADES unknown: the state does not load (%v)", err)
 			return
@@ -104,10 +104,10 @@ func (w *Watcher) UpgradeCycleRead(ctx context.Context, read func(context.Contex
 			}
 			b, e := upgrade.Reconcile(st, s.Installation, s.Upgrades, at, WatchParty)
 			for _, h := range b {
-				ev = append(ev, event(WatchParty, "hold.set", "%s until the upgrade ends: %s", h.Target, h.Reason))
+				ev = append(ev, Cmd.Event(WatchParty, "hold.set", "%s until the upgrade ends: %s", h.Target, h.Reason))
 			}
 			for _, h := range e {
-				ev = append(ev, event(WatchParty, "hold.lift", "%s: the upgrade ended", h.Target))
+				ev = append(ev, Cmd.Event(WatchParty, "hold.lift", "%s: the upgrade ended", h.Target))
 			}
 			begun, ended = append(begun, b...), append(ended, e...)
 		}
@@ -124,8 +124,8 @@ func (w *Watcher) UpgradeCycleRead(ctx context.Context, read func(context.Contex
 		return ev, changed
 	}
 	needUpdate := true
-	if w.Host.store.Dir() != "" {
-		current, readErr := w.Host.store.Read()
+	if w.Host.Store().Dir() != "" {
+		current, readErr := w.Host.Store().Read()
 		if readErr != nil {
 			w.Fail("upgrades", "UPGRADES unknown: the state does not load (%v)", readErr)
 			return
@@ -134,9 +134,9 @@ func (w *Watcher) UpgradeCycleRead(ctx context.Context, read func(context.Contex
 	}
 	var err error
 	if needUpdate {
-		err = w.Host.store.Update(func(st *state.State) ([]state.Event, error) {
+		err = w.Host.Store().Update(func(st *state.State) ([]state.Event, error) {
 			now = w.Clk().Now()
-			if w.Host.store.Dir() == "" {
+			if w.Host.Store().Dir() == "" {
 				// Remote stores have no shared filesystem lock; retain observation
 				// on each resource-version retry instead of reusing a stale reading.
 				statuses = read(ctx, st, now, w.Upgrades, w.upgradeFresh(st, now))

@@ -18,7 +18,7 @@ type freeMark struct {
 // TMPFS line.
 func (w *Watcher) ReadFreeMark() freeMark {
 	var m freeMark
-	if found, _ := w.Host.store.ReadFile(freeFile, &m); found {
+	if found, _ := w.Host.Store().ReadFile(freeFile, &m); found {
 		w.LastFree.Store(&m)
 	}
 	return m
@@ -26,18 +26,18 @@ func (w *Watcher) ReadFreeMark() freeMark {
 
 // autoFree runs in the command, which holds what it needs (watchAutoFree).
 func (w *Watcher) autoFree(now time.Time) {
-	watchAutoFree(w, now)
+	Cmd.WatchAutoFree(w, now)
 }
 
 // FreeDue runs in the command, which holds what it needs (watchFreeDue).
 func (w *Watcher) FreeDue(read func() (free.Machine, error), now time.Time, every time.Duration) {
-	watchFreeDue(w, read, now, every)
+	Cmd.WatchFreeDue(w, read, now, every)
 }
 
 // LastFreeNote says, for the TMPFS line, when the automatic free ran last
 // and what it freed.
 func (w *Watcher) LastFreeNote() string {
-	if w.Host.cfg.Doctor.FreeEvery.Duration <= 0 {
+	if w.Host.Cfg().Doctor.FreeEvery.Duration <= 0 {
 		return "the automatic free is off (doctor.freeEvery)"
 	}
 	m := w.LastFree.Load()

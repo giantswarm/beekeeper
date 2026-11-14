@@ -270,7 +270,7 @@ type stateHoldersMark struct {
 // another watch made says that listing's condition instead of walking
 // again.
 func watchStateHolders(w *Watcher, now time.Time) {
-	cfg := w.Host.cfg.Disk.Holders
+	cfg := watchApp(w.Host).cfg.Disk.Holders
 	if !w.HoldersOn || cfg.WarnGiB < 0 || !w.Holdering.CompareAndSwap(false, true) {
 		return
 	}
@@ -278,19 +278,19 @@ func watchStateHolders(w *Watcher, now time.Time) {
 		w.Holdering.Store(false)
 		return
 	}
-	d := *w.Host
+	d := *watchApp(w.Host)
 	d.now = now
 	w.Bg.Add(1)
 	go func() {
 		defer w.Bg.Done()
 		defer w.Holdering.Store(false)
 		var m stateHoldersMark
-		if _, _ = w.Host.store.ReadFile(stateHoldersFile, &m); now.Sub(m.At) < cfg.Every.Duration {
+		if _, _ = watchApp(w.Host).store.ReadFile(stateHoldersFile, &m); now.Sub(m.At) < cfg.Every.Duration {
 			w.HoldersNext = m.At.Add(cfg.Every.Duration)
 			w.Check("stateholders", m.On, "%s", m.Line)
 			return
 		}
-		lock := flock.New(filepath.Join(w.Host.store.Dir(), stateHoldersLock))
+		lock := flock.New(filepath.Join(watchApp(w.Host).store.Dir(), stateHoldersLock))
 		if ok, err := lock.TryLock(); err != nil || !ok {
 			w.HoldersNext = now.Add(goCacheRetry)
 			return
@@ -308,7 +308,7 @@ func watchStateHolders(w *Watcher, now time.Time) {
 		if r.err != nil {
 			m.On, m.Line = true, r.unknown()
 		}
-		_ = w.Host.store.WriteFile(stateHoldersFile, m)
+		_ = watchApp(w.Host).store.WriteFile(stateHoldersFile, m)
 		w.Check("stateholders", m.On, "%s", m.Line)
 	}()
 }

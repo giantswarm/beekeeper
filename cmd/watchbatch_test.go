@@ -19,7 +19,7 @@ func batchWatcher(t *testing.T) (*Watcher, *strings.Builder, *fakeClock) {
 	clk := newFakeClock(t)
 	w.Clock = clk
 	w.BatchEvery = 5 * time.Minute
-	w.Host.cfg.Alerts.Team = ourTeam
+	watchApp(w.Host).cfg.Alerts.Team = ourTeam
 	return w, out, clk
 }
 
@@ -49,7 +49,7 @@ func TestWatchBatchKeepsActionsImmediate(t *testing.T) {
 	if strings.Contains(out.String(), "BATCH:") {
 		t.Fatal("action flushed routine items")
 	}
-	evs, err := w.Host.store.Events(0, nil)
+	evs, err := watchApp(w.Host).store.Events(0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +124,7 @@ func TestWatchBatchOtherTeamNotifyAndRecovery(t *testing.T) {
 	if !strings.Contains(out.String(), "ENDED LOW RAM") {
 		t.Fatal("memory recovery delayed")
 	}
-	w.Host.cfg.Alerts.Team = ""
+	watchApp(w.Host).cfg.Alerts.Team = ""
 	w.EmitNow("alerts", "ALERT NEW alpha notify unknown Alert ns/pod")
 	if !strings.Contains(out.String(), "unknown") {
 		t.Fatal("unknown team delayed")

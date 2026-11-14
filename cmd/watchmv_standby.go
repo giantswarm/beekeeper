@@ -88,7 +88,7 @@ func (w *Watcher) firstTurn(ctx context.Context, st *state.State, p state.Party)
 	if ctx.Err() != nil {
 		return true // an unread unit is not evidence that its turn ended
 	}
-	i := agentOfSession(st, p.Session)
+	i := Cmd.AgentOfSession(st, p.Session)
 	reopening := i >= 0 && !st.Agents[i].DesktopTurn.IsZero() && w.Stand.Reopening != nil && w.Stand.Reopening(ctx, p.Session)
 	return reopening || ctx.Err() != nil
 }
@@ -96,14 +96,14 @@ func (w *Watcher) firstTurn(ctx context.Context, st *state.State, p state.Party)
 // GuideGone says once when the guide's CLI stayed gone past its grace with
 // no relay open, and starts its successor (standby watch).
 func (w *Watcher) GuideGone(ctx context.Context, st *state.State, sessions []*claude.Session) {
-	r := guideRole.Get(st)
-	if goneUnrecorded(r, sessions) {
+	r := Cmd.GuideRole().Get(st)
+	if Cmd.GoneUnrecorded(r, sessions) {
 		// The guide's own watch, which records its CLI, went with it: the
 		// standby records since when it is gone, or the grace would start
 		// anew on every poll and no successor would ever start.
-		err := w.Host.store.UpdateWithin(time.Second, func(st *state.State) ([]state.Event, error) {
-			_, evs := guideRole.ObserveCLI(st, sessions, w.Host.now)
-			r = guideRole.Get(st)
+		err := w.Host.Store().UpdateWithin(time.Second, func(st *state.State) ([]state.Event, error) {
+			_, evs := Cmd.GuideRole().ObserveCLI(st, sessions, w.Host.Now())
+			r = Cmd.GuideRole().Get(st)
 			return evs, nil
 		})
 		if err != nil {
@@ -112,19 +112,19 @@ func (w *Watcher) GuideGone(ctx context.Context, st *state.State, sessions []*cl
 		}
 		w.Clear("guide-observe")
 	}
-	sv := readHolder(r, sessions, w.Host.now, w.Host.cfg.Guide.RestartGrace.Duration)
-	if !sv.Down() || relayPending(st, r, w.Host.now) || w.firstTurn(ctx, st, r.Holder.Party) {
+	sv := Cmd.ReadHolder(r, sessions, w.Host.Now(), w.Host.Cfg().Guide.RestartGrace.Duration)
+	if !sv.Down() || Cmd.RelayPending(st, r, w.Host.Now()) || w.firstTurn(ctx, st, r.Holder.Party) {
 		if sv.Live {
 			w.Stand.guideGap = ""
-			w.upAgain(guideRole, r.Holder.Party)
+			w.upAgain(Cmd.GuideRole(), r.Holder.Party)
 		}
 		return
 	}
 	key := r.Holder.Name + "@" + r.Holder.Since.UTC().Format(time.RFC3339)
-	successor := w.standIn(ctx, guideRole, st, r.Holder.Party, key)
+	successor := w.standIn(ctx, Cmd.GuideRole(), st, r.Holder.Party, key)
 	if w.Stand.guideGap != key {
 		w.Stand.guideGap = key
-		w.EmitNow("guide", "GUIDE GONE: %q (guiding since %s) is gone since %s%s", r.Holder.Name, clock(w.Host.now, r.Holder.Since), clock(w.Host.now, sv.Gone), successor)
+		w.EmitNow("guide", "GUIDE GONE: %q (guiding since %s) is gone since %s%s", r.Holder.Name, Cmd.Clock(w.Host.Now(), r.Holder.Since), Cmd.Clock(w.Host.Now(), sv.Gone), successor)
 	}
 }
 
@@ -160,7 +160,7 @@ func (w *Watcher) chain(rl role) *successorChain {
 // start's first turn: a successor whose desktop CLI or headless resume
 // runs, or any holder that is no successor.
 func (w *Watcher) upAgain(rl role, holder state.Party) {
-	if headlessTurn(w.Table, holder.Session) == "first turn" {
+	if Cmd.HeadlessTurn(w.Table, holder.Session) == "first turn" {
 		return
 	}
 	if c := w.Stand.Chains[rl.Name]; c != nil && c.Failures > 0 {
@@ -190,22 +190,22 @@ func (w *Watcher) standIn(ctx context.Context, rl role, st *state.State, holder 
 		return successorStarting
 	}
 	c := w.chain(rl)
-	if started(st, holder) {
+	if Cmd.Started(st, holder) {
 		if c.revived != key && w.Stand.Revive != nil {
 			c.revived = key
-			return w.reviveGone(ctx, rl, holder, w.Host.backgroundAgent(ctx, st, holder))
+			return w.reviveGone(ctx, rl, holder, w.Host.BackgroundAgent(ctx, st, holder))
 		}
 		if c.failed != key {
 			c.failed, c.Failures = key, c.Failures+1
-			c.Next = w.Host.now.Add(successorBackoff << (c.Failures - 1))
+			c.Next = w.Host.Now().Add(successorBackoff << (c.Failures - 1))
 			if c.Failures == 1 {
 				c.note = w.noteFailedSuccessor(rl, holder)
 			}
-			w.EmitNow(rl.Name+"-successor", "%sSUCCESSOR DOWN: %q did not come up%s", rl.Tag, holder.Name, c.outlook(w.Host.now))
+			w.EmitNow(rl.Name+"-successor", "%sSUCCESSOR DOWN: %q did not come up%s", rl.Tag, holder.Name, c.outlook(w.Host.Now()))
 		}
 	}
-	if c.Failures >= maxFailedSuccessors || w.Host.now.Before(c.Next) {
-		return c.outlook(w.Host.now)
+	if c.Failures >= maxFailedSuccessors || w.Host.Now().Before(c.Next) {
+		return c.outlook(w.Host.Now())
 	}
 	return w.succeedGone(ctx, rl, holder)
 }
@@ -219,7 +219,7 @@ func (c *successorChain) outlook(now time.Time) string {
 	if c.Failures >= maxFailedSuccessors {
 		return fmt.Sprintf("; %d successors did not come up, none further starts%s", c.Failures, note)
 	}
-	return fmt.Sprintf("; %d successor(s) did not come up, the next starts at %s%s", c.Failures, clock(now, c.Next), note)
+	return fmt.Sprintf("; %d successor(s) did not come up, the next starts at %s%s", c.Failures, Cmd.Clock(now, c.Next), note)
 }
 
 // reviveGone resumes rl's gone holder headless outside the poll, as
@@ -258,7 +258,7 @@ func (w *Watcher) reviveGone(ctx context.Context, rl role, holder state.Party, b
 
 // noteFailedSuccessor runs in the command, which holds what it needs (watchNoteFailedSuccessor).
 func (w *Watcher) noteFailedSuccessor(rl role, holder state.Party) int {
-	return watchNoteFailedSuccessor(w, rl, holder)
+	return Cmd.WatchNoteFailedSuccessor(w, rl, holder)
 }
 
 // succeedGone starts rl's next run once its holder's CLI stayed gone past
@@ -304,27 +304,27 @@ func (w *Watcher) succeedAsync(ctx context.Context, rl role, holder state.Party,
 // The hand-over is no one's decision; a start that did not begin or failed
 // is tried again after successorBackoff.
 func (w *Watcher) RelayOverdue(ctx context.Context, rl role, st *state.State, sessions []*claude.Session) {
-	cfg, r := rl.Cfg(w.Host.cfg), rl.Get(st)
-	if st.Stop != nil || !PastRelayGrace(r, cfg, w.Host.now) || w.Host.now.Before(w.Stand.overdueNext[rl.Name]) {
+	cfg, r := rl.Cfg(w.Host.Cfg()), rl.Get(st)
+	if st.Stop != nil || !PastRelayGrace(r, cfg, w.Host.Now()) || w.Host.Now().Before(w.Stand.overdueNext[rl.Name]) {
 		return
 	}
-	c := sessionContext(sessions, r.Holder.Party)
+	c := Cmd.SessionContext(sessions, r.Holder.Party)
 	if c < int64(cfg.RelayAt) {
 		return
 	}
 	if w.Stand.overdueNext == nil {
 		w.Stand.overdueNext = map[string]time.Time{}
 	}
-	w.Stand.overdueNext[rl.Name] = w.Host.now.Add(successorBackoff)
-	holder, since := r.Holder.Party, clock(w.Host.now, r.RelayDue.Reported)
+	w.Stand.overdueNext[rl.Name] = w.Host.Now().Add(successorBackoff)
+	holder, since := r.Holder.Party, Cmd.Clock(w.Host.Now(), r.RelayDue.Reported)
 	w.succeedAsync(ctx, rl, holder, func(to state.Party, err error) {
 		if err != nil {
 			w.EmitNow(rl.Name+"-relayed", "%sRELAY FAILED: %q is at %s tokens of context, over %s since its relay due at %s, and its successor did not start: %v",
-				rl.Tag, holder.Name, tokensText(c), tokensText(int64(cfg.RelayAt)), since, err)
+				rl.Tag, holder.Name, Cmd.TokensText(c), Cmd.TokensText(int64(cfg.RelayAt)), since, err)
 			return
 		}
 		w.EmitNow(rl.Name+"-relayed", "%sRELAYED: %q is at %s tokens of context, over %s since its relay due at %s: started %q, whose `beekeeper %s start` takes the role",
-			rl.Tag, holder.Name, tokensText(c), tokensText(int64(cfg.RelayAt)), since, to.Name, rl.Name)
+			rl.Tag, holder.Name, Cmd.TokensText(c), Cmd.TokensText(int64(cfg.RelayAt)), since, to.Name, rl.Name)
 	})
 }
 
@@ -351,8 +351,8 @@ func (w *Watcher) ResumeRestarted(ctx context.Context, rl role, st *state.State,
 	}
 	var restarted []state.Event
 	var sup *state.Supervisor
-	err := w.Host.store.Update(func(st *state.State) ([]state.Event, error) {
-		_, evs := rl.ObserveCLI(st, sessions, w.Host.now)
+	err := w.Host.Store().Update(func(st *state.State) ([]state.Event, error) {
+		_, evs := rl.ObserveCLI(st, sessions, w.Host.Now())
 		restarted, sup = slices.DeleteFunc(slices.Clone(evs), func(e state.Event) bool { return e.Verb != rl.Name+".restart" }), rl.Get(st).Holder
 		return evs, nil
 	})
@@ -379,7 +379,7 @@ func (w *Watcher) headless(pid int) bool {
 		return false
 	}
 	p := w.Table.ByPID[pid]
-	return p != nil && printsTurn(p)
+	return p != nil && Cmd.PrintsTurn(p)
 }
 
 // SendAsync sends one message at a time from the command line, outside the

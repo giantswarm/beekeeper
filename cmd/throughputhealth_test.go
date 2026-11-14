@@ -190,8 +190,8 @@ func TestThroughputLoopAliveStillReports(t *testing.T) {
 	r := newLoopRig(t)
 	w := r.a.newWatcher(false, true)
 	w.LoopOwned = true
-	w.Host.now = r.a.timeNow()
-	_ = r.a.store.WriteFile(throughputObservationFile, throughputObservation{At: w.Host.now})
+	watchApp(w.Host).now = r.a.timeNow()
+	_ = r.a.store.WriteFile(throughputObservationFile, throughputObservation{At: watchApp(w.Host).now})
 	for i := 0; i < 3; i++ {
 		_ = r.a.operationOutcome(runMerge, "tooling", loopURL, false)
 	}

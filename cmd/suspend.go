@@ -39,7 +39,7 @@ func watchSuspends(w *Watcher, ctx context.Context, since time.Time, sessions []
 		if w.SuspendEntry.IsZero() || record.At.Before(w.SuspendEntry) {
 			continue
 		}
-		st, err := w.Host.store.Peek()
+		st, err := watchApp(w.Host).store.Peek()
 		if err != nil {
 			return
 		} // retry the pair on the next poll
@@ -52,5 +52,5 @@ func watchSuspends(w *Watcher, ctx context.Context, since time.Time, sessions []
 		w.SuspendThrough = record.At
 		w.SuspendEntry = time.Time{}
 	}
-	w.SuspendChecked = w.Host.now
+	w.SuspendChecked = watchApp(w.Host).now
 }

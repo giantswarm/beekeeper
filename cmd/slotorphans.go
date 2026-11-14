@@ -45,20 +45,20 @@ func (w *Watcher) SlotOrphans(now time.Time, t *proc.Table) {
 	if w.orphanSince == nil {
 		w.orphanSince = map[string]time.Time{}
 	}
-	dir, n := w.Host.slotView()
+	dir, n := w.Host.SlotView()
 	o := guard.Options{SlotDir: dir}
 	found := map[string]bool{}
 	for i := 1; i <= n; i++ {
-		s := plat.Machine.SlotSlice(o.SlotSlice(i))
+		s := Cmd.Plat().Machine.SlotSlice(o.SlotSlice(i))
 		if s == nil {
 			continue
 		}
 		for _, scope := range s.Scopes {
-			sc := plat.Machine.MemcapScope(scope)
+			sc := Cmd.Plat().Machine.MemcapScope(scope)
 			if sc == nil {
 				continue
 			}
-			pids := plat.Machine.ScopePIDs(sc.Path)
+			pids := Cmd.Plat().Machine.ScopePIDs(sc.Path)
 			if !OrphanedScope(t, pids) {
 				continue
 			}
@@ -76,7 +76,7 @@ func (w *Watcher) SlotOrphans(now time.Time, t *proc.Table) {
 				continue
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), slotStopTimeout)
-			err := plat.Launcher.Stop(ctx, scope)
+			err := Cmd.Plat().Launcher.Stop(ctx, scope)
 			cancel()
 			w.Check(key+".stop", err != nil, "SLOT SCOPE STOP FAILED: %s of slot %d: %v", scope, i, err)
 			if err != nil {
@@ -130,14 +130,14 @@ func OrphanedScope(t *proc.Table, pids []int) bool {
 var StopEmptyHolder = proc.StopIdle
 
 func (w *Watcher) emptySlotHolders(now time.Time, t *proc.Table) {
-	reader, ok := plat.Capper.(interface{ ScopePopulated(string) (bool, error) })
+	reader, ok := Cmd.Plat().Capper.(interface{ ScopePopulated(string) (bool, error) })
 	if !ok {
 		return
 	}
 	if w.emptyHolderSince == nil {
 		w.emptyHolderSince = map[string]time.Time{}
 	}
-	dir, n := w.Host.slotView()
+	dir, n := w.Host.SlotView()
 	found := map[string]bool{}
 	for _, slot := range machine.ReadSlots(dir, n) {
 		h, ok := guard.ParseHolder(slot.Holder)
@@ -156,7 +156,7 @@ func (w *Watcher) emptySlotHolders(now time.Time, t *proc.Table) {
 		scope := h.Scope
 		ready := !h.StartDeadline.IsZero() && !now.Before(h.StartDeadline)
 		if !ready {
-			events, err := w.Host.store.Events(1, func(e state.Event) bool {
+			events, err := w.Host.Store().Events(1, func(e state.Event) bool {
 				unit := guard.RunScope(e.Detail)
 				return e.Verb == guard.VerbStart && !e.At.Before(h.Since) && (strings.HasPrefix(unit, fmt.Sprintf("memcap-%d-", h.PID)) || strings.HasPrefix(unit, fmt.Sprintf("memcap-test-%d-", h.PID)))
 			})
@@ -173,7 +173,7 @@ func (w *Watcher) emptySlotHolders(now time.Time, t *proc.Table) {
 			if err != nil || live {
 				return false
 			}
-			s := plat.Machine.SlotSlice(guard.Options{SlotDir: dir}.SlotSlice(slot.N))
+			s := Cmd.Plat().Machine.SlotSlice(guard.Options{SlotDir: dir}.SlotSlice(slot.N))
 			if s != nil && len(s.Scopes) > 0 {
 				return false
 			}

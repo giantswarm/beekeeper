@@ -159,7 +159,7 @@ func TestExecutionRetirementSurvivesAnUnreachableHost(t *testing.T) {
 	fake.fail = &execution.UnreachableError{Operation: "retire", Cause: errors.New("connection refused")}
 	tick(t, a, w)
 	x := retirementOf(t, a, ref)
-	if x.RevokedAt.IsZero() || !x.RetiredAt.IsZero() || x.HostError == "" || x.Attempts != 1 || !x.NextAttempt.After(w.Host.now) || x.Finished() {
+	if x.RevokedAt.IsZero() || !x.RetiredAt.IsZero() || x.HostError == "" || x.Attempts != 1 || !x.NextAttempt.After(watchApp(w.Host).now) || x.Finished() {
 		t.Fatalf("retirement = %+v", x)
 	}
 	tick(t, a, w)
@@ -167,7 +167,7 @@ func TestExecutionRetirementSurvivesAnUnreachableHost(t *testing.T) {
 		t.Fatalf("a retry ignored its backoff: %d", len(fake.requests))
 	}
 	fake.fail = nil
-	w.Host.now = x.NextAttempt.Add(time.Second)
+	watchApp(w.Host).now = x.NextAttempt.Add(time.Second)
 	tick(t, a, w)
 	done := retirementOf(t, a, ref)
 	if !done.Finished() || done.ID != x.ID || done.HostError != "" || !done.RevokedAt.Equal(x.RevokedAt) {
@@ -197,7 +197,7 @@ func TestExecutionRevocationRetriesWithoutFalseSuccess(t *testing.T) {
 	if err := os.WriteFile(ledger, []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	w.Host.now = x.NextAttempt.Add(time.Second)
+	watchApp(w.Host).now = x.NextAttempt.Add(time.Second)
 	tick(t, a, w)
 	done := retirementOf(t, a, ref)
 	if !done.Finished() || done.RevokeError != "" || len(fake.requests) != 1 {
@@ -279,7 +279,7 @@ func TestExecutionRetirementWaitsForAnOlderHost(t *testing.T) {
 	fake.fail = execution.ErrUnsupported
 	tick(t, a, w)
 	x := retirementOf(t, a, ref)
-	if !x.RetiredAt.IsZero() || x.HostError == "" || !x.NextAttempt.After(w.Host.now) {
+	if !x.RetiredAt.IsZero() || x.HostError == "" || !x.NextAttempt.After(watchApp(w.Host).now) {
 		t.Fatalf("retirement = %+v", x)
 	}
 	if w.IsActive(ExecutionRetireEmitKey) {

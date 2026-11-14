@@ -42,7 +42,7 @@ func revivedRuns(st *state.State, sessions []*claude.Session, now time.Time) (ou
 		if s.ID == "" || s.Harness != "" {
 			continue
 		}
-		by, since := superseded(st, s.Party(), now)
+		by, since := Cmd.Superseded(st, s.Party(), now)
 		switch {
 		case by == "":
 			continue
@@ -72,11 +72,11 @@ var DesktopArchived = func(cfg *config.Config, host string) bool {
 // sessions that answer to their name: the running ones but the stopped and
 // the warmed.
 func (w *Watcher) StopRevived(ctx context.Context, sessions []*claude.Session) []*claude.Session {
-	st, err := w.Host.store.Peek()
+	st, err := w.Host.Store().Peek()
 	if err != nil {
 		return sessions
 	}
-	revived, warmed := revivedRuns(st, sessions, w.Host.now)
+	revived, warmed := revivedRuns(st, sessions, w.Host.Now())
 	drop := map[*claude.Session]bool{}
 	for _, s := range warmed {
 		drop[s] = true
@@ -88,23 +88,23 @@ func (w *Watcher) StopRevived(ctx context.Context, sessions []*claude.Session) [
 			continue
 		}
 		w.Reported[key], w.Dirty = true, true
-		n, err := endRevived(ctx, s)
+		n, err := Cmd.EndRevived(ctx, s)
 		if err != nil {
 			w.EmitNow("revived", "REVIVED %q: session %s's CLI %d runs although %s carries its name now; stopping it failed: %v",
 				s.Name, s.ID, s.PID, r.by, err)
 			continue
 		}
 		drop[s] = true
-		lines := stopUnits(ctx, s.ID)
-		w.Host.recordStoppedGates(ctx)
-		if s.HostID != "" && DesktopArchived(w.Host.cfg, s.HostID) {
-			_ = w.Host.store.Record(event(WatchParty, "agents.archive", "%s: session %s's CLI %d stopped: its desktop session %s is archived and %s carries its name",
+		lines := Cmd.StopUnits(ctx, s.ID)
+		w.Host.RecordStoppedGates(ctx)
+		if s.HostID != "" && DesktopArchived(w.Host.Cfg(), s.HostID) {
+			_ = w.Host.Store().Record(Cmd.Event(WatchParty, "agents.archive", "%s: session %s's CLI %d stopped: its desktop session %s is archived and %s carries its name",
 				s.Name, s.ID, s.PID, s.HostID, r.by))
 			continue
 		}
-		_ = w.Host.store.Update(func(st *state.State) ([]state.Event, error) {
-			oweArchive(st, s.Party(), "revived after "+r.by+" took its name", w.Host.now)
-			return []state.Event{event(WatchParty, "agents.revived", "%s: session %s, CLI %d, stopped: %s carries its name", s.Name, s.ID, s.PID, r.by)}, nil
+		_ = w.Host.Store().Update(func(st *state.State) ([]state.Event, error) {
+			Cmd.OweArchive(st, s.Party(), "revived after "+r.by+" took its name", w.Host.Now())
+			return []state.Event{Cmd.Event(WatchParty, "agents.revived", "%s: session %s, CLI %d, stopped: %s carries its name", s.Name, s.ID, s.PID, r.by)}, nil
 		})
 		units := ""
 		if len(lines) > 0 {

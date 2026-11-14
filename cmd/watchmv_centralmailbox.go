@@ -20,7 +20,7 @@ const mailboxRetry = time.Minute
 // agent that did not take it or an acknowledgement that failed, the mailbox
 // is drained every watch interval.
 func (w *Watcher) WatchMailbox(ctx context.Context) {
-	person := mailbox.Key(w.Host.cfg.Identity.Person)
+	person := mailbox.Key(w.Host.Cfg().Identity.Person)
 	if person == "" {
 		return
 	}
@@ -37,7 +37,7 @@ func (w *Watcher) WatchMailbox(ctx context.Context) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		tick := time.NewTicker(w.Host.cfg.Watch.Interval.Duration)
+		tick := time.NewTicker(w.Host.Cfg().Watch.Interval.Duration)
 		defer tick.Stop()
 		for {
 			select {
@@ -54,7 +54,7 @@ func (w *Watcher) WatchMailbox(ctx context.Context) {
 	}()
 	defer func() { <-done }()
 	for ctx.Err() == nil {
-		err := w.Host.hub().Listen(ctx, []string{uri}, func() {
+		err := w.Host.Hub().Listen(ctx, []string{uri}, func() {
 			down.Store(false)
 			w.Clear(mailboxKey)
 			signal()
@@ -67,7 +67,7 @@ func (w *Watcher) WatchMailbox(ctx context.Context) {
 			return
 		}
 		down.Store(true)
-		w.Emit(mailboxKey, "MAILBOX UNSUBSCRIBED %s: %s; drained every %s until it stands again", uri, unreadableReason(err), w.Host.cfg.Watch.Interval.Duration)
+		w.Emit(mailboxKey, "MAILBOX UNSUBSCRIBED %s: %s; drained every %s until it stands again", uri, Cmd.UnreadableReason(err), w.Host.Cfg().Watch.Interval.Duration)
 		t := time.NewTimer(mailboxRetry)
 		select {
 		case <-ctx.Done():
@@ -80,5 +80,5 @@ func (w *Watcher) WatchMailbox(ctx context.Context) {
 
 // DrainMailbox runs in the command, which holds what it needs (watchDrainMailbox).
 func (w *Watcher) DrainMailbox(ctx context.Context) bool {
-	return watchDrainMailbox(w, ctx)
+	return Cmd.WatchDrainMailbox(w, ctx)
 }

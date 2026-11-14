@@ -2288,7 +2288,7 @@ func TestSupervisorLoopLeavesLineOnlyTimersForWatch(t *testing.T) {
 				}
 			}
 			w, desktop, out := notifyingWatch(t, r.a.store.Dir(), false)
-			w.Host.now, w.Chores = r.a.now, true // a running watch, not --once
+			watchApp(w.Host).now, w.Chores = r.a.now, true // a running watch, not --once
 			live := []*claude.Session{{ID: "s4", HostID: hostFour, Name: agentFour}}
 			w.Pending(context.Background(), live)
 			w.TimerActs.Wait()

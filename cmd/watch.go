@@ -375,7 +375,7 @@ func (a *app) newWatcher(standby, keep bool) *Watcher {
 // one ENDED line when it ends: about to expire, expired, or its keeper's
 // renewal failed.
 func watchTeleport(w *Watcher, ctx context.Context) {
-	v := w.Host.readTeleport(ctx)
+	v := watchApp(w.Host).readTeleport(ctx)
 	if v == nil {
 		return
 	}
@@ -392,9 +392,9 @@ func watchTeleport(w *Watcher, ctx context.Context) {
 // watchBudget probes the GitHub budget and says when it is under the floor and
 // when GitHub refuses GraphQL calls, with the callers drawing on it.
 func watchBudget(w *Watcher, ctx context.Context, now time.Time) {
-	b, err := readBudget(w.Host, ctx)
+	b, err := readBudget(watchApp(w.Host), ctx)
 	if ctx.Err() == nil {
-		held := err != nil || b.Remaining < w.Host.cfg.GitHub.Floor || b.GraphQL == nil || b.GraphQL.Err != "" || b.GraphQL.Remaining < w.Host.cfg.GitHub.Floor || b.GraphQL.Blocks(now)
+		held := err != nil || b.Remaining < watchApp(w.Host).cfg.GitHub.Floor || b.GraphQL == nil || b.GraphQL.Err != "" || b.GraphQL.Remaining < watchApp(w.Host).cfg.GitHub.Floor || b.GraphQL.Blocks(now)
 		w.PublishBudget(held)
 	}
 	switch {
@@ -405,11 +405,11 @@ func watchBudget(w *Watcher, ctx context.Context, now time.Time) {
 		}
 	default:
 		w.Clear("budget-error")
-		if l := w.Check("budget", b.Remaining < w.Host.cfg.GitHub.Floor, "GITHUB BUDGET %d of %d: hold GitHub work until %s",
+		if l := w.Check("budget", b.Remaining < watchApp(w.Host).cfg.GitHub.Floor, "GITHUB BUDGET %d of %d: hold GitHub work until %s",
 			b.Remaining, b.Limit, b.Reset.Local().Format("15:04")); l != "" {
 			w.NotifyAt(ctx, now, notify.Budget, "", "beekeeper: GitHub budget under the floor", l+"\nbeekeeper budget")
 		}
-		graphqlLow := b.GraphQL != nil && !b.GraphQL.Blocks(now) && b.GraphQL.Remaining < w.Host.cfg.GitHub.Floor
+		graphqlLow := b.GraphQL != nil && !b.GraphQL.Blocks(now) && b.GraphQL.Remaining < watchApp(w.Host).cfg.GitHub.Floor
 		var gqlRemaining, gqlLimit int
 		var gqlReset string
 		if b.GraphQL != nil {
@@ -423,13 +423,13 @@ func watchBudget(w *Watcher, ctx context.Context, now time.Time) {
 		var callers string
 		if refused {
 			callers = w.CallersText()
-			if recorded, err := githubWindowCallers(w.Host, b.GraphQL); err != nil {
+			if recorded, err := githubWindowCallers(watchApp(w.Host), b.GraphQL); err != nil {
 				callers = "window callers unknown (" + err.Error() + "); live: " + callers
 			} else if len(recorded) > 0 {
 				callers = "window: " + githubCallersText(recorded) + "; live: " + callers
 			}
 		}
-		if l := w.Check("graphql", refused, "%s; callers: %s", graphqlText(w.Host, b.GraphQL), callers); l != "" {
+		if l := w.Check("graphql", refused, "%s; callers: %s", graphqlText(watchApp(w.Host), b.GraphQL), callers); l != "" {
 			w.NotifyAt(ctx, now, notify.Budget, "", "beekeeper: GitHub refuses GraphQL", l+"\nbeekeeper budget")
 		}
 	}
@@ -438,11 +438,11 @@ func watchBudget(w *Watcher, ctx context.Context, now time.Time) {
 // watchCallersText names the gh and devctl processes drawing on GitHub and the
 // sessions they run under, the longest-running first.
 func watchCallersText(w *Watcher) string {
-	sessions, t, err := w.Host.sessions()
+	sessions, t, err := watchApp(w.Host).sessions()
 	if err != nil {
 		return "unknown (" + err.Error() + ")"
 	}
-	ps := githubCallers(w.Host, t, sessions)
+	ps := githubCallers(watchApp(w.Host), t, sessions)
 	if len(ps) == 0 {
 		return "no gh or devctl process now"
 	}
@@ -459,16 +459,16 @@ func watchCallersText(w *Watcher) string {
 // watchStalls says each stalled lane, one LANE STALLED line per lane and waiting
 // merge when the stall starts and one ENDED line when it ends.
 func watchStalls(w *Watcher) {
-	st, err := w.Host.readSnapshot()
+	st, err := watchApp(w.Host).readSnapshot()
 	if err != nil {
 		return
 	}
 	stalled := map[string]bool{}
-	for _, v := range w.Host.laneViews(st) {
+	for _, v := range watchApp(w.Host).laneViews(st) {
 		if v.Stall != nil {
 			key := "stall:" + v.Name + ":" + v.Stall.Merge.Key()
 			stalled[key] = true
-			w.Emit(key, "LANE STALLED %s: %s", v.Name, w.Host.stallText(*v.Stall))
+			w.Emit(key, "LANE STALLED %s: %s", v.Name, watchApp(w.Host).stallText(*v.Stall))
 		}
 	}
 	w.ClearMissing("stall:", stalled)
@@ -483,21 +483,21 @@ func watchHungMerges(w *Watcher, ctx context.Context, now time.Time) {
 	// The wall/monotonic difference detects suspend on platforms whose
 	// monotonic clock stops asleep; a long gap also covers other platforms
 	// and clocks without monotonic readings.
-	gap := max(5*time.Minute, 2*SlowReads*w.Host.cfg.Watch.Interval.Duration)
+	gap := max(5*time.Minute, 2*SlowReads*watchApp(w.Host).cfg.Watch.Interval.Duration)
 	wallElapsed := now.Round(0).Sub(w.LastHungCheck.Round(0))
 	elapsed := now.Sub(w.LastHungCheck)
 	if w.LastHungCheck.IsZero() || wallElapsed-elapsed > time.Second || wallElapsed > gap || wallElapsed < 0 {
 		w.HungGrace = now
 	}
 	w.LastHungCheck = now
-	if now.Sub(w.HungGrace) <= w.Host.cfg.Merge.HungAfter.Duration {
+	if now.Sub(w.HungGrace) <= watchApp(w.Host).cfg.Merge.HungAfter.Duration {
 		return
 	}
-	for _, h := range w.Host.endHung(ctx, WatchParty, now, w.Host.cfg.Merge.HungAfter.Duration, func(m state.Merge) bool {
-		return now.Sub(m.Started) > w.Host.cfg.Merge.HungAfter.Duration
+	for _, h := range watchApp(w.Host).endHung(ctx, WatchParty, now, watchApp(w.Host).cfg.Merge.HungAfter.Duration, func(m state.Merge) bool {
+		return now.Sub(m.Started) > watchApp(w.Host).cfg.Merge.HungAfter.Duration
 	}) {
 		w.EmitNow("lanes", "MERGE HUNG: %s in lane %s by %q: %s, its devctl (pid %d) still ran: ended, the lane records it next",
-			h.merge.Key(), h.merge.Lane, h.merge.By.Name, w.Host.pullText(h.pull), h.merge.Child)
+			h.merge.Key(), h.merge.Lane, h.merge.By.Name, watchApp(w.Host).pullText(h.pull), h.merge.Child)
 	}
 }
 
@@ -519,7 +519,7 @@ func watchKills(w *Watcher, ctx context.Context, since time.Time, sessions []*cl
 	w.Clear("journal")
 	var fresh []oomKill
 	var clusters []machine.Cluster
-	runs := &runIndex{store: w.Host.store}
+	runs := &runIndex{store: watchApp(w.Host).store}
 	for _, k := range kills {
 		key := fmt.Sprintf("%d@%d", k.PID, k.At.Unix())
 		if w.SeenKills[key] {
@@ -564,10 +564,10 @@ func launchedLoop() *LoopService {
 // metrics.runaway, once per watch: a GitHub budget drain, the same failing
 // tool call repeating, a context near its window.
 func watchRunaways(w *Watcher, sessions []*claude.Session, t *proc.Table) {
-	holders, _ := lease.Dir(w.Host.cfg.LeaseDir).List()
-	_, ms := w.Host.sessionMetrics(sessions, t, holders)
+	holders, _ := lease.Dir(watchApp(w.Host).cfg.LeaseDir).List()
+	_, ms := watchApp(w.Host).sessionMetrics(sessions, t, holders)
 	for i, s := range sessions {
-		lines := w.Host.runaway(s, ms[i])
+		lines := watchApp(w.Host).runaway(s, ms[i])
 		for _, figure := range slices.Sorted(maps.Keys(lines)) {
 			key := "runaway " + s.Key() + " " + figure
 			if !w.Reported[key] {
@@ -579,7 +579,7 @@ func watchRunaways(w *Watcher, sessions []*claude.Session, t *proc.Table) {
 }
 
 func watchStaleLeases(w *Watcher, ctx context.Context, sessions []*claude.Session) {
-	holders, err := lease.Dir(w.Host.cfg.LeaseDir).List()
+	holders, err := lease.Dir(watchApp(w.Host).cfg.LeaseDir).List()
 	if err != nil {
 		return
 	}
@@ -590,11 +590,11 @@ func watchStaleLeases(w *Watcher, ctx context.Context, sessions []*claude.Sessio
 			w.Emit("lease-damaged:"+h.Env, "DAMAGED LEASE: %s's holder record cannot be read (%s): it stays held until beekeeper lease release %s --force", h.Env, h.Damaged, h.Env)
 			continue
 		}
-		v := w.Host.leaseView(sessions, h)
+		v := watchApp(w.Host).leaseView(sessions, h)
 		key := h.Env + "@" + h.Since
-		if overrun := w.Host.leaseOverrun(h); overrun != "" {
+		if overrun := watchApp(w.Host).leaseOverrun(h); overrun != "" {
 			found["lease-round:"+key] = true
-			w.Emit("lease-round:"+key, "LEASE HELD PAST ROUND: %s held by %q since %s: %s%s", h.Env, v.Name, clock(w.Host.now, h.SinceTime()), oneLine(h.Purpose), overrun)
+			w.Emit("lease-round:"+key, "LEASE HELD PAST ROUND: %s held by %q since %s: %s%s", h.Env, v.Name, clock(watchApp(w.Host).now, h.SinceTime()), oneLine(h.Purpose), overrun)
 		}
 		if v.State == holderGone && !w.Reported["lease "+key] {
 			w.Reported["lease "+key], w.Dirty = true, true

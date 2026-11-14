@@ -1104,7 +1104,7 @@ func watchDoctor(w *Watcher, ctx context.Context) {
 	if !w.Chores || !w.Doctoring.CompareAndSwap(false, true) {
 		return
 	}
-	d := *w.Host // the poll moves w.now on
+	d := *watchApp(w.Host) // the poll moves w.now on
 	retry := func(host string) bool {
 		if d.now.Sub(w.Retitled[host]) < retitleAgain {
 			return false

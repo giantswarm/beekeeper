@@ -236,14 +236,14 @@ func (r *goCacheRun) holdForRuns(parent context.Context) (release func(), ok boo
 // how long the trim has waited, until it is under the cap. A failed read or
 // trim is GO CACHE too.
 func watchGoCacheLook(w *Watcher, now time.Time, builds func() []int) {
-	every := w.Host.cfg.Doctor.GoCacheEvery.Duration
+	every := watchApp(w.Host).cfg.Doctor.GoCacheEvery.Duration
 	var m goCacheMark
-	_, _ = w.Host.store.ReadFile(goCacheFile, &m)
+	_, _ = watchApp(w.Host).store.ReadFile(goCacheFile, &m)
 	if m.Waiting.IsZero() && now.Sub(m.Checked) < every {
 		w.GoCacheNext = m.Checked.Add(every)
 		return
 	}
-	r := w.Host.trimGoCache(false, builds)
+	r := watchApp(w.Host).trimGoCache(false, builds)
 	switch {
 	case r.locked:
 		w.GoCacheNext = now.Add(goCacheRetry)
@@ -259,6 +259,6 @@ func watchGoCacheLook(w *Watcher, now time.Time, builds func() []int) {
 		w.GoCacheNext = now.Add(every)
 	}
 	m.Checked = now
-	_ = w.Host.store.WriteFile(goCacheFile, m)
+	_ = watchApp(w.Host).store.WriteFile(goCacheFile, m)
 	w.Check("gocache", r.err != nil || (r.waited > 0 && r.waited >= every), "GO CACHE: %s", r)
 }

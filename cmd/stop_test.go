@@ -364,10 +364,10 @@ func TestNothingStartsWhileStopped(t *testing.T) {
 		ImportRow: func(context.Context, string, string) (string, error) { calls.Add(1); return "", nil },
 	}
 	t.Cleanup(w.Stand.Inflight.Wait)
-	w.Host.now = relayNow
+	watchApp(w.Host).now = relayNow
 	gone := state.Party{Session: "sS9", HostSession: "local_sS9", Name: guideRole.RunName(9)}
 	worker := state.Party{Session: runSixtySeven, HostSession: "local_" + runSixtySeven, Name: agentSeven}
-	err := w.Host.store.Update(func(st *state.State) ([]state.Event, error) {
+	err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 		// A guide gone past its restart grace, no start of beekeeper's:
 		// its successor is due.
 		st.Guide = &state.Role{Holder: &state.Supervisor{Party: gone, Since: relayNow.Add(-time.Hour)}}
@@ -381,7 +381,7 @@ func TestNothingStartsWhileStopped(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, at := range []time.Duration{0, time.Minute, 10 * time.Minute} {
-		w.Host.now = relayNow.Add(at)
+		watchApp(w.Host).now = relayNow.Add(at)
 		w.Pending(context.Background(), nil)
 		w.Stand.Inflight.Wait()
 	}
@@ -393,7 +393,7 @@ func TestNothingStartsWhileStopped(t *testing.T) {
 	}
 
 	// The pending reopen's run, and its detach, leave the session closed.
-	a := w.Host
+	a := watchApp(w.Host)
 	var buf strings.Builder
 	a.out = &buf
 	if err := a.reopenSession(context.Background(), runSixtySeven, "beekeeper-agent-4579230b.service"); err != nil {
@@ -407,7 +407,7 @@ func TestNothingStartsWhileStopped(t *testing.T) {
 	}
 
 	// The resume lifts it: the watch says it ended.
-	if err := w.Host.store.Update(func(st *state.State) ([]state.Event, error) { st.Stop = nil; return nil, nil }); err != nil {
+	if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) { st.Stop = nil; return nil, nil }); err != nil {
 		t.Fatal(err)
 	}
 	a.out = out

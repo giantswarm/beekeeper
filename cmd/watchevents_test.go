@@ -11,7 +11,7 @@ func TestWatchLinesBecomeDurableEvents(t *testing.T) {
 	w.Check("disk", true, "LOW DISK: test writers")
 	w.Check("disk", true, "LOW DISK: test writers")
 	w.Clear("disk")
-	evs, err := w.Host.store.Events(0, nil)
+	evs, err := watchApp(w.Host).store.Events(0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

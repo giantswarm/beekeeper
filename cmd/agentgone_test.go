@@ -241,16 +241,16 @@ func TestGoneWakeAndResumeRestoreCapacity(t *testing.T) {
 
 func TestGoneWatchReportsAgeTransition(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
-	w.Host.cfg.Claude.ProjectsDir = t.TempDir()
-	w.Host.cfg.Claude.DesktopDir = t.TempDir()
+	watchApp(w.Host).cfg.Claude.ProjectsDir = t.TempDir()
+	watchApp(w.Host).cfg.Claude.DesktopDir = t.TempDir()
 	ag := tasked("watch-gone-test")
-	ag.Registered = w.Host.now.Add(-23 * time.Hour)
+	ag.Registered = watchApp(w.Host).now.Add(-23 * time.Hour)
 	st := &state.State{Agents: []state.Agent{ag}}
 	w.StoppedAgents(st, nil)
 	if strings.Contains(out.String(), strings.TrimSpace(goneActivityPrefix)) {
 		t.Fatal("recent worker shown gone")
 	}
-	w.Host.now = w.Host.now.Add(time.Hour)
+	watchApp(w.Host).now = watchApp(w.Host).now.Add(time.Hour)
 	w.StoppedAgents(st, nil)
 	w.StoppedAgents(st, nil)
 	if strings.Count(out.String(), strings.TrimSpace(goneActivityPrefix)) != 1 {

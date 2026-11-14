@@ -56,7 +56,7 @@ func fakeSinkGH(t *testing.T, fail *bool) *[]string {
 
 // poll runs one poll's sink of w and waits for its dispatch.
 func sinkPoll(w *Watcher) {
-	w.Host.now = time.Now()
+	watchApp(w.Host).now = time.Now()
 	w.Sink(context.Background())
 	w.Bg.Wait()
 }

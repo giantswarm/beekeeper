@@ -71,7 +71,7 @@ func TestExecutionOrphanInventoryStopsOnlyUnknownJournal(t *testing.T) {
 	if fake.inventoryCalls != 2 {
 		t.Fatalf("inventory calls=%d", fake.inventoryCalls)
 	}
-	w.Host.now = w.Host.now.Add(time.Minute)
+	watchApp(w.Host).now = watchApp(w.Host).now.Add(time.Minute)
 	w.SyncExecutions(context.Background(), st)
 	if fake.inventoryCalls != 2 {
 		t.Fatalf("settled idle host polled again: inventory calls=%d", fake.inventoryCalls)

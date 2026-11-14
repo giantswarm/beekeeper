@@ -460,7 +460,7 @@ capacity:
 	aOnceErr := &app{cfgPath: cfgPath, cfg: cfg, store: store, now: t0, out: &onceErrOut, as: usageCaller, readUsage: reader}
 	wOnceErr := aOnceErr.newWatcher(false, false)
 	drainWatch(wOnceErr)
-	wOnceErr.Host.now = t0
+	watchApp(wOnceErr.Host).now = t0
 	wOnceErr.Pending(context.Background(), sessionsAt(t0, false))
 	if wOnceErr.OnceErr() == nil || !strings.Contains(onceErrOut.String(), "USAGE unreadable: reader offline") {
 		t.Fatalf("watch --once on error: err=%v, out=%q", wOnceErr.OnceErr(), onceErrOut.String())
@@ -471,7 +471,7 @@ capacity:
 	aOnce := &app{cfgPath: cfgPath, cfg: cfg, store: store, now: t0, out: &onceOut, as: usageCaller, readUsage: reader}
 	wOnce := aOnce.newWatcher(false, false)
 	drainWatch(wOnce)
-	wOnce.Host.now = t0
+	watchApp(wOnce.Host).now = t0
 	wOnce.Pending(context.Background(), sessionsAt(t0, false))
 	if err := wOnce.OnceErr(); err != nil || !strings.Contains(onceOut.String(), "USAGE: 5h 40%") || !strings.Contains(onceOut.String(), "target ceiling 8") {
 		t.Fatalf("watch --once ok: err=%v, out=\n%s", err, onceOut.String())
@@ -483,7 +483,7 @@ capacity:
 		var out bytes.Buffer
 		a := &app{cfgPath: cfgPath, cfg: cfg, store: store, now: now, out: &out, as: usageCaller, readUsage: reader}
 		w := a.newWatcher(false, true)
-		w.Host.now = now
+		watchApp(w.Host).now = now
 		w.Clock = &fakeClock{now: now}
 		w.Doctoring.Store(true) // the doctor is not under test
 		w.ReadHeadroom = func(context.Context, *capacity.SwapReading) *capacity.Headroom { return roomy() }
@@ -520,8 +520,8 @@ capacity:
 		t.Fatal(err)
 	}
 	woke = nil
-	w2.Host.now = t31
-	w2.Clock.(*fakeClock).advance(w2.Host.now.Sub(w2.Clk().Now()))
+	watchApp(w2.Host).now = t31
+	w2.Clock.(*fakeClock).advance(watchApp(w2.Host).now.Sub(w2.Clk().Now()))
 	out2.Reset()
 	w2.Pending(context.Background(), sessionsAt(t31, false))
 	w2.SaveMark()
@@ -581,8 +581,8 @@ capacity:
 	tAfterReset := reset5h.Add(10 * time.Second)
 	cur.FiveHour = &capacity.UsageWindow{UsedPercent: 3, ResetsAt: reset5h.Add(5 * time.Hour)}
 	woke = nil
-	w3.Host.now = tAfterReset
-	w3.Clock.(*fakeClock).advance(w3.Host.now.Sub(w3.Clk().Now()))
+	watchApp(w3.Host).now = tAfterReset
+	w3.Clock.(*fakeClock).advance(watchApp(w3.Host).now.Sub(w3.Clk().Now()))
 	out3.Reset()
 	w3.Pending(context.Background(), sessionsAt(tAfterReset, true))
 	w3.SaveMark()
@@ -603,8 +603,8 @@ capacity:
 	// 7. Live-reloading config.yaml without capacity.usage clears an active USAGE HIGH.
 	tSecondHigh := tAfterReset.Add(10 * time.Minute)
 	cur.FiveHour = &capacity.UsageWindow{UsedPercent: 98, ResetsAt: reset5h.Add(5 * time.Hour)}
-	w3.Host.now = tSecondHigh
-	w3.Clock.(*fakeClock).advance(w3.Host.now.Sub(w3.Clk().Now()))
+	watchApp(w3.Host).now = tSecondHigh
+	w3.Clock.(*fakeClock).advance(watchApp(w3.Host).now.Sub(w3.Clk().Now()))
 	out3.Reset()
 	w3.Pending(context.Background(), sessionsAt(tSecondHigh, false))
 	if !strings.Contains(out3.String(), "USAGE HIGH: 5h 98%") {
@@ -613,10 +613,10 @@ capacity:
 	if err := os.WriteFile(cfgPath, []byte("agents:\n  autoResume: true\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	w3.Host.now = tSecondHigh.Add(time.Minute)
-	w3.Clock.(*fakeClock).advance(w3.Host.now.Sub(w3.Clk().Now()))
+	watchApp(w3.Host).now = tSecondHigh.Add(time.Minute)
+	w3.Clock.(*fakeClock).advance(watchApp(w3.Host).now.Sub(w3.Clk().Now()))
 	out3.Reset()
-	w3.Pending(context.Background(), sessionsAt(w3.Host.now, false))
+	w3.Pending(context.Background(), sessionsAt(watchApp(w3.Host).now, false))
 	if !strings.Contains(out3.String(), "ENDED USAGE HIGH") {
 		t.Fatalf("removing capacity.usage did not clear USAGE HIGH:\n%s", out3.String())
 	}
@@ -1072,7 +1072,7 @@ func TestProvidersChoicesPaceMarginExcludeAndMachineGuards(t *testing.T) {
 	aWatch, _ := newApp(t0, false)
 	aWatch.out = &watchOut
 	w := aWatch.newWatcher(false, true)
-	w.Host.now = t0
+	watchApp(w.Host).now = t0
 	w.Clock = &fakeClock{now: t0}
 	w.Doctoring.Store(true)
 	w.ReadHeadroom = func(context.Context, *capacity.SwapReading) *capacity.Headroom { return roomy() }
@@ -1822,7 +1822,7 @@ func TestCachedProvidersCapacityAndWatcherCurrentUsage(t *testing.T) {
 		return capacity.UsageReading{}, errors.New("endpoint timeout")
 	}
 	w := aWatch.newWatcher(false, true)
-	w.Host.now = t0
+	watchApp(w.Host).now = t0
 	w.ReadHeadroom = func(context.Context, *capacity.SwapReading) *capacity.Headroom { return roomy() }
 	w.ProviderUsageErr = map[string]string{claudeComm: "endpoint timeout"}
 
@@ -1859,7 +1859,7 @@ func TestCachedProvidersCapacityAndWatcherCurrentUsage(t *testing.T) {
 		},
 	}
 	wOnce := aStoreless.newWatcher(false, false)
-	wOnce.Host.now = t0
+	watchApp(wOnce.Host).now = t0
 	wOnce.ReadHeadroom = func(context.Context, *capacity.SwapReading) *capacity.Headroom { return roomy() }
 	wOnce.WatchProvidersUsage(context.Background(), cfg.Capacity, &state.State{}, nil)
 	if !strings.Contains(storelessOut.String(), "USAGE: claude: ") ||
@@ -2013,7 +2013,7 @@ capacity:
 	var watchOut bytes.Buffer
 	aWatch := &app{cfgPath: cfgPath, cfg: cfg, store: store, now: t0, out: &watchOut, as: usageCaller, readUsage: reader}
 	w := aWatch.newWatcher(false, true)
-	w.Host.now = t0
+	watchApp(w.Host).now = t0
 	w.Clock = &fakeClock{now: t0}
 	w.Doctoring.Store(true)
 	w.ReadHeadroom = func(context.Context, *capacity.SwapReading) *capacity.Headroom { return roomy() }
@@ -3171,11 +3171,11 @@ func TestSelfHostedWatchSilentAtCeilingZero(t *testing.T) {
 	var watchOut bytes.Buffer
 	aWatch := &app{cfgPath: cfgPath, cfg: cfg, store: store, now: t0, out: &watchOut}
 	w := aWatch.newWatcher(false, true)
-	w.Host.now = t0
+	watchApp(w.Host).now = t0
 	w.ReadHeadroom = func(context.Context, *capacity.SwapReading) *capacity.Headroom { return roomy() }
 	// The derived ceiling is the self-hosted one (2); busy is 2, so a naive
 	// check against the derived total would raise CAPACITY FULL.
-	if k, u := w.CurrentUsage(w.Host.liveCapacity(), t0); k.Ceiling == 0 {
+	if k, u := w.CurrentUsage(watchApp(w.Host).liveCapacity(), t0); k.Ceiling == 0 {
 		t.Fatalf("derived ceiling = %d, want the self-hosted room above the held total (u %+v)", k.Ceiling, u)
 	}
 	w.Capacity(context.Background(), supervised(2), nil)
@@ -3787,7 +3787,7 @@ func TestUsageFallbackReportedAgeExpires(t *testing.T) {
 		t.Fatalf("cached provider: %+v %+v", derived, view)
 	}
 	w := &Watcher{Host: a}
-	w.Host.now = a.now
+	watchApp(w.Host).now = a.now
 	w.ProviderUsageErr = map[string]string{claudeComm: readFailure}
 	derived, view = w.CurrentUsage(k, a.now)
 	if derived.Ceiling != 0 || view == nil || !strings.Contains(view.Error, "20m old") {
@@ -3994,7 +3994,7 @@ func TestUsageRefreshValidatesAtCompletion(t *testing.T) {
 					SevenDay: &capacity.UsageWindow{UsedPercent: 24, ResetsAt: start.Add(24 * time.Hour)}}, nil
 			}
 			w := a.newWatcher(false, true)
-			w.Host.now = start
+			watchApp(w.Host).now = start
 			w.Clock = clk
 			w.ReadHeadroom = func(context.Context, *capacity.SwapReading) *capacity.Headroom { return roomy() }
 			view := w.WatchUsage(context.Background(), &state.State{}, nil)
@@ -4077,7 +4077,7 @@ func TestCodexUnreadableKeepsStartsQuotaStopHolds(t *testing.T) {
 					return good(clk.Now()), nil
 				}
 				w := a.newWatcher(false, true)
-				w.Host.now = start
+				watchApp(w.Host).now = start
 				w.Clock = clk
 				w.ReadHeadroom = func(context.Context, *capacity.SwapReading) *capacity.Headroom { return roomy() }
 				view := w.WatchUsage(context.Background(), &state.State{}, nil)
@@ -4158,7 +4158,7 @@ func TestSubscriptionUnderuseDetectionAndEscalation(t *testing.T) {
 		}
 	}
 	w := a.newWatcher(false, true)
-	w.Host.now = t0
+	watchApp(w.Host).now = t0
 	w.Clock = clk
 	w.ReadHeadroom = func(context.Context, *capacity.SwapReading) *capacity.Headroom { return roomy() }
 

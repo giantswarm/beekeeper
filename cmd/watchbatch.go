@@ -30,9 +30,9 @@ func (w *Watcher) RoutineLine(line string) bool {
 		fields := strings.Fields(line)
 		// ALERT <kind> <installation> <severity> <team> ...; our team's
 		// marker is uppercase. No configured team means no known other team.
-		return len(fields) >= 6 && w.Host.cfg.Alerts.Team != "" &&
+		return len(fields) >= 6 && w.Host.Cfg().Alerts.Team != "" &&
 			strings.EqualFold(fields[3], "notify") &&
-			!strings.EqualFold(fields[4], w.Host.cfg.Alerts.Team)
+			!strings.EqualFold(fields[4], w.Host.Cfg().Alerts.Team)
 	}
 	return false
 }
@@ -46,7 +46,7 @@ func (w *Watcher) OutputEvent(line string) {
 		w.batch = append(w.batch, stamped)
 		return
 	}
-	_, _ = fmt.Fprintln(w.Host.out, stamped)
+	_, _ = fmt.Fprintln(w.Host.Out(), stamped)
 }
 
 // FlushBatch makes one physical stdout line: newline-delimited monitors
@@ -59,7 +59,7 @@ func (w *Watcher) FlushBatch() {
 		return
 	}
 	items, _ := json.Marshal(w.batch) // strings always marshal
-	_, _ = fmt.Fprintf(w.Host.out, "%s BATCH: %s\n", w.Clk().Now().Format("15:04:05"), items)
+	_, _ = fmt.Fprintf(w.Host.Out(), "%s BATCH: %s\n", w.Clk().Now().Format("15:04:05"), items)
 	w.batch = nil
 }
 

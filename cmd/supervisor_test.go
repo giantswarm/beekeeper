@@ -333,7 +333,7 @@ func TestStandbyRestartsTheLoopAndStartsNoSession(t *testing.T) {
 		return state.Party{}, errors.New("no successor")
 	}
 	poll := func(at time.Duration) {
-		w.Host.now = relayNow.Add(at)
+		watchApp(w.Host).now = relayNow.Add(at)
 		w.Pending(context.Background(), nil)
 	}
 	downs := func() (n int) {
@@ -370,7 +370,7 @@ func TestStandbyRestartsTheLoopAndStartsNoSession(t *testing.T) {
 		t.Fatalf("the standby started %d supervisor sessions", successors)
 	}
 	// The loop runs again: one BACK line.
-	if err := w.Host.store.WriteFile(loop.LoopPIDFile, os.Getpid()); err != nil {
+	if err := watchApp(w.Host).store.WriteFile(loop.LoopPIDFile, os.Getpid()); err != nil {
 		t.Fatal(err)
 	}
 	poll(4 * time.Minute)
@@ -379,10 +379,10 @@ func TestStandbyRestartsTheLoopAndStartsNoSession(t *testing.T) {
 		t.Fatalf("back:\n%s", out)
 	}
 	// A stop holds the loop: nothing restarts it.
-	if err := w.Host.store.WriteFile(loop.LoopPIDFile, 0); err != nil {
+	if err := watchApp(w.Host).store.WriteFile(loop.LoopPIDFile, 0); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.Host.store.Update(func(st *state.State) ([]state.Event, error) {
+	if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Stop = &state.Stop{Reason: "maintenance", At: relayNow}
 		return nil, nil
 	}); err != nil {

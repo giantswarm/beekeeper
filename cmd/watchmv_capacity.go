@@ -14,22 +14,22 @@ func (w *Watcher) KeepSwap(r *capacity.SwapReading) {
 	w.Mu.Lock()
 	w.swap = r
 	w.Mu.Unlock()
-	_ = w.Host.store.WriteFile(swapFile, r)
+	_ = w.Host.Store().WriteFile(swapFile, r)
 }
 
 // Capacity says CAPACITY FULL once at a positive ceiling, with the headroom,
 // and ends with one ENDED line when the count recovers; a ceiling of 0 clears
 // it and stays silent. The machine is read only at that edge.
 func (w *Watcher) Capacity(ctx context.Context, st *state.State, sessions []*claude.Session) {
-	live := w.Host.liveCapacity()
-	k, u := w.CurrentUsage(live, w.Host.now)
-	c := countAgents(st, sessions, w.Host.now, w.Host.cfg)
+	live := w.Host.LiveCapacity()
+	k, u := w.CurrentUsage(live, w.Host.Now())
+	c := Cmd.CountAgents(st, sessions, w.Host.Now(), w.Host.Cfg())
 	busy := len(c.Busy)
 	// A configured capacity.ceiling of 0 keeps the line silent even when
 	// the derived ceiling is positive (a self-hosted provider's own ceiling
 	// rides in the derived total).
 	w.Clear("capacity-low")
-	if (u != nil && u.Error != "") || k.Ceiling == 0 || live.Ceiling == 0 || busy < k.Ceiling || st.Stop != nil || startsHold(st, w.Host.now) != nil {
+	if (u != nil && u.Error != "") || k.Ceiling == 0 || live.Ceiling == 0 || busy < k.Ceiling || st.Stop != nil || Cmd.StartsHold(st, w.Host.Now()) != nil {
 		w.Clear("capacity-full")
 		return
 	}
@@ -40,9 +40,9 @@ func (w *Watcher) Capacity(ctx context.Context, st *state.State, sessions []*cla
 	if w.ReadHeadroom != nil {
 		h = w.ReadHeadroom(ctx, swap)
 	} else {
-		h = w.Host.readHeadroom(ctx, k, swap)
+		h = w.Host.ReadHeadroom(ctx, k, swap)
 	}
 	// The watch weighs a start that does not build: a busy slot is a note.
-	v := capacity.NewCapacity(c, k, h, false).WithUsage(u, w.Host.now)
+	v := capacity.NewCapacity(c, k, h, false).WithUsage(u, w.Host.Now())
 	w.Check("capacity-full", busy >= k.Ceiling, "CAPACITY FULL %d of %d: %s", busy, k.Ceiling, v.Headroom.Line())
 }

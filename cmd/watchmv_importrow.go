@@ -15,7 +15,7 @@ func (w *Watcher) importRows(ctx context.Context, st *state.State) {
 	if w.Stand.ImportRow == nil || w.Stand.Turning == nil || st.Stop != nil {
 		return
 	}
-	for _, ag := range w.Host.rowless(ctx, st, w.Stand.Turning) {
+	for _, ag := range w.Host.Rowless(ctx, st, w.Stand.Turning) {
 		if _, busy := w.Stand.importing.LoadOrStore(ag.Session, true); busy {
 			continue
 		}
@@ -40,13 +40,13 @@ func (w *Watcher) importRows(ctx context.Context, st *state.State) {
 // desktop runs; before, the roster and the event log were its only signs.
 func (w *Watcher) RowlessAgents(st *state.State) {
 	t := w.Table
-	if t == nil || !w.Host.desktopMode() || plat.Opener.Running(t).IsZero() {
+	if t == nil || !w.Host.DesktopMode() || Cmd.Plat().Opener.Running(t).IsZero() {
 		return
 	}
 	said := map[string]bool{}
 	var now []string
 	for _, ag := range st.Agents {
-		if _, ok := rowlessCandidate(st, ag, w.Host.now); !ok || w.Host.hasRow(ag.Session) {
+		if _, ok := Cmd.RowlessCandidate(st, ag, w.Host.Now()); !ok || w.Host.HasRow(ag.Session) {
 			continue
 		}
 		said[ag.Session] = true
@@ -54,13 +54,13 @@ func (w *Watcher) RowlessAgents(st *state.State) {
 			continue
 		}
 		how := "no CLI of it runs; the doctor reopens it once the desktop has room"
-		if turn := headlessTurn(t, ag.Session); turn != "" {
+		if turn := Cmd.HeadlessTurn(t, ag.Session); turn != "" {
 			how = "its " + turn + " runs headless; the standby watch imports it beside the turn"
 		}
 		now = append(now, fmt.Sprintf("%q (%s)", ag.Name, how))
 	}
 	w.RowlessSaid = said
 	if len(now) > 0 {
-		w.EmitNow("agents-rowless", "NO DESKTOP ROW: the desktop, running %d of its cap of %d CLIs, never imported %s", desktopCLIs(t), w.Host.desktopCap(), strings.Join(now, ", "))
+		w.EmitNow("agents-rowless", "NO DESKTOP ROW: the desktop, running %d of its cap of %d CLIs, never imported %s", Cmd.DesktopCLIs(t), w.Host.DesktopCap(), strings.Join(now, ", "))
 	}
 }

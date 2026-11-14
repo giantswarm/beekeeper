@@ -47,7 +47,7 @@ func (w *Watcher) SyncExecutions(ctx context.Context, st *state.State) *state.St
 	for _, s := range st.Starts {
 		if r := s.Execution; r != nil {
 			startsByHost[r.Selector]++
-			if !r.HostJournalMissing && (executionNeedsSync(st, r) || executionTranscriptPending(r) || w.Host.hasUnrecoveredPublication(r)) {
+			if !r.HostJournalMissing && (Cmd.ExecutionNeedsSync(st, r) || Cmd.ExecutionTranscriptPending(r) || w.Host.HasUnrecoveredPublication(r)) {
 				if !slices.Contains(selectors, r.Selector) {
 					selectors = append(selectors, r.Selector)
 				}
@@ -59,16 +59,16 @@ func (w *Watcher) SyncExecutions(ctx context.Context, st *state.State) *state.St
 	// A host may retain a journal after the last coordinator record goes.
 	// Inventory runs once for each used, pinned host when Starts contains no
 	// active executions on it.
-	if execution.ValidIdentity(w.Host.cfg.Identity.Host) {
-		for selector := range w.Host.cfg.Agents.Hosts {
+	if execution.ValidIdentity(w.Host.Cfg().Identity.Host) {
+		for selector := range w.Host.Cfg().Agents.Hosts {
 			if needsSync[selector] {
 				continue
 			}
-			h, err := w.Host.executionHost(selector)
+			h, err := w.Host.ExecutionHost(selector)
 			if err != nil || !hostUsed(st, selector, h.Identity) {
 				continue
 			}
-			if _, ok := w.Host.executionClient(h).(execution.InventoryReader); !ok {
+			if _, ok := w.Host.ExecutionClient(h).(execution.InventoryReader); !ok {
 				continue
 			}
 			w.Mu.Lock()
@@ -86,7 +86,7 @@ func (w *Watcher) SyncExecutions(ctx context.Context, st *state.State) *state.St
 		return st
 	}
 	slices.Sort(selectors)
-	now := w.Host.now
+	now := w.Host.Now()
 	if now.IsZero() {
 		now = time.Now()
 	}
@@ -109,7 +109,7 @@ func (w *Watcher) SyncExecutions(ctx context.Context, st *state.State) *state.St
 			w.executionInventorySynced = map[string]int{}
 		}
 		last := w.Last[key]
-		wait := executionSyncBackoff(w.executionSyncFailures[selector])
+		wait := Cmd.ExecutionSyncBackoff(w.executionSyncFailures[selector])
 		if !last.IsZero() && now.Sub(last) < wait {
 			w.Mu.Unlock()
 			continue
@@ -117,7 +117,7 @@ func (w *Watcher) SyncExecutions(ctx context.Context, st *state.State) *state.St
 		w.Last[key] = now
 		w.Mu.Unlock()
 		ran = true
-		if err := w.Host.syncExecutionHost(ctx, selector); err != nil {
+		if err := w.Host.SyncExecutionHost(ctx, selector); err != nil {
 			w.Mu.Lock()
 			w.executionSyncFailures[selector]++
 			w.Mu.Unlock()
@@ -133,7 +133,7 @@ func (w *Watcher) SyncExecutions(ctx context.Context, st *state.State) *state.St
 	if !ran {
 		return st
 	}
-	updated, err := w.Host.store.Read()
+	updated, err := w.Host.Store().Read()
 	if err != nil {
 		return st
 	}

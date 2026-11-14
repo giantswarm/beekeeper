@@ -18,7 +18,7 @@ func (w *Watcher) LoopRunning() bool {
 		return true
 	}
 	var pid int
-	found, err := w.Host.store.ReadFile(loop.LoopPIDFile, &pid)
+	found, err := w.Host.Store().ReadFile(loop.LoopPIDFile, &pid)
 	return err == nil && found && pid > 0 && proc.Alive(pid)
 }
 
@@ -30,7 +30,7 @@ type watchLevel struct {
 }
 
 func (w *Watcher) publishLevel(kind string, value any) {
-	if w.Host.store == nil {
+	if w.Host.Store() == nil {
 		return
 	}
 	raw, err := json.Marshal(value)
@@ -39,12 +39,12 @@ func (w *Watcher) publishLevel(kind string, value any) {
 	}
 	name := "watch-" + kind + ".json"
 	var old watchLevel
-	found, err := w.Host.store.ReadFile(name, &old)
+	found, err := w.Host.Store().ReadFile(name, &old)
 	if err != nil {
 		return
 	}
 	next := watchLevel{At: clk.Now(), Value: raw}
-	if err := w.Host.store.WriteFile(name, next); err != nil {
+	if err := w.Host.Store().WriteFile(name, next); err != nil {
 		return
 	}
 	changed := !bytes.Equal(old.Value, raw)
@@ -55,13 +55,13 @@ func (w *Watcher) publishLevel(kind string, value any) {
 		}
 	}
 	if !found || changed {
-		_ = w.Host.store.Record(event(WatchParty, "watch."+kind, "%s", raw))
+		_ = w.Host.Store().Record(Cmd.Event(WatchParty, "watch."+kind, "%s", raw))
 	}
 }
 
 func (w *Watcher) PublishAlerts(firing []alerts.Firing) {
-	rules := w.Host.alertRules()
-	rules.InPlay = w.Host.inPlay(clk.Now())
+	rules := w.Host.AlertRules()
+	rules.InPlay = w.Host.InPlay(clk.Now())
 	firing = slices.DeleteFunc(slices.Clone(firing), func(f alerts.Firing) bool { return !rules.Wakes(f.Installation, f.Alert) })
 	w.publishLevel("alert-state", firing)
 }

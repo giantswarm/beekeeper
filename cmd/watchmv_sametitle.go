@@ -6,5 +6,5 @@ import (
 
 // SameTitles runs in the command, which holds what it needs (watchSameTitles).
 func (w *Watcher) SameTitles(sessions []*claude.Session) {
-	watchSameTitles(w, sessions)
+	Cmd.WatchSameTitles(w, sessions)
 }

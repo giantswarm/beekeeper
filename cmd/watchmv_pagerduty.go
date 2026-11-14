@@ -10,10 +10,10 @@ import (
 // while this watch owns their baseline, at the same pace on a strained
 // machine: a reading is two muster calls, and a page waits for none.
 func (w *Watcher) watchPagerDuty(ctx context.Context) {
-	store := alerts.NewPagerDutyStore(w.Host.cfg.StateDir)
+	store := alerts.NewPagerDutyStore(w.Host.Cfg().StateDir)
 	defer func() { _ = store.Release() }()
 	other := 0
-	w.Loop(ctx, w.Host.cfg.Alerts.PagerDuty.Every.Duration, false, func(ctx context.Context) {
+	w.Loop(ctx, w.Host.Cfg().Alerts.PagerDuty.Every.Duration, false, func(ctx context.Context) {
 		owned, owner, err := store.Own()
 		switch {
 		case err != nil:
@@ -30,7 +30,7 @@ func (w *Watcher) watchPagerDuty(ctx context.Context) {
 				other = 0
 				w.EmitNow("pagerduty", "PAGERDUTY taken over by this watch")
 			}
-			for _, l := range w.Host.pagerDutyCycle(ctx, store, w.musterRun) {
+			for _, l := range w.Host.PagerDutyCycle(ctx, store, w.musterRun) {
 				w.EmitNow("pagerduty", "%s", l)
 			}
 		}

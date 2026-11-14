@@ -20,7 +20,7 @@ func (w *Watcher) HandCITimerToReview(ctx context.Context, f timerFire, ag state
 	}
 	if w.LoopOwned {
 		var handed bool
-		err := w.Host.loopGitHub(ctx, "ci-review", func() error {
+		err := w.Host.LoopGitHub(ctx, "ci-review", func() error {
 			var err error
 			handed, err = w.handCITimerToReviewRead(ctx, f, ag, ref)
 			return err
@@ -32,5 +32,5 @@ func (w *Watcher) HandCITimerToReview(ctx context.Context, f timerFire, ag state
 
 // handCITimerToReviewRead runs in the command, which holds what it needs (watchHandCITimerToReviewRead).
 func (w *Watcher) handCITimerToReviewRead(ctx context.Context, f timerFire, ag state.Agent, ref string) (bool, error) {
-	return watchHandCITimerToReviewRead(w, ctx, f, ag, ref)
+	return Cmd.WatchHandCITimerToReviewRead(w, ctx, f, ag, ref)
 }

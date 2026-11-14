@@ -55,22 +55,22 @@ func reportDue(r *state.Report, pause *state.ReportPause, rc config.Reporter, no
 // with the brief's first line. It is not imported into the desktop: the
 // command-line turn has the connectors, and the person's window stays put.
 func watchStartReport(w *Watcher, ctx context.Context, sessions []*claude.Session, action reportAction) error {
-	rc := w.Host.cfg.Reporter
+	rc := watchApp(w.Host).cfg.Reporter
 	brief, err := readBrief(rc.Brief)
 	if err != nil {
 		return err
 	}
-	zone, err := reportZone(rc.TZ, w.Host.zone)
+	zone, err := reportZone(rc.TZ, watchApp(w.Host).zone)
 	if err != nil {
 		return err
 	}
-	slot := reportSlot(rc.Every.Duration, w.Host.now)
+	slot := reportSlot(rc.Every.Duration, watchApp(w.Host).now)
 	final := action == ReportFinal
 	// A scheduled report covers the interval before its slot; the final one
 	// the time since the last report started, up to now.
 	from, to := slot.Add(-rc.Every.Duration), slot
 	if final {
-		from, to = w.Host.now.Add(-rc.Every.Duration), w.Host.now
+		from, to = watchApp(w.Host).now.Add(-rc.Every.Duration), watchApp(w.Host).now
 	}
 	id := uuid.NewString()
 	p := state.Party{Session: id, Name: "Status report " + to.In(zone).Format("15:04")}
@@ -80,8 +80,8 @@ func watchStartReport(w *Watcher, ctx context.Context, sessions []*claude.Sessio
 		return ok
 	}
 	started := false
-	err = w.Host.store.Update(func(st *state.State) ([]state.Event, error) {
-		if reportDue(st.Report, st.ReportPause, rc, w.Host.now, false, false) != action {
+	err = watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
+		if reportDue(st.Report, st.ReportPause, rc, watchApp(w.Host).now, false, false) != action {
 			return nil, nil // another watch started it
 		}
 		if st.Stop != nil {
@@ -91,14 +91,14 @@ func watchStartReport(w *Watcher, ctx context.Context, sessions []*claude.Sessio
 			if st.Report != nil {
 				from = st.Report.Started
 			}
-			st.ReportPause.Final, st.ReportPause.Since = time.Time{}, w.Host.now.UTC()
+			st.ReportPause.Final, st.ReportPause.Since = time.Time{}, watchApp(w.Host).now.UTC()
 		}
-		s := state.Start{Party: p, Mode: state.ModeBypass, Dir: rc.Dir, By: reporterParty, At: w.Host.now.UTC()}
-		reg, err := w.Host.recordStart(st, s, briefTask(brief), "", live)
+		s := state.Start{Party: p, Mode: state.ModeBypass, Dir: rc.Dir, By: reporterParty, At: watchApp(w.Host).now.UTC()}
+		reg, err := watchApp(w.Host).recordStart(st, s, briefTask(brief), "", live)
 		if err != nil {
 			return nil, err
 		}
-		st.Report = &state.Report{Party: p, Unit: unit, Slot: slot, Started: w.Host.now.UTC()}
+		st.Report = &state.Report{Party: p, Unit: unit, Slot: slot, Started: watchApp(w.Host).now.UTC()}
 		started = true
 		evs := []state.Event{event(reporterParty, "reporter.start", "%s: session %s for %s, busy with %q", p.Name, id, rc.Person, reg.task)}
 		if final {

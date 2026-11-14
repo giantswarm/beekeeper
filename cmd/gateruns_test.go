@@ -55,7 +55,7 @@ func detachedWait(t *testing.T, dir string, owner state.Party) (string, int) {
 // and leaves the stop for the merge-child's outcome.
 func TestGateStopEndsADetachedReleaseWait(t *testing.T) {
 	w, _, _ := notifyingWatch(t, t.TempDir(), false)
-	a := w.Host
+	a := watchApp(w.Host)
 	base, child := detachedWait(t, a.store.Dir(), four)
 	finished, _ := detachedWait(t, a.store.Dir(), four)
 	if err := os.WriteFile(finished+".rc", []byte("0"), 0o600); err != nil {
@@ -106,7 +106,7 @@ func TestGateStopEndsADetachedReleaseWait(t *testing.T) {
 // The merge base has no internal/gate package, so these tests cannot build there.
 func TestGateStopEndsARunningAndAQueuedMerge(t *testing.T) {
 	w, _, _ := notifyingWatch(t, t.TempDir(), false)
-	a := w.Host
+	a := watchApp(w.Host)
 	dir := a.store.Dir()
 	stubPulls(t, map[int]github.Pull{1: {State: github.Open}})
 	child := hungChild(t, dir, hungRepo, 1)
@@ -182,8 +182,8 @@ func TestAStoppedWaitsOutcomeNamesTheStopper(t *testing.T) {
 	}
 	w, _, _ := notifyingWatch(t, t.TempDir(), false)
 	r.stoppedBy = four
-	w.Host.tellOwner(t.Context(), r)
-	if st, err := w.Host.store.Read(); err != nil || len(st.Owed) != 0 {
+	watchApp(w.Host).tellOwner(t.Context(), r)
+	if st, err := watchApp(w.Host).store.Read(); err != nil || len(st.Owed) != 0 {
 		t.Errorf("owed to the owner who stopped it: %+v (%v)", st.Owed, err)
 	}
 }
@@ -219,7 +219,7 @@ func TestGateRoutesItsSubcommands(t *testing.T) {
 // The merge base has no internal/gate package, so these tests cannot build there.
 func TestDetachedRunsDeadIdentityAndCleanup(t *testing.T) {
 	w, _, _ := notifyingWatch(t, t.TempDir(), false)
-	dir := w.Host.store.Dir()
+	dir := watchApp(w.Host).store.Dir()
 	now := time.Now().UTC()
 	for _, tc := range []struct {
 		name   string
@@ -256,7 +256,7 @@ func TestDetachedRunsDeadIdentityAndCleanup(t *testing.T) {
 					if err != nil || !strings.Contains(string(raw), `"phase":"dead"`) {
 						t.Fatalf("JSON: %s, %v", raw, err)
 					}
-					if _, err := w.Host.gateStop(four, r.ID); Code(err) != ExitRefused {
+					if _, err := watchApp(w.Host).gateStop(four, r.ID); Code(err) != ExitRefused {
 						t.Fatalf("dead stop: %v", err)
 					}
 				}
@@ -344,7 +344,7 @@ func TestWatchCleanupRetiresOnlyOldDeadRuns(t *testing.T) {
 
 func TestGateRunsRendersDeadWait(t *testing.T) {
 	w, _, _ := notifyingWatch(t, t.TempDir(), false)
-	a := w.Host
+	a := watchApp(w.Host)
 	base, pid := detachedWait(t, a.store.Dir(), four)
 	_ = syscall.Kill(pid, syscall.SIGKILL)
 	if !eventually(5*time.Second, func() bool { return !proc.Alive(pid) }) {

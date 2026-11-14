@@ -25,7 +25,7 @@ func ExecutionRetirementTrigger(st *state.State, r *state.ExecutionRecord) strin
 		return r.Retirement.Trigger
 	case r.StopRequest != nil:
 		return execution.RetireTriggerStop
-	case executionUnfinished(st, r):
+	case Cmd.ExecutionUnfinished(st, r):
 		return ""
 	case r.Released():
 		return execution.RetireTriggerFailedStart
@@ -43,7 +43,7 @@ func ExecutionRetirementTrigger(st *state.State, r *state.ExecutionRecord) strin
 // backoff and independently of the host's reconciliation schedule: a host
 // that stays down never holds back another host's retirement or any revocation.
 func (w *Watcher) RetireEndedExecutions(ctx context.Context, st *state.State) *state.State {
-	now := w.Host.now
+	now := w.Host.Now()
 	if now.IsZero() {
 		now = time.Now()
 	}
@@ -63,15 +63,15 @@ func (w *Watcher) RetireEndedExecutions(ctx context.Context, st *state.State) *s
 			continue
 		}
 		// Revoked and waiting for the host's part: nothing to do this tick.
-		if r.Retirement != nil && !r.Retirement.RevokedAt.IsZero() && !w.Host.executionHostRetirable(st, r) {
+		if r.Retirement != nil && !r.Retirement.RevokedAt.IsZero() && !w.Host.ExecutionHostRetirable(st, r) {
 			continue
 		}
 		ran++
 		// A host on an older release keeps its retirement open on the backoff;
 		// it is not a failure to raise until the host is updated.
-		if err := w.Host.retireExecution(ctx, r.Handle.Ref, trigger, now, down[r.Selector]); err != nil && !errors.Is(err, execution.ErrUnsupported) {
+		if err := w.Host.RetireExecution(ctx, r.Handle.Ref, trigger, now, down[r.Selector]); err != nil && !errors.Is(err, execution.ErrUnsupported) {
 			failures = append(failures, err)
-			if isUnreachable(err) {
+			if Cmd.IsUnreachable(err) {
 				down[r.Selector] = true
 			}
 		}
@@ -89,7 +89,7 @@ func (w *Watcher) RetireEndedExecutions(ctx context.Context, st *state.State) *s
 	if ran == 0 {
 		return st
 	}
-	if updated, err := w.Host.store.Read(); err == nil {
+	if updated, err := w.Host.Store().Read(); err == nil {
 		return updated
 	}
 	return st

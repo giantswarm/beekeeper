@@ -27,16 +27,16 @@ func TestParkWakeQueuesFreshContinuationWithoutHarness(t *testing.T) {
 	for _, harness := range []string{claudeComm, config.CodexHarness, capacity.HarnessAgy} {
 		t.Run(harness, func(t *testing.T) {
 			w := parkingWatch(t, nil)
-			if err := w.Host.store.Update(func(st *state.State) ([]state.Event, error) {
+			if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 				st.Agents[0].Harness = harness
 				st.Agents[0].Task = recoveryTask
-				st.Agents[0].Park = &state.Park{At: w.Host.now, On: "#3", Waits: "answer"}
+				st.Agents[0].Park = &state.Park{At: watchApp(w.Host).now, On: "#3", Waits: "answer"}
 				return nil, nil
 			}); err != nil {
 				t.Fatal(err)
 			}
 			for range 2 {
-				if err := w.Host.wakeAgent(context.Background(), state.Party{Name: resumer}, agentOne, parkAnswer, ""); err != nil {
+				if err := watchApp(w.Host).wakeAgent(context.Background(), state.Party{Name: resumer}, agentOne, parkAnswer, ""); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -118,13 +118,13 @@ func TestContinuationTransfersOwnershipOnlyAfterAcceptedStart(t *testing.T) {
 
 func TestContinuationRefusesNewEventsDuringStartup(t *testing.T) {
 	w := parkingWatch(t, nil)
-	if err := w.Host.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Agents[0].Park = &state.Park{At: w.Host.now, Continuing: true}
+	if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents[0].Park = &state.Park{At: watchApp(w.Host).now, Continuing: true}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	err := w.Host.queueContinuation(state.Party{Name: resumer}, agentOf(t, w), parkAnswer)
+	err := watchApp(w.Host).queueContinuation(state.Party{Name: resumer}, agentOf(t, w), parkAnswer)
 	if err == nil || !strings.Contains(err.Error(), "retry event delivery") {
 		t.Fatalf("event acknowledged without delivery: %v", err)
 	}
@@ -133,8 +133,8 @@ func TestContinuationRefusesNewEventsDuringStartup(t *testing.T) {
 func TestReviewWaitIgnoresLegacyMechanicalTimers(t *testing.T) {
 	w := parkingWatch(t, nil)
 	woke := stubWakes(t)
-	if err := w.Host.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Agents[0].Park = &state.Park{At: w.Host.now, On: loopPR, ReviewHead: loopHead, Waits: deskReviewWait}
+	if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents[0].Park = &state.Park{At: watchApp(w.Host).now, On: loopPR, ReviewHead: loopHead, Waits: deskReviewWait}
 		recordAgentReviewPark(st, st.Agents[0])
 		return nil, nil
 	}); err != nil {

@@ -26,7 +26,7 @@ func (w *Watcher) StaleWatches(ctx context.Context, t *proc.Table) {
 	}
 	found := map[string]bool{}
 	for _, p := range t.ByPID {
-		if !isWatch(p) {
+		if !Cmd.IsWatch(p) {
 			continue
 		}
 		path, ok := w.replacedBinary(p.PID)
@@ -36,7 +36,7 @@ func (w *Watcher) StaleWatches(ctx context.Context, t *proc.Table) {
 		key := fmt.Sprintf("%s%d", staleKey, p.PID)
 		found[key] = true
 		if !w.IsActive(key) {
-			w.Emit(key, "%s", w.staleLine(ctx, p, path, owner(t, p.PID, owners)))
+			w.Emit(key, "%s", w.staleLine(ctx, p, path, Cmd.Owner(t, p.PID, owners)))
 			w.checkInstalledGate(ctx, path)
 		}
 	}
@@ -46,7 +46,7 @@ func (w *Watcher) StaleWatches(ctx context.Context, t *proc.Table) {
 // staleLine is a stale watch's line: which watch, the version it runs, the
 // one installed at its path.
 func (w *Watcher) staleLine(ctx context.Context, p *proc.Process, path, session string) string {
-	who, running := fmt.Sprintf("%s (pid %d", display(p.Args), p.PID), project.Version()
+	who, running := fmt.Sprintf("%s (pid %d", Cmd.Display(p.Args), p.PID), project.Version()
 	if p.PID == os.Getpid() {
 		who = "this watch (pid " + fmt.Sprint(p.PID)
 	} else {
@@ -56,7 +56,7 @@ func (w *Watcher) staleLine(ctx context.Context, p *proc.Process, path, session 
 		who += ", session " + session
 	}
 	return fmt.Sprintf("WATCH STALE %s): runs %s; self-update installed %s at %s, a re-arm picks it up: %s",
-		who, running, w.binaryVersion(ctx, path), path, rearm(p.Args))
+		who, running, w.binaryVersion(ctx, path), path, Cmd.Rearm(p.Args))
 }
 
 // replacedBinary is the path of process pid's executable and whether
@@ -78,7 +78,7 @@ func (w *Watcher) binaryVersion(ctx context.Context, file string) string {
 	if w.VersionOf != nil {
 		return w.VersionOf(ctx, file)
 	}
-	return binaryVersion(ctx, file)
+	return Cmd.BinaryVersion(ctx, file)
 }
 
 // checkInstalledGate confirms the binary installed at file passes budget --gate
@@ -104,20 +104,20 @@ func (w *Watcher) checkInstalledGate(ctx context.Context, file string) {
 	} else if _, statErr := os.Stat(file); statErr == nil {
 		gctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
-		args := budgetGateArgs
-		if w.Host.cfgPath != "" {
-			args = append([]string{"--" + configFlag, w.Host.cfgPath}, args...)
+		args := Cmd.BudgetGateArgs()
+		if w.Host.CfgPath() != "" {
+			args = append([]string{"--" + configFlag, w.Host.CfgPath()}, args...)
 		}
 		out, runErr := proc.Command(gctx, file, args...).CombinedOutput()
 		if runErr != nil {
-			detail := oneLine(string(out))
+			detail := Cmd.OneLine(string(out))
 			if detail == "" {
-				detail = oneLine(runErr.Error())
+				detail = Cmd.OneLine(runErr.Error())
 			}
 			err = fmt.Errorf("%s", detail)
 		}
 	}
 	if err != nil && ctx.Err() == nil {
-		w.Fail("installed-gate "+file, "WATCH GATE FAILED %s: budget --gate failed after install: %s", file, oneLine(err.Error()))
+		w.Fail("installed-gate "+file, "WATCH GATE FAILED %s: budget --gate failed after install: %s", file, Cmd.OneLine(err.Error()))
 	}
 }

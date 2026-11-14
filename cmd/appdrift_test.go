@@ -37,7 +37,7 @@ func TestAppConsentManifestDrift(t *testing.T) {
 	}
 	var out bytes.Buffer
 	w := a.newWatcher(false, false)
-	w.Host.out = &out
+	watchApp(w.Host).out = &out
 	w.SayAppDrifts(drift)
 	if !strings.Contains(out.String(), line) {
 		t.Fatalf("watch output: %s", out.String())

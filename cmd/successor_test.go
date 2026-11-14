@@ -132,15 +132,15 @@ func TestStandbyStartsAGoneGuidesSuccessor(t *testing.T) {
 		Succeed: func(_ context.Context, rl role, from state.Party) (state.Party, error) {
 			started.Add(1)
 			to := state.Party{Session: "sG8", Name: guideEight}
-			return to, w.Host.store.Update(func(st *state.State) ([]state.Event, error) {
-				_, evs, err := rl.Relay(st, from, to, w.Host.now, time.Hour)
+			return to, watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
+				_, evs, err := rl.Relay(st, from, to, watchApp(w.Host).now, time.Hour)
 				return evs, err
 			})
 		},
 	}
 	t.Cleanup(w.Stand.Inflight.Wait)
 	guide := state.Party{Session: sessionG7, HostSession: hostG7, Name: guideSeven}
-	err := w.Host.store.Update(func(st *state.State) ([]state.Event, error) {
+	err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Guide = &state.Role{Holder: &state.Supervisor{Party: guide, Since: relayNow.Add(-time.Hour)}, Run: 7,
 			CLI: &state.CLI{Supervisor: guide, Since: relayNow.Add(-time.Hour), PID: 77, Gone: relayNow.Add(-time.Minute)}}
 		return nil, nil
@@ -149,7 +149,7 @@ func TestStandbyStartsAGoneGuidesSuccessor(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, at := range []time.Duration{0, 10 * time.Second, time.Minute} {
-		w.Host.now = relayNow.Add(at)
+		watchApp(w.Host).now = relayNow.Add(at)
 		w.Pending(context.Background(), nil)
 		eventually(2*time.Second, func() bool { return !w.Stand.Starting.Load() })
 	}
@@ -171,7 +171,7 @@ func TestAFirstTurnIsNotGone(t *testing.T) {
 			return state.Party{}, nil
 		},
 	}
-	err := w.Host.store.Update(func(st *state.State) ([]state.Event, error) {
+	err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Guide = &state.Role{Holder: &state.Supervisor{Party: four, Since: relayNow.Add(-time.Hour)}}
 		st.Guide.CLI = &state.CLI{Supervisor: four, Since: relayNow.Add(-time.Hour), PID: 44, Gone: relayNow.Add(-time.Hour)}
 		return nil, nil
@@ -179,7 +179,7 @@ func TestAFirstTurnIsNotGone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w.Host.now = relayNow
+	watchApp(w.Host).now = relayNow
 	w.Pending(context.Background(), nil)
 	if strings.Contains(out.String(), "GONE") {
 		t.Errorf("a first turn said gone:\n%s", out)
@@ -192,7 +192,7 @@ func TestStandbyResumesARestartedGuide(t *testing.T) {
 	sent := make(chan string, 2)
 	w.Stand = standbyWatch{Send: func(_ context.Context, to, msg string) error { sent <- to + ": " + msg; return nil }}
 	guide := state.Party{Session: sessionG7, HostSession: hostG7, Name: guideSeven}
-	err := w.Host.store.Update(func(st *state.State) ([]state.Event, error) {
+	err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Guide = &state.Role{Holder: &state.Supervisor{Party: guide, Since: relayNow.Add(-time.Hour)},
 			CLI: &state.CLI{Supervisor: guide, Since: relayNow.Add(-time.Hour), PID: 77}}
 		return nil, nil
@@ -200,7 +200,7 @@ func TestStandbyResumesARestartedGuide(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w.Host.now = relayNow
+	watchApp(w.Host).now = relayNow
 	w.Pending(context.Background(), []*claude.Session{{ID: sessionG7, HostID: hostG7, Name: guideSeven, PID: 78}})
 	select {
 	case m := <-sent:
@@ -290,9 +290,9 @@ func TestSuccessorDir(t *testing.T) {
 // since, its CLI gone two minutes before w.now.
 func supervisedBy(t *testing.T, w *Watcher, p state.Party, since time.Time) {
 	t.Helper()
-	err := w.Host.store.Update(func(st *state.State) ([]state.Event, error) {
+	err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Guide = &state.Role{Holder: &state.Supervisor{Party: p, Since: since}}
-		st.Guide.CLI = &state.CLI{Supervisor: p, Since: since, PID: 50, Gone: w.Host.now.Add(-2 * time.Minute)}
+		st.Guide.CLI = &state.CLI{Supervisor: p, Since: since, PID: 50, Gone: watchApp(w.Host).now.Add(-2 * time.Minute)}
 		st.Starts = append(st.Starts, state.Start{Party: p, Mode: state.ModeBypass, At: since})
 		return nil, nil
 	})
@@ -307,7 +307,7 @@ func supervisedBy(t *testing.T, w *Watcher, p state.Party, since time.Time) {
 // apart.
 func TestStandbyResumesAndBoundsSuccessorsThatDoNotComeUp(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), true)
-	w.Host.cfg.Guide.Person = pat
+	watchApp(w.Host).cfg.Guide.Person = pat
 	var revived []string
 	var succeeded atomic.Int32
 	w.Stand = standbyWatch{
@@ -326,14 +326,14 @@ func TestStandbyResumesAndBoundsSuccessorsThatDoNotComeUp(t *testing.T) {
 	}
 	t.Cleanup(w.Stand.Inflight.Wait)
 	poll := func(at time.Time) {
-		w.Host.now = at
+		watchApp(w.Host).now = at
 		w.Pending(context.Background(), nil)
 		eventually(2*time.Second, func() bool { return !w.Stand.Starting.Load() })
 	}
 	at := relayNow
 	for i, wait := range []time.Duration{successorBackoff, 2 * successorBackoff, time.Hour} {
 		run := state.Party{Session: fmt.Sprintf("s%d", 12+i), Name: guideRole.RunName(12 + i)}
-		w.Host.now = at
+		watchApp(w.Host).now = at
 		supervisedBy(t, w, run, at.Add(-time.Minute))
 		poll(at)
 		if len(revived) != i+1 || revived[i] != run.Name || succeeded.Load() != int32(i) {
@@ -350,7 +350,7 @@ func TestStandbyResumesAndBoundsSuccessorsThatDoNotComeUp(t *testing.T) {
 	if n := succeeded.Load(); n != 2 {
 		t.Errorf("%d successors, want 2 (the third failed one ends the chain)", n)
 	}
-	st, _ := w.Host.store.Read()
+	st, _ := watchApp(w.Host).store.Read()
 	if len(st.Notes) != 1 || !strings.Contains(st.Notes[0].Text, `"Guide run 12"`) || st.Notes[0].For != pat {
 		t.Errorf("notes: %+v", st.Notes)
 	}
@@ -376,7 +376,7 @@ func TestStandbySucceedsAGoneDesktopSupervisorAtOnce(t *testing.T) {
 		Chains: map[string]*successorChain{guideRole.Name: {Failures: 1, Next: relayNow.Add(time.Hour)}},
 	}
 	t.Cleanup(w.Stand.Inflight.Wait)
-	err := w.Host.store.Update(func(st *state.State) ([]state.Event, error) {
+	err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Guide = &state.Role{Holder: &state.Supervisor{Party: four, Since: relayNow.Add(-time.Hour)}}
 		st.Guide.CLI = &state.CLI{Supervisor: four, Since: relayNow.Add(-time.Hour), PID: 44}
 		return nil, nil
@@ -384,16 +384,16 @@ func TestStandbySucceedsAGoneDesktopSupervisorAtOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w.Host.now = relayNow
+	watchApp(w.Host).now = relayNow
 	w.Pending(context.Background(), []*claude.Session{{ID: four.Session, HostID: hostFour, Name: agentFour, PID: 44}})
 	if w.Stand.Chains[guideRole.Name] != nil {
 		t.Fatalf("a supervisor up again kept the chain: %+v", w.Stand.Chains[guideRole.Name])
 	}
-	_ = w.Host.store.Update(func(st *state.State) ([]state.Event, error) {
+	_ = watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Guide.CLI.Gone = relayNow
 		return nil, nil
 	})
-	w.Host.now = relayNow.Add(2 * time.Minute)
+	watchApp(w.Host).now = relayNow.Add(2 * time.Minute)
 	w.Pending(context.Background(), nil)
 	eventually(2*time.Second, func() bool { return succeeded.Load() == 1 })
 	if n := succeeded.Load(); n != 1 {
@@ -408,7 +408,7 @@ func TestStandbyResumesTheDesktopCLINotTheFirstTurn(t *testing.T) {
 	sent := make(chan string, 2)
 	w.Stand = standbyWatch{Send: func(_ context.Context, to, msg string) error { sent <- to; return nil }}
 	guide := state.Party{Session: sessionG7, HostSession: hostG7, Name: guideSeven}
-	err := w.Host.store.Update(func(st *state.State) ([]state.Event, error) {
+	err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Guide = &state.Role{Holder: &state.Supervisor{Party: guide, Since: relayNow.Add(-time.Minute)},
 			CLI: &state.CLI{Supervisor: guide, Since: relayNow.Add(-time.Minute), PID: 77}}
 		return nil, nil
@@ -420,7 +420,7 @@ func TestStandbyResumesTheDesktopCLINotTheFirstTurn(t *testing.T) {
 		78: {PID: 78, Comm: claudeComm, Args: []string{claudeComm, "-p", sessionIDFlag, sessionG7}},
 		79: {PID: 79, Comm: claudeComm, Args: []string{claudeComm, resumeFlag, sessionG7}},
 	}}
-	w.Host.now = relayNow
+	watchApp(w.Host).now = relayNow
 	w.Pending(context.Background(), []*claude.Session{{ID: sessionG7, HostID: hostG7, Name: guideSeven, PID: 78}})
 	select {
 	case to := <-sent:

@@ -18,7 +18,7 @@ func (w *Watcher) GuideMonitor(ctx context.Context, st *state.State, sessions []
 	if st.Stop != nil || st.Guide == nil || st.Guide.Holder == nil {
 		return
 	}
-	events, err := w.Host.store.Follow("independent-guide-reports", func(e state.Event) bool { return e.Verb == loop.LoopFileVerb })
+	events, err := w.Host.Store().Follow("independent-guide-reports", func(e state.Event) bool { return e.Verb == loop.LoopFileVerb })
 	if err != nil {
 		w.Fail("guide-monitor", "cannot read guide reports: %v", err)
 		return
@@ -35,7 +35,7 @@ func (w *Watcher) GuideMonitor(ctx context.Context, st *state.State, sessions []
 		to = r.Holder.Name
 		holder = r.Holder.Party
 
-		reportsSince, workText, reportCount, deliveredBefore := st.GuideReportsSince, guideWorkText(st), len(st.GuideReports), len(r.Delivered)
+		reportsSince, workText, reportCount, deliveredBefore := st.GuideReportsSince, Cmd.GuideWorkText(st), len(st.GuideReports), len(r.Delivered)
 		var current []string
 		notice := func(key, text string) {
 			key = r.Holder.Session + ":" + r.Holder.HostSession + ":" + key
@@ -49,35 +49,35 @@ func (w *Watcher) GuideMonitor(ctx context.Context, st *state.State, sessions []
 		if since.IsZero() {
 			since = r.Holder.Since
 		}
-		grace := max(2*time.Minute, 3*w.Host.cfg.Watch.Interval.Duration)
+		grace := max(2*time.Minute, 3*w.Host.Cfg().Watch.Interval.Duration)
 		// Both consumers retain reports under the same lock; the first owns
 		// delivery and the other observes the durable report key.
-		for _, e := range guideReportEvents(st, events, w.Host.now) {
+		for _, e := range Cmd.GuideReportEvents(st, events, w.Host.Now()) {
 			key, text, ok := loop.Keyed(e.Detail)
 			if !ok || !strings.Contains(text, loop.FileReportSeparator) {
 				continue
 			}
-			retainGuideReport(st, key, text, e.At, r.Holder.Party)
+			Cmd.RetainGuideReport(st, key, text, e.At, r.Holder.Party)
 		}
 
-		if !since.IsZero() && w.Host.now.Sub(since) > grace {
+		if !since.IsZero() && w.Host.Now().Sub(since) > grace {
 			notice("watch:"+since.String(), "GUIDE WATCH LAPSED: the independent desk watch has seen no guide feed heartbeat since "+since.Format(time.RFC3339)+"; re-arm `beekeeper guide watch` and read `beekeeper guide work`.")
 		}
 		for _, n := range st.Notes {
-			if guides(w.Host.cfg.Guide.Person, &n) && !slices.Contains(r.Fed, fmt.Sprintf("note#%d", n.ID)) {
+			if Cmd.Guides(w.Host.Cfg().Guide.Person, &n) && !slices.Contains(r.Fed, fmt.Sprintf("note#%d", n.ID)) {
 				notice(fmt.Sprintf("note:%d:%s", n.ID, n.At.String()), fmt.Sprintf("GUIDE DECISION: note %d is waiting; run `beekeeper guide next` and ask in conversation without a blocking tool.", n.ID))
 			}
 		}
 		for _, work := range st.GuideWork {
-			if guideWorkBlocks(work, w.Host.now) && !slices.Contains(r.Fed, "problem:"+work.Source) {
-				notice(fmt.Sprintf("work:%d:%s", work.ID, work.Due.String()), fmt.Sprintf("GUIDE WORK DUE: %d [%s] %s; run `beekeeper guide work`.", work.ID, work.Kind, escapedLine(work.Text)))
+			if Cmd.GuideWorkBlocks(work, w.Host.Now()) && !slices.Contains(r.Fed, "problem:"+work.Source) {
+				notice(fmt.Sprintf("work:%d:%s", work.ID, work.Due.String()), fmt.Sprintf("GUIDE WORK DUE: %d [%s] %s; run `beekeeper guide work`.", work.ID, work.Kind, Cmd.EscapedLine(work.Text)))
 			}
 		}
 		r.Delivered = slices.DeleteFunc(r.Delivered, func(key string) bool { return !slices.Contains(current, key) })
-		return !reportsSince.Equal(st.GuideReportsSince) || workText != guideWorkText(st) || reportCount != len(st.GuideReports) || len(r.Delivered) != deliveredBefore
+		return !reportsSince.Equal(st.GuideReportsSince) || workText != Cmd.GuideWorkText(st) || reportCount != len(st.GuideReports) || len(r.Delivered) != deliveredBefore
 	}
 	if step(st) {
-		err = w.Host.store.Update(func(st *state.State) ([]state.Event, error) {
+		err = w.Host.Store().Update(func(st *state.State) ([]state.Event, error) {
 			step(st)
 			return nil, nil
 		})
@@ -101,10 +101,10 @@ func (w *Watcher) GuideMonitor(ctx context.Context, st *state.State, sessions []
 	}
 	w.SendAsync(ctx, to, strings.Join(lines, "\n"), func(err error) {
 		if err != nil {
-			_ = w.Host.store.Record(state.Event{At: time.Now(), By: WatchParty, Verb: "guide.delivery.failed", Detail: err.Error()})
+			_ = w.Host.Store().Record(state.Event{At: time.Now(), By: WatchParty, Verb: "guide.delivery.failed", Detail: err.Error()})
 			return
 		}
-		if err := w.Host.store.Update(func(st *state.State) ([]state.Event, error) {
+		if err := w.Host.Store().Update(func(st *state.State) ([]state.Event, error) {
 			if st.Guide != nil && st.Guide.Holder != nil && st.Guide.Holder.Is(holder) {
 				for _, key := range keys {
 					if !slices.Contains(st.Guide.Delivered, key) {
@@ -114,7 +114,7 @@ func (w *Watcher) GuideMonitor(ctx context.Context, st *state.State, sessions []
 			}
 			return nil, nil
 		}); err != nil {
-			_ = w.Host.store.Record(state.Event{At: time.Now(), By: WatchParty, Verb: "guide.delivery.failed", Detail: err.Error()})
+			_ = w.Host.Store().Record(state.Event{At: time.Now(), By: WatchParty, Verb: "guide.delivery.failed", Detail: err.Error()})
 		}
 	})
 }

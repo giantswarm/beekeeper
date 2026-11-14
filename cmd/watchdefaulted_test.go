@@ -19,7 +19,7 @@ func TestWatchDefaultedWakesOncePerSession(t *testing.T) {
 				var notes []state.Note
 				for session := 0; session < sessions; session++ {
 					for i := 0; i < 3; i++ {
-						notes = append(notes, state.Note{ID: len(notes) + 1, Kind: noteDecision, For: w.Host.cfg.Guide.Person, Text: "Apply the fixture", Default: "Use the fixture", Due: w.Host.now.Add(-time.Minute), By: state.Party{Session: []string{"fixture-session-a", "fixture-session-b"}[session]}})
+						notes = append(notes, state.Note{ID: len(notes) + 1, Kind: noteDecision, For: watchApp(w.Host).cfg.Guide.Person, Text: "Apply the fixture", Default: "Use the fixture", Due: watchApp(w.Host).now.Add(-time.Minute), By: state.Party{Session: []string{"fixture-session-a", "fixture-session-b"}[session]}})
 					}
 				}
 				setNotes(t, w, notes...)
@@ -46,7 +46,7 @@ func TestWatchDefaultedWakesOncePerSession(t *testing.T) {
 					if len(got) != 1 || strings.Count(got[0], defaultedLine(&n)) != 1 {
 						t.Fatalf("note %d: wakes = %q, want one containing its default", n.ID, got)
 					}
-					shown, err := w.Host.localNote(n.ID)
+					shown, err := watchApp(w.Host).localNote(n.ID)
 					want := "delivered"
 					if failed {
 						want = noteDeliveryFailed
@@ -67,8 +67,8 @@ func TestWatchDefaultedBatchesCurrentRoleHolder(t *testing.T) {
 		{ID: 1, By: state.Party{Name: firstRun}, Default: "first fixture"},
 		{ID: 2, By: holder, Default: "second fixture"},
 	}
-	if err := w.Host.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Guide = &state.Role{Holder: &state.Supervisor{Party: holder, Since: w.Host.now}}
+	if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Guide = &state.Role{Holder: &state.Supervisor{Party: holder, Since: watchApp(w.Host).now}}
 		st.Defaulted = notes
 		return nil, nil
 	}); err != nil {

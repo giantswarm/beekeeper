@@ -100,7 +100,7 @@ func (a *app) freeTmpfs(dryRun bool, read func() (free.Machine, error)) tmpfsRun
 // so the sample goes on. The freeing flag orders the runs as goCaching orders
 // the Go build cache's looks: freeNext is read only with the flag held.
 func watchAutoFree(w *Watcher, now time.Time) {
-	every := w.Host.cfg.Doctor.FreeEvery.Duration
+	every := watchApp(w.Host).cfg.Doctor.FreeEvery.Duration
 	if !w.FreeOn || every <= 0 || !w.Freeing.CompareAndSwap(false, true) {
 		return
 	}
@@ -108,7 +108,7 @@ func watchAutoFree(w *Watcher, now time.Time) {
 		w.Freeing.Store(false)
 		return
 	}
-	d := *w.Host // reading the machine moves its now on
+	d := *watchApp(w.Host) // reading the machine moves its now on
 	w.Bg.Add(1)
 	go func() {
 		defer w.Bg.Done()
@@ -126,7 +126,7 @@ func watchFreeDue(w *Watcher, read func() (free.Machine, error), now time.Time, 
 		w.FreeNext = m.At.Add(every)
 		return
 	}
-	r := w.Host.freeTmpfs(false, read)
+	r := watchApp(w.Host).freeTmpfs(false, read)
 	if r.locked {
 		w.FreeNext = now.Add(goCacheRetry)
 		return
@@ -137,7 +137,7 @@ func watchFreeDue(w *Watcher, read func() (free.Machine, error), now time.Time, 
 		return
 	}
 	m := freeMark{At: now, Freed: r.what()}
-	_ = w.Host.store.WriteFile(freeFile, m)
+	_ = watchApp(w.Host).store.WriteFile(freeFile, m)
 	w.LastFree.Store(&m)
 	if m.Freed != "" {
 		w.EmitNow("free", "FREED in tmpfs: %s (doctor.freeEvery)", m.Freed)

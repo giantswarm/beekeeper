@@ -87,7 +87,7 @@ func StormLine(rate, usual float64, started []*proc.Process, t *proc.Table, owne
 	comms, sessions := map[string]int{}, map[string]int{}
 	for _, p := range started {
 		comms[p.Comm]++
-		if s := owner(t, p.PID, owners); s != "" {
+		if s := Cmd.Owner(t, p.PID, owners); s != "" {
 			sessions[s]++
 		}
 	}
@@ -139,16 +139,16 @@ func Stacks(t *proc.Table, now time.Time, max int, owners map[int]string) []stac
 		key := stackKey(t, p, owners)
 		s := by[key]
 		if s == nil {
-			s = &stack{Key: key, Cmd: display(p.Args)}
+			s = &stack{Key: key, Cmd: Cmd.Display(p.Args)}
 			by[key] = s
 		}
 		s.Count++
 		s.pids = append(s.pids, p.PID)
 		if e := p.Elapsed(now); e > s.Oldest {
 			s.Oldest = e
-			s.Parent, s.Session = "", owner(t, p.PID, owners)
+			s.Parent, s.Session = "", Cmd.Owner(t, p.PID, owners)
 			if pp := t.ByPID[p.PPID]; pp != nil {
-				s.Parent = display(pp.Args)
+				s.Parent = Cmd.Display(pp.Args)
 			}
 		}
 	}
@@ -215,7 +215,7 @@ func ToolLoadLine(t *proc.Table, tools []string, max int, owners map[int]string)
 		}
 		n++
 		comms[p.Comm]++
-		if s := owner(t, p.PID, owners); s != "" {
+		if s := Cmd.Owner(t, p.PID, owners); s != "" {
 			sessions[s]++
 		}
 	}
