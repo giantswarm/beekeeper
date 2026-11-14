@@ -401,6 +401,68 @@ func TestLoopPassAdmitsOnTheSavedReading(t *testing.T) {
 	}
 }
 
+// The conditional REST read of a repository's newest pull request spends
+// no GraphQL: it is admitted on the saved reading and the background scans'
+// REST allowance, takes no budget reading and leaves the GraphQL allowance
+// alone. It still waits while that REST allowance is exhausted, with
+// github.floor enabled or disabled, and while the saved reading is under
+// the floor (#3769). The step is named by its value, so the test also
+// builds on a merge base without loop.LoopRevisionStep.
+func TestLoopRevisionReadTakesNoBudgetReading(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		floor int
+	}{
+		{name: "floor", floor: 1000},
+		{name: "floor disabled", floor: -1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newLoopRig(t)
+			r.a.cfg.GitHub.Floor = tc.floor
+			healthyLoopBudget(t, r)
+			readLoopGraphQLBudget = func(*app, context.Context) (github.Budget, error) {
+				t.Fatal("the revision read took a budget reading")
+				return github.Budget{}, nil
+			}
+			// loop.LoopRevisionStep
+			step := "revision"
+			runs := 0
+			read := func() error { runs++; return nil }
+			if err := r.a.loopGitHub(t.Context(), step, read); err != nil || runs != 1 {
+				t.Fatalf("healthy saved reading: runs=%d err=%v, want the read admitted", runs, err)
+			}
+			var spend loopGraphQLSpend
+			if found, err := r.a.store.ReadFile(loopGraphQLFile, &spend); err != nil || found {
+				t.Fatalf("the revision read wrote the GraphQL allowance: %+v %v", spend, err)
+			}
+			// The loop's scans spent 2500 of the window, 2300 remain: the
+			// next reservation would pass the allowance.
+			exhausted := loopRESTSpend{Reset: r.a.now.Add(time.Hour), Spent: 2500, Remaining: 2300}
+			if err := r.a.store.WriteFile(loopRESTFile, exhausted); err != nil {
+				t.Fatal(err)
+			}
+			if err := r.a.loopGitHub(t.Context(), step, read); !errors.Is(err, loop.ErrLoopLater) || runs != 1 {
+				t.Fatalf("exhausted REST allowance: runs=%d err=%v, want the read held", runs, err)
+			}
+			if tc.floor <= 0 {
+				return
+			}
+			if err := r.a.store.WriteFile(loopRESTFile, loopRESTSpend{}); err != nil {
+				t.Fatal(err)
+			}
+			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Budget.GraphQL.Remaining = tc.floor - 1
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if err := r.a.loopGitHub(t.Context(), step, read); !errors.Is(err, loop.ErrLoopLater) || runs != 1 {
+				t.Fatalf("saved reading under github.floor: runs=%d err=%v, want the read held", runs, err)
+			}
+		})
+	}
+}
+
 func healthyLoopBudget(t *testing.T, r *loopRig) {
 	t.Helper()
 	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {

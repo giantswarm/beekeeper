@@ -233,9 +233,10 @@ hourly, is counted between two fresh readings, each a GraphQL query per identity
 
 The inventory cost regression simulates an hour of 30-second idle passes with
 three repositories. The first pass makes nine GraphQL calls, two readings and one
-query for each repository; the passes that read the repositories again make
-none when they are unchanged or their reads fail, and nine when each full read
-fails. The scenario `loop-hour-leaves-the-graphql-budget-above-the-floor` bounds
-the loop's budget readings, pull watch polls and GraphQL points over an hour of
-passes. Neither bounds worker activity. A release still needs a 24-hour live
-observation of budget holds and refill stalls to establish the end-to-end result.
+query for each repository, or none when the conditional reads fail; the passes
+that read the repositories again make none when they are unchanged or their
+conditional reads fail, and nine when each full read fails. The scenario
+`loop-hour-leaves-the-graphql-budget-above-the-floor` bounds the loop's budget
+readings, pull watch polls and GraphQL points over an hour of passes. Neither
+bounds worker activity. A release still needs a 24-hour live observation of
+budget holds and refill stalls to establish the end-to-end result.

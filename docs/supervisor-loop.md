@@ -73,8 +73,10 @@ unchanged response costs no REST core points and skips the GraphQL inventory. A 
 least hourly; missing validators and failed or incomplete reads never certify an empty backlog.
 Background inventory and orphan scans always share a separate durable allowance of 1,000 REST points
 per window, reserving 50 points before a batch and preserving an enabled `github.floor` for other
-work. The conditional check is admitted while the allowance and the saved reading have room, and
-takes no budget reading: it spends no GraphQL, and unchanged no REST either.
+work. The conditional check takes no budget reading and reserves nothing: it waits while the
+allowance is exhausted and, with `github.floor` enabled, while the saved reading is unknown or under
+it. It spends no GraphQL, and unchanged no REST either; a changed answer's one REST point is not
+charged to the allowance.
 
 Disabling the shared floor for emergency access does not disable this scan allowance or make scans
 depend on GraphQL admission. Fresh conditional budget samples settle the reservation; an interrupted
