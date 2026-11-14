@@ -9,7 +9,7 @@ jobs:
             - env:
                 BATCH_CI_CONFIG: '{"baseBranch":"main","gateAppID":15368,"mode":"prepare","results":[{"name":"pre-commit","appID":15368,"workflow":".github/workflows/zz_generated.pre-commit.yaml"},{"name":"check-values-schema / validate","appID":15368,"workflow":".github/workflows/zz_generated.check_values_schema.yaml"},{"name":"ci/circleci: pin-version","creatorID":127350680},{"name":"ci/circleci: go-build","creatorID":127350680},{"name":"ci/circleci: test-envtest","creatorID":127350680},{"name":"ci/circleci: test-stable-version","creatorID":127350680},{"name":"ci/circleci: test-loop-workflow","creatorID":127350680},{"name":"ci/circleci: test-large-history","creatorID":127350680},{"name":"ci/circleci: build-chart","creatorID":127350680},{"name":"ci/circleci: build-image","creatorID":127350680},{"name":"ci/circleci: chart-test","creatorID":127350680}]}'
               name: Verify admission policy and exact queue results
-              uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+              uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
               with:
                 script: |
                     // Generated inline: do not check out and execute untrusted PR code here.
