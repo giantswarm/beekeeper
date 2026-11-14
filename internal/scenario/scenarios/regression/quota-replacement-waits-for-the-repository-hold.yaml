@@ -2,11 +2,12 @@ name: quota-replacement-waits-for-the-repository-hold
 description: >
   A hold on a repository stops every start the loop makes there, its
   recovery restarts too. The refill starts the item of example/app on agy,
-  and the worker's turn ends on the account's quota. The repository is then
-  held: the next pass frees the slot but starts no replacement, keeps the
-  task on the roster and says which hold it waits for. Once the hold is
-  lifted, the next pass restarts the task on Claude. Live, the loop kept
-  starting workers in a repository held so that nobody works there.
+  and a woken second turn ends on the account's quota after the start
+  returned. The repository is then held: the next pass frees the slot but
+  starts no replacement, keeps the task on the roster and says which hold it
+  waits for. Once the hold is lifted, the next pass restarts the task on
+  Claude. Live, the loop kept starting workers in a repository held so that
+  nobody works there.
 issue: https://github.com/giantswarm/beekeeper/issues/3364
 flow: regression
 tags: [regression, refill, hold, agy, quota]
@@ -45,6 +46,10 @@ given:
       - name: app 1
         harness: agy
         turns:
+          # The first turn finishes cleanly so agents start accepts the agy
+          # session instead of falling back inside the start gate; the second
+          # turn spends the quota and leaves recovery to the loop.
+          - outcome: finish
           - outcome: budget
       - name: app 1
         harness: claude
@@ -74,12 +79,20 @@ when:
     expect:
       - exit: 0
       - events: {contains: [agents.start]}
+  - wait_for:
+      timeout: 30s
+      expect:
+        - worker: {name: app 1, harness: agy, turns: 1, outcome: finish, running: true}
+  - name: spend
+    run: {args: [--as, scenario, agents, wake, app 1, continue]}
+    expect:
+      - exit: 0
   # agy-run writes the quota marker before it ends the CLI: once no agy CLI
   # of the worker runs, the loop reads the quota.
   - wait_for:
       timeout: 30s
       expect:
-        - worker: {name: app 1, harness: agy, turns: 1, outcome: budget, running: false}
+        - worker: {name: app 1, harness: agy, turns: 2, outcome: budget, running: false}
   - name: hold
     run: {args: [--as, scenario, hold, set, example/app, --reason, the repository is being migrated]}
     expect:
@@ -115,6 +128,6 @@ when:
         - worker: {name: app 1, harness: claude, turns: 1}
 
 then:
-  - worker: {name: app 1, harness: agy, turns: 1, outcome: budget}
+  - worker: {name: app 1, harness: agy, turns: 2, outcome: budget}
   - worker: {name: app 1, harness: claude, turns: 1}
   - events: {contains: [hold.set, supervisor.quota, agents.start]}
