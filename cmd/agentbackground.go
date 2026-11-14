@@ -722,11 +722,11 @@ func (a *app) lockForWake(ctx context.Context, st *state.State, p state.Party) (
 // a stop's last look; tests replace it.
 var freshSessions = (*app).sessions
 
-// stopParked stops the background sessions of parkedResident, each once
+// watchStopParked stops the background sessions of parkedResident, each once
 // its turn ended, so a parked session costs the machine no memory; its wake
 // (agents wake, agents resume, the watch's resume or a timer's) resumes it
 // from its transcript. A stop that fails is a line, tried again next poll.
-func (w *watcher) stopParked(ctx context.Context, st *state.State, sessions []*claude.Session) {
+func watchStopParked(w *watcher, ctx context.Context, st *state.State, sessions []*claude.Session) {
 	if !slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Park != nil }) {
 		return
 	}

@@ -229,7 +229,7 @@ func TestWatchBatchDoctorFailuresAreImmediate(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			w, out, _ := batchWatcher(t)
 			if tc.chore {
-				w.sayChores(doctorReport{chores: []string{tc.line}})
+				watchSayChores(w, doctorReport{chores: []string{tc.line}})
 			} else {
 				w.check("doctor-stale 123", true, "DOCTOR %s", tc.line)
 			}
@@ -247,7 +247,7 @@ func TestWatchBatchDoctorFailuresAreImmediate(t *testing.T) {
 func TestWatchBatchDoctorSuccessfulUnitResetIsRoutine(t *testing.T) {
 	w, out, _ := batchWatcher(t)
 	line := "reset the failed units beekeeper-worker.service: their outcomes are in the event log"
-	w.sayChores(doctorReport{chores: []string{line}})
+	watchSayChores(w, doctorReport{chores: []string{line}})
 	if out.Len() != 0 {
 		t.Fatal("completed reset woke the monitor before the tick")
 	}

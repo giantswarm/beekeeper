@@ -228,35 +228,14 @@ func (r *goCacheRun) holdForRuns(parent context.Context) (release func(), ok boo
 	return release, true, nil
 }
 
-// goCache reads the size of the Go build cache every doctor.goCacheEvery
-// and trims it over its cap, in the background so the sample goes on
-// (goCacheLook). The goCaching flag orders the looks: the
-// next look's time is read only with the flag held, after the look that
-// wrote it gave the flag back.
-func (w *watcher) goCache(now time.Time) {
-	if w.a.cfg.Disk.Auto() || !w.goCacheOn || w.a.cfg.Doctor.GoCacheMax() == 0 || !w.goCaching.CompareAndSwap(false, true) {
-		return
-	}
-	if now.Before(w.goCacheNext) {
-		w.goCaching.Store(false)
-		return
-	}
-	w.bg.Add(1)
-	go func() {
-		defer w.bg.Done()
-		defer w.goCaching.Store(false)
-		w.goCacheLook(now, goBuilds)
-	}()
-}
-
-// goCacheLook is one look of the watch at the cache, unless the last look
+// watchGoCacheLook is one look of the watch at the cache, unless the last look
 // was under an interval ago with the cache under its cap. A cache the trim
 // leaves over its cap (the builds held it back) is looked at again every
 // goCacheRetry; once it has stayed over the cap for doctor.goCacheEvery,
 // across two intervals, the watch says GO CACHE with its size, its cap and
 // how long the trim has waited, until it is under the cap. A failed read or
 // trim is GO CACHE too.
-func (w *watcher) goCacheLook(now time.Time, builds func() []int) {
+func watchGoCacheLook(w *watcher, now time.Time, builds func() []int) {
 	every := w.a.cfg.Doctor.GoCacheEvery.Duration
 	var m goCacheMark
 	_, _ = w.a.store.ReadFile(goCacheFile, &m)

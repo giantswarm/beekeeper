@@ -63,9 +63,9 @@ func (d sameTitle) String() string {
 // session carries.
 const sameTitleKey = "same-title "
 
-// sameTitles says one SAME TITLE line per title more than one live session
+// watchSameTitles says one SAME TITLE line per title more than one live session
 // carries, and its ENDED line once one session is left with it.
-func (w *watcher) sameTitles(sessions []*claude.Session) {
+func watchSameTitles(w *watcher, sessions []*claude.Session) {
 	found := map[string]bool{}
 	for _, d := range sameTitles(sessions) {
 		key := sameTitleKey + titleKey(d.title)

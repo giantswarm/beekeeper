@@ -17,7 +17,7 @@ func (o recoveryOutput) Write(p []byte) (int, error) {
 	return o.watch.a.out.Write(p)
 }
 
-func (w *watcher) newGuideRecovery() *watcher {
+func watchNewGuideRecovery(w *watcher) *watcher {
 	a := *w.a
 	a.out = recoveryOutput{w}
 	g := a.newWatcher(true, false)
@@ -27,10 +27,10 @@ func (w *watcher) newGuideRecovery() *watcher {
 
 const guideRecoveryKey = "guide-recovery"
 
-// recoverGuide is independent of the main watch's network reads, event replay,
+// watchRecoverGuide is independent of the main watch's network reads, event replay,
 // accounting and maintenance. It needs only process identities and role state.
 // Unknown process/state observations never mean that the guide is dead.
-func (w *watcher) recoverGuide(ctx context.Context) {
+func watchRecoverGuide(w *watcher, ctx context.Context) {
 	if ctx.Err() != nil || w.stand.starting.Load() || w.stand.busy.Load() {
 		return
 	}

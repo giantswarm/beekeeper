@@ -9,9 +9,9 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
-// tellDefaulted batches a pass by its current recipients. Each note still
+// watchTellDefaulted batches a pass by its current recipients. Each note still
 // follows the usual mailbox, role fallback and delivery-status handling.
-func (w *watcher) tellDefaulted(ctx context.Context, notes []state.Note) {
+func watchTellDefaulted(w *watcher, ctx context.Context, notes []state.Note) {
 	st, err := w.a.store.Read()
 	if err != nil {
 		w.fail("state-read", "cannot read the state: %v", err)

@@ -461,9 +461,9 @@ func diskCacheTarget(size, capBytes int64, pressure bool) (int64, bool) {
 	return capBytes * 3 / 4, true
 }
 
-// diskPrune runs on schedule and under pressure. All watches share the mark
+// watchDiskPrune runs on schedule and under pressure. All watches share the mark
 // and lock; pressure retries are bounded to once per five minutes.
-func (w *watcher) diskPrune(now time.Time, pressure bool) {
+func watchDiskPrune(w *watcher, now time.Time, pressure bool) {
 	if !w.diskPruneOn || !w.a.cfg.Disk.Auto() || !w.diskPruning.CompareAndSwap(false, true) {
 		return
 	}

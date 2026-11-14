@@ -30,13 +30,6 @@ const (
 // (TestMain), so no test frees the machine's /tmp.
 var liveTmpfs = (*app).freeTmpfsMachine
 
-// freeMark is the watches' shared memory of the automatic free: when it ran
-// last and what it freed then ("" for nothing).
-type freeMark struct {
-	At    time.Time `json:"at"`
-	Freed string    `json:"freed,omitempty"`
-}
-
 // tmpfsRun is one automatic free.
 type tmpfsRun struct {
 	dryRun bool
@@ -103,20 +96,10 @@ func (a *app) freeTmpfs(dryRun bool, read func() (free.Machine, error)) tmpfsRun
 	return r
 }
 
-// readFreeMark reads when the automatic free ran last and keeps it for the
-// TMPFS line.
-func (w *watcher) readFreeMark() freeMark {
-	var m freeMark
-	if found, _ := w.a.store.ReadFile(freeFile, &m); found {
-		w.lastFree.Store(&m)
-	}
-	return m
-}
-
-// autoFree runs the automatic free every doctor.freeEvery, in the background
+// watchAutoFree runs the automatic free every doctor.freeEvery, in the background
 // so the sample goes on. The freeing flag orders the runs as goCaching orders
 // the Go build cache's looks: freeNext is read only with the flag held.
-func (w *watcher) autoFree(now time.Time) {
+func watchAutoFree(w *watcher, now time.Time) {
 	every := w.a.cfg.Doctor.FreeEvery.Duration
 	if !w.freeOn || every <= 0 || !w.freeing.CompareAndSwap(false, true) {
 		return
@@ -134,11 +117,11 @@ func (w *watcher) autoFree(now time.Time) {
 	}()
 }
 
-// freeDue runs the automatic free on the machine read returns, unless a watch
+// watchFreeDue runs the automatic free on the machine read returns, unless a watch
 // ran it within every. A run that freed something is one FREED line; a failed
 // one is FREE FAILED until a run succeeds; a run another process holds the
 // lock for is tried again after goCacheRetry.
-func (w *watcher) freeDue(read func() (free.Machine, error), now time.Time, every time.Duration) {
+func watchFreeDue(w *watcher, read func() (free.Machine, error), now time.Time, every time.Duration) {
 	if m := w.readFreeMark(); now.Sub(m.At) < every {
 		w.freeNext = m.At.Add(every)
 		return
@@ -159,20 +142,4 @@ func (w *watcher) freeDue(read func() (free.Machine, error), now time.Time, ever
 	if m.Freed != "" {
 		w.emitNow("free", "FREED in tmpfs: %s (doctor.freeEvery)", m.Freed)
 	}
-}
-
-// lastFreeNote says, for the TMPFS line, when the automatic free ran last
-// and what it freed.
-func (w *watcher) lastFreeNote() string {
-	if w.a.cfg.Doctor.FreeEvery.Duration <= 0 {
-		return "the automatic free is off (doctor.freeEvery)"
-	}
-	m := w.lastFree.Load()
-	switch {
-	case m == nil || m.At.IsZero():
-		return "the automatic free has not run yet"
-	case m.Freed == "":
-		return fmt.Sprintf("the automatic free ran at %s, nothing to free", m.At.Local().Format("15:04"))
-	}
-	return fmt.Sprintf("the automatic free ran at %s and freed %s", m.At.Local().Format("15:04"), m.Freed)
 }

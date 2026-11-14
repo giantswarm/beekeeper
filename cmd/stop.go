@@ -520,13 +520,3 @@ func (a *app) resume(ctx context.Context) error {
 // stoppedNothing is what a watch's revive, successor or reopen says while
 // beekeeper is stopped.
 const stoppedNothing = "beekeeper is stopped: nothing revives, starts or reopens until beekeeper resume"
-
-// sayStop says the standing stop once, with its reason, and ENDED once
-// beekeeper resume lifted it.
-func (w *watcher) sayStop(st *state.State) {
-	if st.Stop == nil {
-		w.clear("stop")
-		return
-	}
-	w.check("stop", true, "STOPPED: %s; the sessions it ended: %s", w.a.stopText(st.Stop), listOrNone(st.Stop.Sessions))
-}

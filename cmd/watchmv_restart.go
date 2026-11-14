@@ -1,0 +1,64 @@
+package cmd
+
+import (
+	"encoding/json"
+	"errors"
+	"os"
+	"strconv"
+	"time"
+
+	"github.com/giantswarm/beekeeper/internal/platform"
+)
+
+// restartRequest is the restart file's content.
+type restartRequest struct {
+	At time.Time `json:"at"`
+	// Binary is the path the install wrote.
+	Binary string `json:"binary"`
+}
+
+// restartWatch tells a long-running process when an install asked it to
+// restart on the installed binary.
+type restartWatch struct {
+	file string
+	// since is the newest request time this process already answered: its
+	// start, or the request it was re-executed for.
+	since time.Time
+	// binary says the running binary's path and whether another file was
+	// renamed over it; nil reads this process's.
+	binary func() (string, bool)
+}
+
+// due is the request this process restarts for, nil when none: one newer
+// than the last it answered, for the binary path this process runs, which
+// another file replaced since.
+func (r *restartWatch) due() *restartRequest {
+	raw, err := os.ReadFile(r.file)
+	if err != nil {
+		return nil
+	}
+	var req restartRequest
+	if json.Unmarshal(raw, &req) != nil || !req.At.After(r.since) {
+		return nil
+	}
+	bin := r.binary
+	if bin == nil {
+		bin = func() (string, bool) { return processBinary(os.Getpid()) }
+	}
+	if path, replaced := bin(); !replaced || path != req.Binary {
+		return nil
+	}
+	return &req
+}
+
+// exec replaces this process with the installed binary for req; it returns
+// only when that binary does not start, and the process then stays on the
+// running one, req answered.
+func (r *restartWatch) exec(req *restartRequest) error {
+	r.since = req.At
+	b := platform.RunningBinary()
+	if b == nil {
+		return errors.New("the running binary is unknown")
+	}
+	return b.Exec(restartedEnv + "=" + strconv.FormatInt(req.At.UnixNano(), 10))
+}

@@ -744,10 +744,10 @@ type worktreesMark struct {
 	At time.Time `json:"at"`
 }
 
-// worktrees runs the trim every doctor.worktreesEvery, in the background so
+// watchWorktrees runs the trim every doctor.worktreesEvery, in the background so
 // the sample goes on. A run that removed something is one WORKTREES line; a
 // failed one is WORKTREES FAILED until a run succeeds.
-func (w *watcher) worktrees(now time.Time) {
+func watchWorktrees(w *watcher, now time.Time) {
 	every := w.a.cfg.Doctor.WorktreesEvery.Duration
 	if w.a.cfg.Disk.Auto() || !w.worktreesOn || every <= 0 || !w.worktreesTrimming.CompareAndSwap(false, true) {
 		return

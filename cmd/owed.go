@@ -13,7 +13,6 @@ import (
 	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/merge"
-	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -25,8 +24,6 @@ import (
 const (
 	owedRetry = time.Minute
 	owedAsk   = 30 * time.Minute
-	owedFor   = 24 * time.Hour
-	owedBusy  = 2 * ownerWait
 )
 
 // owed is r's outcome as this merge-child owes it to its owner.
@@ -207,43 +204,4 @@ func (a *app) failedPay(o state.Owed, why string) {
 		}
 		return nil, nil
 	})
-}
-
-// owedOutcomes hands over each owed outcome whose gate and merge-child no longer
-// hand it over themselves (both gone, or owedBusy passed), one claim per
-// owedRetry under the state's lock, so one watch tries it: a caller that
-// heard it drops it, and one owed past owedFor is given up.
-func (w *watcher) owedOutcomes(ctx context.Context) {
-	st, err := w.a.store.Peek()
-	if err != nil || len(st.Owed) == 0 {
-		return
-	}
-	now := w.a.now.UTC()
-	due := func(o state.Owed) bool {
-		busy := (proc.Alive(o.Gate) || proc.Alive(o.Child)) && now.Sub(o.Since) < owedBusy
-		return !busy && now.Sub(o.Tried) >= owedRetry
-	}
-	if !slices.ContainsFunc(st.Owed, due) {
-		return
-	}
-	var claimed []state.Owed
-	_ = w.a.store.Update(func(st *state.State) ([]state.Event, error) {
-		for i, o := range st.Owed {
-			if due(o) {
-				st.Owed[i].Tried = now
-				claimed = append(claimed, st.Owed[i])
-			}
-		}
-		return nil, nil
-	})
-	for _, o := range claimed {
-		switch {
-		case heard(o):
-			w.a.paid(o)
-		case now.Sub(o.Since) > owedFor:
-			w.a.paid(o, fmt.Sprintf("owed to %q since %s and never handed over (%s): given up", o.Owner.Name, clock(now, o.Since), o.Why))
-		default:
-			w.a.payOwed(ctx, o)
-		}
-	}
 }

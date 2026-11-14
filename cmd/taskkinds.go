@@ -279,9 +279,6 @@ func kindReportText(r kindReport, zone *time.Location) string {
 	return b.String()
 }
 
-// kindSpendEvery is how often the watch sums the day's spend per kind.
-const kindSpendEvery = 10 * time.Minute
-
 // kindSpendKey is the watch's one-time mark of a kind past its daily
 // spend on a day.
 const kindSpendPrefix = "kind-spend "
@@ -290,10 +287,10 @@ func kindSpendKey(kind string, day time.Time) string {
 	return kindSpendPrefix + kind + " " + day.Format(time.DateOnly)
 }
 
-// kindSpending says SPEND <kind> once a day for each kind past its
+// watchKindSpending says SPEND <kind> once a day for each kind past its
 // dailySpend: the day's spend so far in the machine's zone. The mark
 // outlives a restarted watch.
-func (w *watcher) kindSpending(now time.Time) {
+func watchKindSpending(w *watcher, now time.Time) {
 	if !slices.ContainsFunc(w.a.cfg.Agents.Kinds, func(k config.AgentKind) bool { return k.DailySpend > 0 }) {
 		return
 	}

@@ -113,7 +113,7 @@ func (a *app) claudeLoginCmd() *cobra.Command {
 	}}
 }
 
-func (w *watcher) claudeLogin() {
+func watchClaudeLogin(w *watcher) {
 	v := readClaudeLogin(w.a.now)
 	// A changed expiry gets a new status line even if the state stays healthy.
 	key := claudeLoginKey + " " + v.State + " " + v.Expires.Format(time.RFC3339)

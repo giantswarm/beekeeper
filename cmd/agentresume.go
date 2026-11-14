@@ -33,10 +33,6 @@ const waitResumeMessage = "Your headless turn ended while %s ran in the backgrou
 // on a person: their answer reaches it by message or wake, not by a resume.
 var parkedWords = regexp.MustCompile(`(?i)\b(?:note|person|supervisor|guide|answer|review|approval|decision)s?\b`)
 
-// personWaitWords name a person's own word in a park's waits: their answer,
-// a review, a reply, a decision.
-var personWaitWords = regexp.MustCompile(`(?i)\b(?:notes?|persons?|answers?|reviews?|approvals?|decisions?|repl(?:y|ies))\b`)
-
 // parkedOn is what a serve record says the agent waits on when that is a
 // person (guide.person, a note, the supervisor's answer); "" otherwise.
 func parkedOn(waits, person string) string {
@@ -59,12 +55,6 @@ func waitsOf(records []state.Record, ag state.Agent) string {
 		}
 	}
 	return ""
-}
-
-// resumedForTask reports whether ag was resumed on a wait for its current
-// task already.
-func resumedForTask(ag state.Agent) bool {
-	return !ag.ResumedWait.IsZero() && !ag.ResumedWait.Before(ag.AssignedAt)
 }
 
 // unitLeftovers are the argument lists of the processes turn, the start's or

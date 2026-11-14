@@ -263,13 +263,13 @@ type stateHoldersMark struct {
 	Line string    `json:"line,omitempty"`
 }
 
-// stateHolders lists the state home every disk.holders.every, in the
+// watchStateHolders lists the state home every disk.holders.every, in the
 // background, and says STATE HOLDERS while the eligible holders take
 // disk.holders.warnGiB or more, and STATE HOLDERS unknown while it cannot
 // judge them (a process it cannot read). A watch that finds a fresh listing
 // another watch made says that listing's condition instead of walking
 // again.
-func (w *watcher) stateHolders(now time.Time) {
+func watchStateHolders(w *watcher, now time.Time) {
 	cfg := w.a.cfg.Disk.Holders
 	if !w.holdersOn || cfg.WarnGiB < 0 || !w.holdering.CompareAndSwap(false, true) {
 		return

@@ -21,7 +21,6 @@ const throughputHealthFile = "throughput-health.json"
 const throughputCadence = time.Minute
 const throughputHealthy = "healthy"
 const throughputStalledMerge = "stalled-merge"
-const watchThroughputKey = "throughput"
 
 type throughputOutcome struct {
 	At                                time.Time

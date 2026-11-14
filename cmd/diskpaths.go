@@ -24,13 +24,6 @@ const diskPathFileMin = 16 << 20
 // diskPathOtherFiles stands for a root's smaller files in their shared row.
 const diskPathOtherFiles = "(other files)"
 
-type diskPath struct {
-	Path    string `json:"path"`
-	Bytes   int64  `json:"bytes"`
-	Growth  *int64 `json:"growthBytes,omitempty"`
-	Partial bool   `json:"partial,omitempty"`
-}
-
 // Only metadata is read. Symlinks are never followed. Depth, entries and
 // deadline bound work; partial totals are lower bounds and never yield growth.
 // Each root has its own entries and is read at the same time as the others,

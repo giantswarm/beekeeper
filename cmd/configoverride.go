@@ -316,23 +316,6 @@ func (a *app) settleOverrides(ctx context.Context, by state.Party, check func([]
 	return lines, nil
 }
 
-// overrides settles the overrides whose end arrived, a GitHub check held
-// while githubHeld, and says what it did.
-func (w *watcher) overrides(ctx context.Context, githubHeld bool) {
-	lines, err := w.a.settleOverrides(ctx, watchParty, func(ts []state.Timer) map[int]checkResult {
-		if w.loopOwned {
-			return w.a.loopTimerChecks(ctx, ts, w.a.now, githubHeld)
-		}
-		return checkTimers(ctx, ts, w.a.now, githubHeld)
-	})
-	for _, l := range lines {
-		w.emitNow("pending", "%s", l)
-	}
-	if err != nil {
-		w.emitNow("pending", "CONFIG OVERRIDES FAILED: %v", err)
-	}
-}
-
 // loopSettleOverrides is the loop's tick of the overrides: its GitHub reads
 // take the loop's allowance and wait under the budget floor as its timers'.
 func loopSettleOverrides(l *loop.Loop, ctx context.Context, st *state.State) {

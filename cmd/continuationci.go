@@ -3,7 +3,6 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/loop"
@@ -11,30 +10,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
-// handCITimerToReview handles a successful typed CI wait without an LLM
-// turn. Re-read the rollup: a timer may have queued against an older head.
-// Red, closed and expired waits need reasoning and use a fresh continuation.
-func (w *watcher) handCITimerToReview(ctx context.Context, f timerFire, ag state.Agent) (bool, error) {
-	kind, ref, _ := strings.Cut(f.t.When, " ")
-	if kind != timerPRChecks || ref != ag.Park.On || f.timedOut {
-		return false, nil
-	}
-	if ag.Park.ReviewHead == "" && ag.Execution == nil {
-		return false, nil
-	}
-	if w.loopOwned {
-		var handed bool
-		err := w.a.loopGitHub(ctx, "ci-review", func() error {
-			var err error
-			handed, err = w.handCITimerToReviewRead(ctx, f, ag, ref)
-			return err
-		})
-		return handed, err
-	}
-	return w.handCITimerToReviewRead(ctx, f, ag, ref)
-}
-
-func (w *watcher) handCITimerToReviewRead(ctx context.Context, f timerFire, ag state.Agent, ref string) (bool, error) {
+func watchHandCITimerToReviewRead(w *watcher, ctx context.Context, f timerFire, ag state.Agent, ref string) (bool, error) {
 	c := checkOf(f.t)
 	out, err := readProbe(ctx, c.cmd)
 	if err != nil {

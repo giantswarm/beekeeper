@@ -386,13 +386,13 @@ func dockerKeep(labs []lease.Holder, now time.Time) time.Time {
 // read last, and since when a prune waits.
 type dockerMark = goCacheMark
 
-// docker reads Docker's sizes every doctor.dockerEvery and prunes what is
+// watchDocker reads Docker's sizes every doctor.dockerEvery and prunes what is
 // over its cap, in the background so the sample goes on. A prune an import
 // or a fresh lab lease holds back is tried again every goCacheRetry; once
 // it has waited doctor.dockerEvery the watch says DOCKER until it ran. A
 // failed read or prune, or one that leaves the images over their cap, is
 // DOCKER too.
-func (w *watcher) docker(now time.Time) {
+func watchDocker(w *watcher, now time.Time) {
 	if !w.dockerOn || dockerCLI == nil || (w.a.cfg.Doctor.DockerImagesMax() == 0 && w.a.cfg.Doctor.DockerBuildCacheMax() == 0) ||
 		!w.dockerPruning.CompareAndSwap(false, true) {
 		return

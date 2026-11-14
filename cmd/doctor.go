@@ -1096,11 +1096,11 @@ func (a *app) doctorDisk(dry bool) []string {
 // asked a steward to retitle before it asks again.
 const retitleAgain = 30 * time.Minute
 
-// doctor runs the doctor in the background, unless its last run still
+// watchDoctor runs the doctor in the background, unless its last run still
 // goes: a steward's turn takes up to a minute, and the poll goes on. Each
 // chore it did is one DOCTOR line; a fault it could not fix is one DOCTOR
 // FAULT line while it lasts.
-func (w *watcher) doctor(ctx context.Context) {
+func watchDoctor(w *watcher, ctx context.Context) {
 	if !w.chores || !w.doctoring.CompareAndSwap(false, true) {
 		return
 	}
@@ -1125,7 +1125,7 @@ func (w *watcher) doctor(ctx context.Context) {
 			return
 		}
 		w.clear("doctor")
-		w.sayChores(rep)
+		watchSayChores(w, rep)
 		for _, f := range rep.faults {
 			if f.fixed {
 				w.emitNow("doctor", "DOCTOR %s", f)
@@ -1143,9 +1143,9 @@ func (w *watcher) doctor(ctx context.Context) {
 	}()
 }
 
-// sayChores says the doctor's chore lines, each once per watch (a stay that
+// watchSayChores says the doctor's chore lines, each once per watch (a stay that
 // repeats is not said again), and its notes.
-func (w *watcher) sayChores(rep doctorReport) {
+func watchSayChores(w *watcher, rep doctorReport) {
 	if w.doctored == nil {
 		w.doctored = map[string]bool{}
 	}

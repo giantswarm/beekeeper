@@ -5,10 +5,8 @@ import (
 	"errors"
 	"os"
 	"slices"
-	"strings"
 	"time"
 
-	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -31,36 +29,6 @@ func recordGH(st *state.State, p state.Party, gh string, now time.Time) error {
 
 // ghNone is the GH of a session whose shell finds no gh at all.
 const ghNone = "none"
-
-// ghKey starts the condition key of an agent whose gh is unbrokered.
-const ghKey = "gh "
-
-// unbrokered says each agent on the roster whose shell resolves a gh other
-// than the agent's own (agents.shell.path, the gh link to devctl): its gh
-// acts on the person's own login, or fails, instead of the App's token. One
-// GH UNBROKERED line each, and its ENDED line once the agent's gh is its own
-// or it left the roster.
-func (w *watcher) unbrokered() {
-	path := w.a.cfg.Agents.Shell.Path
-	if len(path) == 0 {
-		return
-	}
-	st, err := w.a.store.Peek()
-	if err != nil {
-		return
-	}
-	found := map[string]bool{}
-	for _, ag := range st.Agents {
-		if ag.GH == "" || guard.Brokered(ag.GH, path) {
-			continue
-		}
-		key := ghKey + ag.Name
-		found[key] = true
-		w.emit(key, "GH UNBROKERED %q: its shell resolves gh to %s (read %s), not the agent's own in %s (agents.shell.path): its gh acts without the App's token",
-			ag.Name, ag.GH, clock(w.a.now, ag.GHAt), strings.Join(path, ", "))
-	}
-	w.clearMissing(ghKey, found)
-}
 
 // recordSessionGH records gh on the roster entry of the session a
 // SessionStart event (raw) starts. It never fails the session's start: a
