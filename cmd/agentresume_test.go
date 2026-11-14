@@ -152,16 +152,16 @@ func TestReopenLeavesAloneWhatNeedsNoResume(t *testing.T) {
 // from one that ended on a wait again after its resume.
 func TestStoppedAgentsTellParkedFromEndedOnAWait(t *testing.T) {
 	w, _, out := reportingWatch(t, t.TempDir())
-	w.a.cfg.Guide.Person = personTimo
+	w.Host.cfg.Guide.Person = personTimo
 	parked, again := staleAgent("Parked"), staleAgent("Again")
 	parked.Task, again.Task = "a rollout", "a proof"
-	again.AssignedAt = w.a.now.Add(-time.Hour)
-	again.ResumedWait, again.ResumedOn = w.a.now.Add(-10*time.Minute), `"Wait for CI"`
+	again.AssignedAt = w.Host.now.Add(-time.Hour)
+	again.ResumedWait, again.ResumedOn = w.Host.now.Add(-10*time.Minute), `"Wait for CI"`
 	st := &state.State{
 		Agents:  []state.Agent{parked, again},
 		Records: []state.Record{{Session: parked.Party, Waits: "Alex's go for the rollout"}},
 	}
-	w.stoppedAgents(st, nil)
+	w.StoppedAgents(st, nil)
 	s := out.String()
 	if !strings.Contains(s, `"Parked" (parked on a person: Alex's go for the rollout`) ||
 		!strings.Contains(s, `"Again" (ended on a wait again after its resume at `) || !strings.Contains(s, `on "Wait for CI"`) {

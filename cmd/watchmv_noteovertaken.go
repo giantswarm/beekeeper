@@ -10,16 +10,16 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
-// noteKept is the event of a note the watch keeps open although every
+// NoteKept is the event of a note the watch keeps open although every
 // issue and pull request it asks about is closed or merged: a closing
 // keyword closed one, or the worker that filed it still runs its task.
 // Its detail is "#<id> kept: <reason>; the note: <text>".
-const noteKept = "note.kept"
+const NoteKept = "note.kept"
 
 // overtake is a note the watch closes as overtaken, and why.
 type overtake struct {
-	id     int
-	reason string
+	Id     int
+	Reason string
 }
 
 // refsSettle reports whether n's refs close it once each is closed or
@@ -31,9 +31,9 @@ func refsSettle(n state.Note, asking int) bool {
 	return overtakable(n, asking) && len(n.Refs) > 0 && n.Kind != noteTodo && n.Reopened.IsZero()
 }
 
-// overtakeRefs are the distinct issues and pull requests of the notes of
+// OvertakeRefs are the distinct issues and pull requests of the notes of
 // st whose refs settle them.
-func overtakeRefs(st *state.State) []github.PR {
+func OvertakeRefs(st *state.State) []github.PR {
 	var out []github.PR
 	asking := st.GuideRole().LocalAsking()
 	for _, n := range st.Notes {
@@ -143,14 +143,14 @@ func findOvertaken(st *state.State, states map[github.PR]github.RefState) (over,
 // notes and the kept ones. A failed read is a NOTE line (fail); --once also
 // says the read it skips for the budget and the refs GitHub left
 // unanswered, which keep their notes open: its silence means no change.
-func (w *watcher) overtakenNow(ctx context.Context, st *state.State) (over, kept []overtake) {
+func (w *Watcher) overtakenNow(ctx context.Context, st *state.State) (over, kept []overtake) {
 	var states map[github.PR]github.RefState
-	refs := overtakeRefs(st)
+	refs := OvertakeRefs(st)
 	switch {
 	case len(refs) == 0:
-	case lowBudget(st.Budget, w.a.cfg.GitHub.Floor, w.a.now):
-		if !w.chores {
-			w.emitNow("pending", "NOTE REFS NOT READ (--once): the GitHub budget is under its floor until %s; no note is overtaken or kept",
+	case lowBudget(st.Budget, w.Host.cfg.GitHub.Floor, w.Host.now):
+		if !w.Chores {
+			w.EmitNow("pending", "NOTE REFS NOT READ (--once): the GitHub budget is under its floor until %s; no note is overtaken or kept",
 				st.Budget.Reset.Local().Format("15:04"))
 		}
 	default:
@@ -158,16 +158,16 @@ func (w *watcher) overtakenNow(ctx context.Context, st *state.State) (over, kept
 		s, err := refStates(ctx, refs)
 		states = s
 		if err != nil {
-			w.fail("note-refs", "NOTE REFS UNREADABLE: cannot read the notes' issues and pull requests: %v", err)
+			w.Fail("note-refs", "NOTE REFS UNREADABLE: cannot read the notes' issues and pull requests: %v", err)
 			break
 		}
-		w.clear("note-refs")
-		if unanswered := slices.DeleteFunc(slices.Clone(refs), func(r github.PR) bool { _, ok := s[r]; return ok }); len(unanswered) > 0 && !w.chores {
+		w.Clear("note-refs")
+		if unanswered := slices.DeleteFunc(slices.Clone(refs), func(r github.PR) bool { _, ok := s[r]; return ok }); len(unanswered) > 0 && !w.Chores {
 			names := make([]string, len(unanswered))
 			for i, r := range unanswered {
 				names[i] = refName(r)
 			}
-			w.emitNow("pending", "NOTE REFS UNANSWERED (--once): %s; their notes stay open", strings.Join(names, ", "))
+			w.EmitNow("pending", "NOTE REFS UNANSWERED (--once): %s; their notes stay open", strings.Join(names, ", "))
 		}
 	}
 	return findOvertaken(st, states)
@@ -181,13 +181,13 @@ func keepOpen(st *state.State, kept []overtake, by state.Party) ([]string, []sta
 	var evs []state.Event
 	for i := range st.Notes {
 		n := &st.Notes[i]
-		j := slices.IndexFunc(kept, func(o overtake) bool { return o.id == n.ID })
-		if j < 0 || n.Kept == kept[j].reason {
+		j := slices.IndexFunc(kept, func(o overtake) bool { return o.Id == n.ID })
+		if j < 0 || n.Kept == kept[j].Reason {
 			continue
 		}
-		n.Kept = kept[j].reason
+		n.Kept = kept[j].Reason
 		lines = append(lines, fmt.Sprintf("NOTE KEPT: #%d, %s: %s", n.ID, n.Kept, truncate(n.Text, 200)))
-		evs = append(evs, event(by, noteKept, "#%d kept: %s%s%s", n.ID, oneLine(n.Kept), overtakenSep, n.Text))
+		evs = append(evs, event(by, NoteKept, "#%d kept: %s%s%s", n.ID, oneLine(n.Kept), overtakenSep, n.Text))
 	}
 	return lines, evs
 }
@@ -199,12 +199,12 @@ func closeOvertaken(st *state.State, over []overtake, by state.Party) ([]string,
 	var lines []string
 	var evs []state.Event
 	st.Notes = slices.DeleteFunc(st.Notes, func(n state.Note) bool {
-		i := slices.IndexFunc(over, func(o overtake) bool { return o.id == n.ID })
+		i := slices.IndexFunc(over, func(o overtake) bool { return o.Id == n.ID })
 		if i < 0 {
 			return false
 		}
-		lines = append(lines, fmt.Sprintf("NOTE OVERTAKEN: #%d, %s: %s", n.ID, over[i].reason, truncate(n.Text, 200)))
-		evs = append(evs, overtakenEvent(by, n, over[i].reason))
+		lines = append(lines, fmt.Sprintf("NOTE OVERTAKEN: #%d, %s: %s", n.ID, over[i].Reason, truncate(n.Text, 200)))
+		evs = append(evs, overtakenEvent(by, n, over[i].Reason))
 		return true
 	})
 	return lines, evs
@@ -215,7 +215,7 @@ func closeOvertaken(st *state.State, over []overtake, by state.Party) ([]string,
 func heldAmong(notes []state.Note, over []overtake) []state.Note {
 	var out []state.Note
 	for _, n := range notes {
-		if n.Held != nil && slices.ContainsFunc(over, func(o overtake) bool { return o.id == n.ID }) {
+		if n.Held != nil && slices.ContainsFunc(over, func(o overtake) bool { return o.Id == n.ID }) {
 			out = append(out, n)
 		}
 	}
@@ -225,17 +225,17 @@ func heldAmong(notes []state.Note, over []overtake) []state.Note {
 // wouldOvertake says, for a watch that writes nothing (--once), each note
 // a running watch would close as overtaken, and each it would keep open
 // for a reason it has not recorded yet.
-func (w *watcher) wouldOvertake(st *state.State, over, kept []overtake) {
+func (w *Watcher) wouldOvertake(st *state.State, over, kept []overtake) {
 	for _, o := range over {
-		i := slices.IndexFunc(st.Notes, func(n state.Note) bool { return n.ID == o.id })
+		i := slices.IndexFunc(st.Notes, func(n state.Note) bool { return n.ID == o.Id })
 		if i >= 0 {
-			w.emitNow("pending", "NOTE OVERTAKEN (--once writes nothing): #%d, %s: %s", o.id, o.reason, truncate(st.Notes[i].Text, 200))
+			w.EmitNow("pending", "NOTE OVERTAKEN (--once writes nothing): #%d, %s: %s", o.Id, o.Reason, truncate(st.Notes[i].Text, 200))
 		}
 	}
 	for _, o := range kept {
-		i := slices.IndexFunc(st.Notes, func(n state.Note) bool { return n.ID == o.id })
-		if i >= 0 && st.Notes[i].Kept != o.reason {
-			w.emitNow("pending", "NOTE KEPT (--once writes nothing): #%d, %s: %s", o.id, o.reason, truncate(st.Notes[i].Text, 200))
+		i := slices.IndexFunc(st.Notes, func(n state.Note) bool { return n.ID == o.Id })
+		if i >= 0 && st.Notes[i].Kept != o.Reason {
+			w.EmitNow("pending", "NOTE KEPT (--once writes nothing): #%d, %s: %s", o.Id, o.Reason, truncate(st.Notes[i].Text, 200))
 		}
 	}
 }

@@ -591,7 +591,7 @@ func (c *recoveryController) restart(ctx context.Context, attempt int) bool {
 			settled = false
 			continue
 		}
-		if unitComingUp(status) {
+		if UnitComingUp(status) {
 			if attempt < recoveryRestartTicks || !matched {
 				continue
 			}

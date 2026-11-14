@@ -110,7 +110,7 @@ func TestUICollectorReadsTheMachineState(t *testing.T) {
 	}
 	var supRole bool
 	for _, r := range d.Roles {
-		if r.Name == guideRole.name {
+		if r.Name == guideRole.Name {
 			supRole = r.Holder == uiSupName && !r.Live && !r.Gone.IsZero()
 		}
 	}

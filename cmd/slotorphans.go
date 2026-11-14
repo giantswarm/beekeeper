@@ -23,21 +23,21 @@ import (
 // watch names such an orphaned slot scope at the sample it first sees it and, after
 // slotOrphanGrace, stops it: the slot is free without a person.
 
-// slotOrphanGrace is how long the watch leaves an orphaned slot scope
+// SlotOrphanGrace is how long the watch leaves an orphaned slot scope
 // before it stops it: a run that ends stops its own scope within moments.
-const slotOrphanGrace = time.Minute
+const SlotOrphanGrace = time.Minute
 
 // slotStopTimeout bounds the stop of an orphaned slot scope.
 const slotStopTimeout = 2 * time.Minute
 
-// sandboxInitCommand is bubblewrap, the PID-namespace init of a sandboxed run.
-const sandboxInitCommand = "bwrap"
+// SandboxInitCommand is bubblewrap, the PID-namespace init of a sandboxed run.
+const SandboxInitCommand = "bwrap"
 
-// slotOrphans names each orphaned slot scope once (ORPHANED SLOT SCOPE) and,
+// SlotOrphans names each orphaned slot scope once (ORPHANED SLOT SCOPE) and,
 // in a watch that does chores, stops it once it has run on for
 // slotOrphanGrace (STOPPED, then ENDED); a failed stop is SLOT SCOPE STOP
 // FAILED until a stop succeeds.
-func (w *watcher) slotOrphans(now time.Time, t *proc.Table) {
+func (w *Watcher) SlotOrphans(now time.Time, t *proc.Table) {
 	if t == nil {
 		return
 	}
@@ -45,7 +45,7 @@ func (w *watcher) slotOrphans(now time.Time, t *proc.Table) {
 	if w.orphanSince == nil {
 		w.orphanSince = map[string]time.Time{}
 	}
-	dir, n := w.a.slotView()
+	dir, n := w.Host.slotView()
 	o := guard.Options{SlotDir: dir}
 	found := map[string]bool{}
 	for i := 1; i <= n; i++ {
@@ -59,7 +59,7 @@ func (w *watcher) slotOrphans(now time.Time, t *proc.Table) {
 				continue
 			}
 			pids := plat.Machine.ScopePIDs(sc.Path)
-			if !orphanedScope(t, pids) {
+			if !OrphanedScope(t, pids) {
 				continue
 			}
 			key := "slotorphan." + scope
@@ -70,24 +70,24 @@ func (w *watcher) slotOrphans(now time.Time, t *proc.Table) {
 				w.orphanSince[scope] = now
 			}
 			procs := guard.ProcList(pids, t)
-			w.emit(key, "ORPHANED SLOT SCOPE: slot %d's %s runs on without its run: %s; it keeps slot %d busy, the watch stops it at %s",
-				i, scope, procs, i, since.Add(slotOrphanGrace).Local().Format("15:04:05"))
-			if !w.slotsOn || now.Sub(since) < slotOrphanGrace {
+			w.Emit(key, "ORPHANED SLOT SCOPE: slot %d's %s runs on without its run: %s; it keeps slot %d busy, the watch stops it at %s",
+				i, scope, procs, i, since.Add(SlotOrphanGrace).Local().Format("15:04:05"))
+			if !w.SlotsOn || now.Sub(since) < SlotOrphanGrace {
 				continue
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), slotStopTimeout)
 			err := plat.Launcher.Stop(ctx, scope)
 			cancel()
-			w.check(key+".stop", err != nil, "SLOT SCOPE STOP FAILED: %s of slot %d: %v", scope, i, err)
+			w.Check(key+".stop", err != nil, "SLOT SCOPE STOP FAILED: %s of slot %d: %v", scope, i, err)
 			if err != nil {
 				found[key+".stop"] = true
 			} else {
-				w.emitNow("slotorphan", "STOPPED orphaned slot scope %s of slot %d: %s; slot %d is free", scope, i, procs, i)
+				w.EmitNow("slotorphan", "STOPPED orphaned slot scope %s of slot %d: %s; slot %d is free", scope, i, procs, i)
 				delete(found, key)
 			}
 		}
 	}
-	w.clearMissing("slotorphan.", found)
+	w.ClearMissing("slotorphan.", found)
 	for scope := range w.orphanSince {
 		if !found["slotorphan."+scope] {
 			delete(w.orphanSince, scope)
@@ -95,13 +95,13 @@ func (w *watcher) slotOrphans(now time.Time, t *proc.Table) {
 	}
 }
 
-// orphanedScope reports whether a scope's processes outlived the run that
+// OrphanedScope reports whether a scope's processes outlived the run that
 // started it: every one is a child of another in the scope or adopted by the
 // service manager (or PID 1), or by bubblewrap's PID-namespace init. A live
 // run's command is the child of its beekeeper run, outside the scope.
 // Bubblewrap inside the scope is part of the command's tree, so its own
 // parent must also be checked before the scope can be considered orphaned.
-func orphanedScope(t *proc.Table, pids []int) bool {
+func OrphanedScope(t *proc.Table, pids []int) bool {
 	in := map[int]bool{}
 	for _, pid := range pids {
 		in[pid] = true
@@ -112,7 +112,7 @@ func orphanedScope(t *proc.Table, pids []int) bool {
 		var sandboxInit bool
 		if p != nil {
 			parent := t.ByPID[p.PPID]
-			sandboxInit = parent != nil && parent.Comm == sandboxInitCommand
+			sandboxInit = parent != nil && parent.Comm == SandboxInitCommand
 		}
 		switch {
 		case p == nil, in[p.PPID]:
@@ -125,11 +125,11 @@ func orphanedScope(t *proc.Table, pids []int) bool {
 	return adopted
 }
 
-// stopEmptyHolder uses a stable pidfd and rechecks evidence while the wrapper
+// StopEmptyHolder uses a stable pidfd and rechecks evidence while the wrapper
 // is frozen, so a queued memory/cache waiter or a concurrent start is safe.
-var stopEmptyHolder = proc.StopIdle
+var StopEmptyHolder = proc.StopIdle
 
-func (w *watcher) emptySlotHolders(now time.Time, t *proc.Table) {
+func (w *Watcher) emptySlotHolders(now time.Time, t *proc.Table) {
 	reader, ok := plat.Capper.(interface{ ScopePopulated(string) (bool, error) })
 	if !ok {
 		return
@@ -137,7 +137,7 @@ func (w *watcher) emptySlotHolders(now time.Time, t *proc.Table) {
 	if w.emptyHolderSince == nil {
 		w.emptyHolderSince = map[string]time.Time{}
 	}
-	dir, n := w.a.slotView()
+	dir, n := w.Host.slotView()
 	found := map[string]bool{}
 	for _, slot := range machine.ReadSlots(dir, n) {
 		h, ok := guard.ParseHolder(slot.Holder)
@@ -156,7 +156,7 @@ func (w *watcher) emptySlotHolders(now time.Time, t *proc.Table) {
 		scope := h.Scope
 		ready := !h.StartDeadline.IsZero() && !now.Before(h.StartDeadline)
 		if !ready {
-			events, err := w.a.store.Events(1, func(e state.Event) bool {
+			events, err := w.Host.store.Events(1, func(e state.Event) bool {
 				unit := guard.RunScope(e.Detail)
 				return e.Verb == guard.VerbStart && !e.At.Before(h.Since) && (strings.HasPrefix(unit, fmt.Sprintf("memcap-%d-", h.PID)) || strings.HasPrefix(unit, fmt.Sprintf("memcap-test-%d-", h.PID)))
 			})
@@ -165,7 +165,7 @@ func (w *watcher) emptySlotHolders(now time.Time, t *proc.Table) {
 				ready = true
 			}
 		}
-		if !ready || scope == "" || now.Sub(h.Since) < slotOrphanGrace {
+		if !ready || scope == "" || now.Sub(h.Since) < SlotOrphanGrace {
 			continue
 		}
 		empty := func() bool {
@@ -191,19 +191,19 @@ func (w *watcher) emptySlotHolders(now time.Time, t *proc.Table) {
 			since = now
 			w.emptyHolderSince[key] = now
 		}
-		w.emit(key, "EMPTY SLOT HOLDER: slot %d held by %s has no live process in %s.scope; the watch recovers it after the grace", slot.N, h.Who(), scope)
-		if !w.slotsOn || now.Sub(since) < slotOrphanGrace {
+		w.Emit(key, "EMPTY SLOT HOLDER: slot %d held by %s has no live process in %s.scope; the watch recovers it after the grace", slot.N, h.Who(), scope)
+		if !w.SlotsOn || now.Sub(since) < SlotOrphanGrace {
 			continue
 		}
-		err := stopEmptyHolder(h.PID, p.Start, empty)
-		w.check(key+".stop", err != nil, "EMPTY SLOT HOLDER STOP FAILED: slot %d: %v", slot.N, err)
+		err := StopEmptyHolder(h.PID, p.Start, empty)
+		w.Check(key+".stop", err != nil, "EMPTY SLOT HOLDER STOP FAILED: slot %d: %v", slot.N, err)
 		if err == nil {
-			w.emitNow("emptyholder", "STOPPED empty slot holder %s of slot %d; its lock is released by process exit", h.Who(), slot.N)
+			w.EmitNow("emptyholder", "STOPPED empty slot holder %s of slot %d; its lock is released by process exit", h.Who(), slot.N)
 		} else {
 			found[key+".stop"] = true
 		}
 	}
-	w.clearMissing("emptyholder:", found)
+	w.ClearMissing("emptyholder:", found)
 	for key := range w.emptyHolderSince {
 		if !found[key] {
 			delete(w.emptyHolderSince, key)

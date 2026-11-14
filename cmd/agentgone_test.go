@@ -148,7 +148,7 @@ func TestGoneRetirementReleasesBoardAndPreservesHandover(t *testing.T) {
 		t.Fatal("precondition: item unowned")
 	}
 	chores := planChores(st, nil, func(string) (*claude.Record, bool) { return nil, false }, func(state.Party) bool { return false }, 24*time.Hour, a.now, a.cfg)
-	removed, err := a.removeAgents(chores, watchParty)
+	removed, err := a.removeAgents(chores, WatchParty)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +192,7 @@ func TestGoneRetirementRechecksActivity(t *testing.T) {
 					}
 				})
 			}
-			removed, err := a.removeAgents(chores, watchParty)
+			removed, err := a.removeAgents(chores, WatchParty)
 			if err != nil || len(removed) != 0 {
 				t.Fatalf("removed=%+v err=%v", removed, err)
 			}
@@ -241,18 +241,18 @@ func TestGoneWakeAndResumeRestoreCapacity(t *testing.T) {
 
 func TestGoneWatchReportsAgeTransition(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
-	w.a.cfg.Claude.ProjectsDir = t.TempDir()
-	w.a.cfg.Claude.DesktopDir = t.TempDir()
+	w.Host.cfg.Claude.ProjectsDir = t.TempDir()
+	w.Host.cfg.Claude.DesktopDir = t.TempDir()
 	ag := tasked("watch-gone-test")
-	ag.Registered = w.a.now.Add(-23 * time.Hour)
+	ag.Registered = w.Host.now.Add(-23 * time.Hour)
 	st := &state.State{Agents: []state.Agent{ag}}
-	w.stoppedAgents(st, nil)
+	w.StoppedAgents(st, nil)
 	if strings.Contains(out.String(), strings.TrimSpace(goneActivityPrefix)) {
 		t.Fatal("recent worker shown gone")
 	}
-	w.a.now = w.a.now.Add(time.Hour)
-	w.stoppedAgents(st, nil)
-	w.stoppedAgents(st, nil)
+	w.Host.now = w.Host.now.Add(time.Hour)
+	w.StoppedAgents(st, nil)
+	w.StoppedAgents(st, nil)
 	if strings.Count(out.String(), strings.TrimSpace(goneActivityPrefix)) != 1 {
 		t.Fatalf("watch = %s", out)
 	}

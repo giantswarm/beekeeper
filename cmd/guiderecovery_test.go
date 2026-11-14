@@ -32,13 +32,13 @@ func TestGuideRecoversWhileMainWatchIsBlocked(t *testing.T) {
 	needsPlatform(t)
 	w, out := loopWatcher(t, "30s", "", nil)
 	clk := newFakeClock(t)
-	w.clock = clk
-	w.a.now = clk.Now()
+	w.Clock = clk
+	w.Host.now = clk.Now()
 	guide := state.Party{Session: bgID, Name: guideSeven}
-	seed(t, w.a, func(st *state.State) {
+	seed(t, w.Host, func(st *state.State) {
 		st.Guide = &state.Role{
-			Holder: &state.Supervisor{Party: guide, Since: w.a.now.Add(-time.Hour)},
-			CLI:    &state.CLI{Supervisor: guide, Since: w.a.now.Add(-time.Hour), PID: 77},
+			Holder: &state.Supervisor{Party: guide, Since: w.Host.now.Add(-time.Hour)},
+			CLI:    &state.CLI{Supervisor: guide, Since: w.Host.now.Add(-time.Hour), PID: 77},
 			Run:    7,
 		}
 		st.Starts = []state.Start{{Party: guide, Role: guideName, Dir: t.TempDir(), Background: true}}
@@ -70,8 +70,8 @@ func TestGuideRecoversWhileMainWatchIsBlocked(t *testing.T) {
 	if !eventually(2*time.Second, func() bool { return strings.Contains(out.String(), "GUIDE RESUME:") }) {
 		t.Fatalf("guide not resumed within a minute while main poll blocked:\n%s", out.String())
 	}
-	if w.polls.Load() != 1 {
-		t.Fatalf("main poll was not blocked: %d polls", w.polls.Load())
+	if w.Polls.Load() != 1 {
+		t.Fatalf("main poll was not blocked: %d polls", w.Polls.Load())
 	}
 	if len(*calls) != 1 || (*calls)[0].argv[1] != bgFlag || (*calls)[0].argv[3] != bgID {
 		t.Fatalf("did not resume the same background run: %+v", *calls)
@@ -85,25 +85,25 @@ func TestGuideRecoversWhileMainWatchIsBlocked(t *testing.T) {
 
 func TestGuideRecoveryHonorsStopAndUnknownProcesses(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), true)
-	seed(t, w.a, func(st *state.State) {
+	seed(t, w.Host, func(st *state.State) {
 		st.Guide = rebootedGuide()
 		st.Guide.CLI.Gone = relayNow.Add(-time.Hour)
 	})
-	g := w.newGuideRecovery()
-	g.clock = newFakeClock(t)
-	g.stand.succeed = func(context.Context, role, state.Party) (state.Party, error) {
+	g := w.NewGuideRecovery()
+	g.Clock = newFakeClock(t)
+	g.Stand.Succeed = func(context.Context, role, state.Party) (state.Party, error) {
 		t.Error("started on a stop or unknown process observation")
 		return state.Party{}, nil
 	}
 	old := plat.Machine
 	t.Cleanup(func() { plat.Machine = old })
 	plat.Machine = daemonSnapshotMachine{Machine: old, snapshot: func() (*proc.Table, error) { return nil, errors.New("unreadable process snapshot") }}
-	g.recoverGuide(t.Context())
+	g.RecoverGuide(t.Context())
 	if !strings.Contains(out.String(), "unreadable process snapshot") {
 		t.Fatalf("missing failure diagnostic: %s", out.String())
 	}
-	seed(t, w.a, func(st *state.State) { st.Stop = &state.Stop{} })
+	seed(t, w.Host, func(st *state.State) { st.Stop = &state.Stop{} })
 	plat.Machine = daemonSnapshotMachine{Machine: old, snapshot: func() (*proc.Table, error) { return proc.NewTable(), nil }}
-	g.recoverGuide(t.Context())
-	g.stand.inflight.Wait()
+	g.RecoverGuide(t.Context())
+	g.Stand.Inflight.Wait()
 }

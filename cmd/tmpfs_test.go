@@ -123,31 +123,31 @@ func TestFreeTmpfsLeavesItToTheRunUnderWay(t *testing.T) {
 func TestWatchFreesTmpfsOncePerPeriod(t *testing.T) {
 	a, machine, _ := tmpfsApp(t)
 	w := a.newWatcher(false, false)
-	if got := w.lastFreeNote(); got != "the automatic free has not run yet" {
+	if got := w.LastFreeNote(); got != "the automatic free has not run yet" {
 		t.Errorf("before a run: %q", got)
 	}
 	now := time.Date(2026, 10, 13, 6, 0, 0, 0, time.Local)
-	w.freeDue(machine, now, time.Hour)
+	w.FreeDue(machine, now, time.Hour)
 	out := a.out.(*bytes.Buffer).String()
 	if !strings.Contains(out, "FREED in tmpfs: 1 dead session's dir, 2 MiB; 1 orphaned go-build dir, 3 MiB (doctor.freeEvery)") {
 		t.Errorf("watch said:\n%s", out)
 	}
-	if got := w.lastFreeNote(); got != "the automatic free ran at 06:00 and freed 1 dead session's dir, 2 MiB; 1 orphaned go-build dir, 3 MiB" {
+	if got := w.LastFreeNote(); got != "the automatic free ran at 06:00 and freed 1 dead session's dir, 2 MiB; 1 orphaned go-build dir, 3 MiB" {
 		t.Errorf("after a run: %q", got)
 	}
 	// Within the hour another watch reads the run and waits for its hour.
 	other := a.newWatcher(true, false)
-	other.freeDue(machine, now.Add(30*time.Minute), time.Hour)
-	if !other.freeNext.Equal(now.Add(time.Hour)) || strings.Count(a.out.(*bytes.Buffer).String(), "FREED") != 1 {
-		t.Errorf("a second run within the hour: next %v\n%s", other.freeNext, a.out)
+	other.FreeDue(machine, now.Add(30*time.Minute), time.Hour)
+	if !other.FreeNext.Equal(now.Add(time.Hour)) || strings.Count(a.out.(*bytes.Buffer).String(), "FREED") != 1 {
+		t.Errorf("a second run within the hour: next %v\n%s", other.FreeNext, a.out)
 	}
 	// An hour on there is nothing left to free: no line, the note says so.
-	w.freeDue(machine, now.Add(time.Hour), time.Hour)
-	if got := w.lastFreeNote(); got != "the automatic free ran at 07:00, nothing to free" || strings.Count(a.out.(*bytes.Buffer).String(), "FREED") != 1 {
+	w.FreeDue(machine, now.Add(time.Hour), time.Hour)
+	if got := w.LastFreeNote(); got != "the automatic free ran at 07:00, nothing to free" || strings.Count(a.out.(*bytes.Buffer).String(), "FREED") != 1 {
 		t.Errorf("an empty run: %q\n%s", got, a.out)
 	}
 	a.cfg.Doctor.FreeEvery.Duration = -1
-	if got := w.lastFreeNote(); got != "the automatic free is off (doctor.freeEvery)" {
+	if got := w.LastFreeNote(); got != "the automatic free is off (doctor.freeEvery)" {
 		t.Errorf("off: %q", got)
 	}
 }

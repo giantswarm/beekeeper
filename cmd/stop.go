@@ -508,7 +508,7 @@ func (a *app) resume(ctx context.Context) error {
 		line, err := a.resumeRole(ctx, rl, me)
 		if err != nil {
 			p("resume: FAILED %v", err)
-			return fmt.Errorf("the stop is lifted, but the %s did not start (above): beekeeper %s start --new starts it", rl.name, rl.name)
+			return fmt.Errorf("the stop is lifted, but the %s did not start (above): beekeeper %s start --new starts it", rl.Name, rl.Name)
 		}
 		if line != "" {
 			p("resume: %s", line)

@@ -60,17 +60,17 @@ func TestUsageRefreshSharedByCommandsAndWatch(t *testing.T) {
 		if i%2 == 0 {
 			r, err = caller.resolveReading(ctx, file, u)
 		} else {
-			w := &watcher{a: caller}
-			r, err = w.execUsageNow(ctx, file, u)
+			w := &Watcher{Host: caller}
+			r, err = w.ExecUsageNow(ctx, file, u)
 		}
 		if err != nil || r.FiveHour == nil || r.FiveHour.UsedPercent != 99 || r.Fallback == "" {
 			t.Fatalf("contender lost existing quota limit: %+v %v", r, err)
 		}
 	}
-	w := &watcher{a: &app{store: store, now: now, readUsage: probe}, chores: true}
-	w.refreshUsage(ctx, config.Capacity{Providers: map[string]config.Provider{probeProvider: {Usage: u}}})
-	if w.providerUsageErr[probeProvider] != "" {
-		t.Fatalf("contended probe recorded as provider usage failure: %q", w.providerUsageErr[probeProvider])
+	w := &Watcher{Host: &app{store: store, now: now, readUsage: probe}, Chores: true}
+	w.RefreshUsage(ctx, config.Capacity{Providers: map[string]config.Provider{probeProvider: {Usage: u}}})
+	if w.ProviderUsageErr[probeProvider] != "" {
+		t.Fatalf("contended probe recorded as provider usage failure: %q", w.ProviderUsageErr[probeProvider])
 	}
 	close(finish)
 	if err := <-done; err != nil {

@@ -17,10 +17,10 @@ import (
 
 // cutWatch is a watch whose state holds merge m of the registered agent
 // four, its wakes recorded.
-func cutWatch(t *testing.T, m state.Merge) (*watcher, *[]string) {
+func cutWatch(t *testing.T, m state.Merge) (*Watcher, *[]string) {
 	t.Helper()
 	w, _, _ := notifyingWatch(t, t.TempDir(), false)
-	if err := w.a.store.Update(func(st *state.State) ([]state.Event, error) {
+	if err := w.Host.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Agents = []state.Agent{{Party: four}}
 		st.Merges = []state.Merge{m}
 		return nil, nil
@@ -38,18 +38,18 @@ func cutWatch(t *testing.T, m state.Merge) (*watcher, *[]string) {
 }
 
 // polls runs the watch's merge and owed-outcome steps n times.
-func polls(w *watcher, n int) {
+func polls(w *Watcher, n int) {
 	for range n {
-		w.lostMerges(context.Background())
-		w.owedOutcomes(context.Background())
+		w.LostMerges(context.Background())
+		w.OwedOutcomes(context.Background())
 	}
 }
 
 // cutQueuedRun leaves the files of a queued run's merge-child cut with the
 // machine: its pid, dead, and no exit code. It returns their base.
-func cutQueuedRun(t *testing.T, w *watcher) string {
+func cutQueuedRun(t *testing.T, w *Watcher) string {
 	t.Helper()
-	base := filepath.Join(w.a.store.Dir(), ownedRuns, "pr-merge-o_r-7-4242")
+	base := filepath.Join(w.Host.store.Dir(), ownedRuns, "pr-merge-o_r-7-4242")
 	if err := os.MkdirAll(filepath.Dir(base), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -72,11 +72,11 @@ func TestTheWatchWakesTheOwnerOfACutMerge(t *testing.T) {
 		!strings.Contains((*woke)[0], "GitHub says o/r#7 merged at 2026-10-14T19:47:02Z") || !strings.Contains((*woke)[0], "`devctl release wait o/r --pr 7`") {
 		t.Fatalf("woke %q", *woke)
 	}
-	evs, _ := w.a.store.Events(0, func(e state.Event) bool { return e.Verb == "merge.cut" })
+	evs, _ := w.Host.store.Events(0, func(e state.Event) bool { return e.Verb == "merge.cut" })
 	if len(evs) != 1 || !strings.HasSuffix(evs[0].Detail, `its outcome is owed to "Agent four"`) {
 		t.Errorf("merge.cut events %+v", evs)
 	}
-	if st, _ := w.a.store.Read(); len(st.Owed) != 0 || len(st.Merges) != 1 || st.Merges[0].Phase != state.Settling {
+	if st, _ := w.Host.store.Read(); len(st.Owed) != 0 || len(st.Merges) != 1 || st.Merges[0].Phase != state.Settling {
 		t.Errorf("owed %+v, merges %+v", st.Owed, st.Merges)
 	}
 }
@@ -88,7 +88,7 @@ func TestTheWatchWakesTheOwnerOfACutQueuedRun(t *testing.T) {
 	w, woke := cutWatch(t, state.Merge{Repo: scratchRepo, PR: 7, Lane: hungLane, By: four, PID: deadPID(t), Phase: state.Waiting,
 		Joined: relayNow, Seen: relayNow})
 	base := cutQueuedRun(t, w)
-	if err := w.a.store.Update(func(st *state.State) ([]state.Event, error) {
+	if err := w.Host.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Merges[0].Run = base
 		return nil, nil
 	}); err != nil {
@@ -98,7 +98,7 @@ func TestTheWatchWakesTheOwnerOfACutQueuedRun(t *testing.T) {
 	if len(*woke) != 1 || !strings.HasSuffix((*woke)[0], "GitHub says o/r#7 is open, not merged: run the same command again") {
 		t.Fatalf("woke %q", *woke)
 	}
-	if st, _ := w.a.store.Read(); len(st.Merges) != 1 || st.Merges[0].Phase != state.Waiting || st.Merges[0].Run != "" {
+	if st, _ := w.Host.store.Read(); len(st.Merges) != 1 || st.Merges[0].Phase != state.Waiting || st.Merges[0].Run != "" {
 		t.Errorf("merges %+v", st.Merges)
 	}
 	if _, err := os.Stat(base + ".pid"); err == nil {
@@ -114,7 +114,7 @@ func TestAFinishedQueuedRunIsNoCut(t *testing.T) {
 	w, woke := cutWatch(t, state.Merge{Repo: scratchRepo, PR: 7, Lane: hungLane, By: four, PID: deadPID(t), Phase: state.Waiting,
 		Joined: relayNow, Seen: relayNow, Seeded: true, Run: run})
 	polls(w, 2)
-	if st, _ := w.a.store.Read(); len(*woke) != 0 || len(st.Owed) != 0 {
+	if st, _ := w.Host.store.Read(); len(*woke) != 0 || len(st.Owed) != 0 {
 		t.Errorf("woke %q, owed %+v", *woke, st.Owed)
 	}
 }
@@ -139,7 +139,7 @@ func TestTheWatchDoesNotRetryARequestedCancellation(t *testing.T) {
 	stubGitHub(t, github.Open, "")
 	stubPull(t, github.Pull{State: github.Open}, nil)
 	w, woke := cutWatch(t, state.Merge{Repo: scratchRepo, PR: 7, Lane: hungLane, By: four, PID: deadPID(t), Child: deadPID(t), Phase: state.Running, Started: relayNow})
-	base := gate.MergeBase(w.a.store.Dir(), scratchRepo, 7)
+	base := gate.MergeBase(w.Host.store.Dir(), scratchRepo, 7)
 	if err := os.MkdirAll(filepath.Dir(base), 0o700); err != nil {
 		t.Fatal(err)
 	}

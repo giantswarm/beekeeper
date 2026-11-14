@@ -16,10 +16,10 @@ func TestBroadcastSkipsRelievedRosterRun(t *testing.T) {
 	now := time.Date(2026, 10, 6, 0, 0, 0, 0, time.UTC)
 	st := &state.State{Guide: &state.Role{Holder: &state.Supervisor{Party: from}}}
 	st.Agents = []state.Agent{{Party: from}, {Party: to}}
-	if _, _, err := guideRole.relay(st, from, to, now, time.Hour); err != nil {
+	if _, _, err := guideRole.Relay(st, from, to, now, time.Hour); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := guideRole.start(st, to, true, false, now.Add(time.Minute)); err != nil {
+	if _, _, err := guideRole.Start(st, to, true, false, now.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	for _, ag := range st.Agents {

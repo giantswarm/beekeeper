@@ -131,32 +131,32 @@ func TestDiskPruneExternalOutputOnlyForEndedOwner(t *testing.T) {
 func TestDiskPrunePressureScheduleAndAsk(t *testing.T) {
 	a, m := diskFixture(t)
 	a.cfg.Disk = config.Disk{Prune: config.DiskPruneAuto, Every: config.Duration{Duration: time.Hour}}
-	w := &watcher{a: a, diskPruneOn: true, last: map[string]time.Time{}}
+	w := &Watcher{Host: a, DiskPruneOn: true, Last: map[string]time.Time{}}
 	saved := liveDisk
 	defer func() { liveDisk = saved }()
 	calls := 0
 	liveDisk = func(*app) (diskMachine, error) { calls++; return m, nil }
 	now := a.now
-	w.diskPrune(now, false)
-	w.bg.Wait()
-	w.diskPrune(now.Add(time.Minute), true)
-	w.bg.Wait()
+	w.DiskPrune(now, false)
+	w.Bg.Wait()
+	w.DiskPrune(now.Add(time.Minute), true)
+	w.Bg.Wait()
 	if calls != 1 {
 		t.Fatalf("pressure retried too soon: %d", calls)
 	}
-	w.diskPrune(now.Add(6*time.Minute), true)
-	w.bg.Wait()
+	w.DiskPrune(now.Add(6*time.Minute), true)
+	w.Bg.Wait()
 	if calls != 2 {
 		t.Fatalf("pressure failed to run ahead of schedule: %d", calls)
 	}
-	w.diskPrune(now.Add(2*time.Hour), false)
-	w.bg.Wait()
+	w.DiskPrune(now.Add(2*time.Hour), false)
+	w.Bg.Wait()
 	if calls != 3 {
 		t.Fatalf("scheduled prune did not run: %d", calls)
 	}
 	a.cfg.Disk.Prune = config.DiskPruneAsk
-	w.diskPrune(now.Add(4*time.Hour), true)
-	w.bg.Wait()
+	w.DiskPrune(now.Add(4*time.Hour), true)
+	w.Bg.Wait()
 	if calls != 3 {
 		t.Fatal("ask performed automatic disk pruning")
 	}
@@ -165,13 +165,13 @@ func TestDiskPrunePressureScheduleAndAsk(t *testing.T) {
 func TestLowDiskStartsDiskPrune(t *testing.T) {
 	a, m := diskFixture(t)
 	a.cfg.Disk.Prune = config.DiskPruneAuto
-	w := &watcher{a: a, diskPruneOn: true, last: map[string]time.Time{}}
+	w := &Watcher{Host: a, DiskPruneOn: true, Last: map[string]time.Time{}}
 	saved := liveDisk
 	defer func() { liveDisk = saved }()
 	calls := 0
 	liveDisk = func(*app) (diskMachine, error) { calls++; return m, nil }
-	w.sampleDisk(a.now, machine.Disk{FreeMiB: 1, TotalMiB: 10000}, nil, nil)
-	w.bg.Wait()
+	w.SampleDisk(a.now, machine.Disk{FreeMiB: 1, TotalMiB: 10000}, nil, nil)
+	w.Bg.Wait()
 	if calls != 1 {
 		t.Fatal("LOW DISK did not trigger disk pruning")
 	}
@@ -265,15 +265,15 @@ func TestDiskFillingStartsPruneBeforeLowDisk(t *testing.T) {
 	if err := a.store.WriteFile(diskPruneFile, worktreesMark{At: now}); err != nil {
 		t.Fatal(err)
 	}
-	w := &watcher{a: a, diskPruneOn: true, last: map[string]time.Time{}}
+	w := &Watcher{Host: a, DiskPruneOn: true, Last: map[string]time.Time{}}
 	saved := liveDisk
 	defer func() { liveDisk = saved }()
 	calls := 0
 	liveDisk = func(*app) (diskMachine, error) { calls++; return m, nil }
-	w.sampleDisk(now, machine.Disk{FreeMiB: 500 * 1024, TotalMiB: 1000 * 1024}, nil, nil)
-	w.bg.Wait()
-	w.sampleDisk(now.Add(6*time.Minute), machine.Disk{FreeMiB: 490 * 1024, TotalMiB: 1000 * 1024}, nil, nil)
-	w.bg.Wait()
+	w.SampleDisk(now, machine.Disk{FreeMiB: 500 * 1024, TotalMiB: 1000 * 1024}, nil, nil)
+	w.Bg.Wait()
+	w.SampleDisk(now.Add(6*time.Minute), machine.Disk{FreeMiB: 490 * 1024, TotalMiB: 1000 * 1024}, nil, nil)
+	w.Bg.Wait()
 	if calls != 1 {
 		t.Fatalf("DISK FILLING prune calls=%d", calls)
 	}

@@ -24,7 +24,7 @@ func TestLoopWatchFillForecastAloneNeverHoldsStarts(t *testing.T) {
 	total := 1900 * gibMiB // floor 95 GiB; free stays above it while falling fast
 	for i := range 5 {
 		now := time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC).Add(time.Duration(i) * 30 * time.Second)
-		w.sampleDisk(now, machine.Disk{FreeMiB: 100*gibMiB - i*1229, TotalMiB: total}, nil, nil)
+		w.SampleDisk(now, machine.Disk{FreeMiB: 100*gibMiB - i*1229, TotalMiB: total}, nil, nil)
 	}
 	l, err := r.a.newSupervisorLoop(false)
 	if err != nil {

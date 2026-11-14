@@ -354,20 +354,20 @@ func TestWatchSaysTheVault(t *testing.T) {
 	a := vaultApp(t, time.Minute)
 	var out bytes.Buffer
 	a.out = &out
-	w := &watcher{a: a, last: map[string]time.Time{}}
+	w := &Watcher{Host: a, Last: map[string]time.Time{}}
 	statePath, _ := secret.StatePath()
 	waitsPath, _ := secret.WaitsPath()
 	since := time.Now().Add(-8 * time.Minute)
 	if err := secret.WriteWaits(waitsPath, []secret.VaultWait{{Who: "AP 252", Ref: testVaultRef, Since: since}}); err != nil {
 		t.Fatal(err)
 	}
-	w.vaultWaits()
+	w.VaultWaits()
 	if l := out.String(); !strings.Contains(l, "VAULT LOCKED: AP 252 waits on "+testVaultRef) || !strings.Contains(l, "the broker signs in") {
 		t.Fatalf("a waiting call: %s", l)
 	}
 	out.Reset()
 	_ = secret.WriteWaits(waitsPath, nil)
-	w.vaultWaits()
+	w.VaultWaits()
 	if l := out.String(); !strings.Contains(l, "AP 252's call on "+testVaultRef+" timed out (seen waiting since") || strings.Contains(l, "ENDED") {
 		t.Fatalf("a call that gave up: %s", l)
 	}
@@ -375,16 +375,16 @@ func TestWatchSaysTheVault(t *testing.T) {
 	until := time.Now().Add(12 * time.Hour)
 	_ = secret.WriteState(statePath, secret.VaultState{Unlocked: true, Since: time.Now(), Until: until})
 	_ = secret.WriteWaits(waitsPath, []secret.VaultWait{{Who: "AP 252", Ref: testVaultRef, Since: time.Now()}})
-	w.vaultWaits()
+	w.VaultWaits()
 	_ = secret.WriteWaits(waitsPath, nil)
-	w.vaultWaits()
+	w.VaultWaits()
 	if l := out.String(); !strings.Contains(l, "VAULT UNLOCKED: the broker holds the vault session since") ||
 		!strings.Contains(l, "until "+until.Local().Format("15:04")) || !strings.Contains(l, "ENDED VAULT LOCKED") || strings.Contains(l, "timed out") {
 		t.Fatalf("an approval: %s", l)
 	}
 	out.Reset()
 	_ = secret.WriteState(statePath, secret.VaultState{})
-	w.vaultWaits()
+	w.VaultWaits()
 	if l := out.String(); !strings.Contains(l, "ENDED VAULT UNLOCKED") {
 		t.Errorf("the approval's end: %s", l)
 	}
@@ -411,12 +411,12 @@ func TestWatchSaysAFailedSignin(t *testing.T) {
 	a := vaultApp(t, time.Minute)
 	var out bytes.Buffer
 	a.out = &out
-	w := &watcher{a: a, last: map[string]time.Time{}}
+	w := &Watcher{Host: a, Last: map[string]time.Time{}}
 	statePath, _ := secret.StatePath()
 	_ = secret.WriteState(statePath, secret.VaultState{Error: "op-unlock: exit status 2: no terminal to ask"})
-	w.vaultWaits()
+	w.VaultWaits()
 	_ = secret.WriteState(statePath, secret.VaultState{Unlocked: true, Since: time.Now(), Until: time.Now().Add(time.Hour)})
-	w.vaultWaits()
+	w.VaultWaits()
 	if l := out.String(); !strings.Contains(l, "VAULT SIGN-IN FAILED: op-unlock: exit status 2: no terminal to ask") || !strings.Contains(l, "ENDED VAULT SIGN-IN FAILED") {
 		t.Errorf("a failed sign-in: %s", l)
 	}
@@ -685,12 +685,12 @@ func TestWatchSaysARetriedSignin(t *testing.T) {
 	a := vaultApp(t, time.Minute)
 	var out bytes.Buffer
 	a.out = &out
-	w := &watcher{a: a, last: map[string]time.Time{}}
+	w := &Watcher{Host: a, Last: map[string]time.Time{}}
 	statePath, _ := secret.StatePath()
 	_ = secret.WriteState(statePath, secret.VaultState{Retrying: "the network did not reach 1Password (no such host); try 2 at 14:25:51"})
-	w.vaultWaits()
+	w.VaultWaits()
 	_ = secret.WriteState(statePath, secret.VaultState{Unlocked: true, Since: time.Now(), Until: time.Now().Add(time.Hour)})
-	w.vaultWaits()
+	w.VaultWaits()
 	if l := out.String(); !strings.Contains(l, "VAULT SIGN-IN RETRYING: the network did not reach 1Password (no such host); try 2 at 14:25:51") ||
 		!strings.Contains(l, "ENDED VAULT SIGN-IN RETRYING") || strings.Contains(l, "SIGN-IN FAILED") {
 		t.Errorf("a retried sign-in: %s", l)
@@ -703,12 +703,12 @@ func TestWatchSaysADroppedSession(t *testing.T) {
 	a := vaultApp(t, time.Minute)
 	var out bytes.Buffer
 	a.out = &out
-	w := &watcher{a: a, last: map[string]time.Time{}}
+	w := &Watcher{Host: a, Last: map[string]time.Time{}}
 	statePath, _ := secret.StatePath()
 	_ = secret.WriteState(statePath, secret.VaultState{Dropped: "op: exit 1 (You are not currently signed in)", DroppedAt: time.Now()})
-	w.vaultWaits()
+	w.VaultWaits()
 	_ = secret.WriteState(statePath, secret.VaultState{Unlocked: true, Since: time.Now(), Until: time.Now().Add(time.Hour)})
-	w.vaultWaits()
+	w.VaultWaits()
 	if l := out.String(); !strings.Contains(l, "VAULT SESSION DROPPED at ") || !strings.Contains(l, "not currently signed in") || !strings.Contains(l, "ENDED VAULT SESSION DROPPED") {
 		t.Errorf("a dropped session: %s", l)
 	}

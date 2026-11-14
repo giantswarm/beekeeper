@@ -189,13 +189,13 @@ func TestThroughputObservationsTrackExactHeadAndRestart(t *testing.T) {
 func TestThroughputLoopAliveStillReports(t *testing.T) {
 	r := newLoopRig(t)
 	w := r.a.newWatcher(false, true)
-	w.loopOwned = true
-	w.a.now = r.a.timeNow()
-	_ = r.a.store.WriteFile(throughputObservationFile, throughputObservation{At: w.a.now})
+	w.LoopOwned = true
+	w.Host.now = r.a.timeNow()
+	_ = r.a.store.WriteFile(throughputObservationFile, throughputObservation{At: w.Host.now})
 	for i := 0; i < 3; i++ {
 		_ = r.a.operationOutcome(runMerge, "tooling", loopURL, false)
 	}
-	if !w.checkLoop(context.Background(), &state.State{}) {
+	if !w.CheckLoop(context.Background(), &state.State{}) {
 		t.Fatal("loop should be alive")
 	}
 	if len(r.logged(t, loop.LoopFileVerb)) != 1 {

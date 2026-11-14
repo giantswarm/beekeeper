@@ -35,7 +35,7 @@ func relayPending(st *state.State, r state.Role, now time.Time) bool {
 // succeedFromWatch starts rl's next run for the standby watch, in the gone
 // holder's folder.
 func (a *app) succeedFromWatch(ctx context.Context, rl role, from state.Party) (state.Party, error) {
-	to, _, err := a.startSuccessor(ctx, rl, from, watchParty, "")
+	to, _, err := a.startSuccessor(ctx, rl, from, WatchParty, "")
 	return to, err
 }
 
@@ -168,26 +168,26 @@ func sendRequest(host, msg string) string {
 
 // watchNoteFailedSuccessor files the one note for the person on rl's first
 // successor that did not come up, and returns its number (0: none filed).
-func watchNoteFailedSuccessor(w *watcher, rl role, holder state.Party) int {
-	person := w.a.cfg.Guide.Person
+func watchNoteFailedSuccessor(w *Watcher, rl role, holder state.Party) int {
+	person := w.Host.cfg.Guide.Person
 	if person == "" {
 		return 0
 	}
 	d := noteDraft{
 		Question: fmt.Sprintf("%q, the %s's successor beekeeper started, did not come up: no desktop CLI after its first turn, and its headless resume ended. Take the role over from a running desktop session (`beekeeper %s start --take-over`)?",
-			holder.Name, rl.name, rl.name),
-		StatusQuo: fmt.Sprintf("%s holds the role in name only: %s", holder.Name, rl.gone),
+			holder.Name, rl.Name, rl.Name),
+		StatusQuo: fmt.Sprintf("%s holds the role in name only: %s", holder.Name, rl.Gone),
 		Why:       "the desktop did not run the successor's CLI (`journalctl --user -u beekeeper-notify` and the desktop's main.log say why)",
 		Options:   []string{"take over: the running session holds the role and arms its watch", "leave it: the standby watch retries"},
 	}
 	var id int
-	_ = w.a.store.Update(func(st *state.State) ([]state.Event, error) {
+	_ = w.Host.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.NextNote++
 		id = st.NextNote
-		n := state.Note{ID: id, For: person, Text: d.text(), By: watchParty, At: w.a.now.UTC(), Kind: noteDecision,
+		n := state.Note{ID: id, For: person, Text: d.text(), By: WatchParty, At: w.Host.now.UTC(), Kind: noteDecision,
 			Default: fmt.Sprintf("the standby watch starts at most %d successors, %s apart and doubling", maxFailedSuccessors, dur(successorBackoff))}
 		st.Notes = append(st.Notes, n)
-		return []state.Event{event(watchParty, "note.add", "#%d %s", n.ID, n.Text)}, nil
+		return []state.Event{event(WatchParty, "note.add", "#%d %s", n.ID, n.Text)}, nil
 	})
 	return id
 }

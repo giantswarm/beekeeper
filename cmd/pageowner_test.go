@@ -40,11 +40,11 @@ func pageApp(t *testing.T, start time.Time) (*app, *bytes.Buffer) {
 
 // pollPages runs the watch's page check at start plus each minute offset
 // and returns the PAGE UNOWNED lines.
-func pollPages(w *watcher, out *bytes.Buffer, start time.Time, sessions []*claude.Session, minutes ...int) []string {
+func pollPages(w *Watcher, out *bytes.Buffer, start time.Time, sessions []*claude.Session, minutes ...int) []string {
 	out.Reset()
 	for _, m := range minutes {
-		w.a.now = start.Add(time.Duration(m) * time.Minute)
-		w.unownedPages(context.Background(), sessions)
+		w.Host.now = start.Add(time.Duration(m) * time.Minute)
+		w.UnownedPages(context.Background(), sessions)
 	}
 	var lines []string
 	for l := range strings.Lines(out.String()) {
@@ -358,7 +358,7 @@ func TestAlertsOwnershipMatchers(t *testing.T) {
 			if len(st.AlertOwners) != tc.want {
 				t.Fatalf("owners = %d, want %d", len(st.AlertOwners), tc.want)
 			}
-			until := ownedUntil(st.AlertOwners, nil, a.now)
+			until := OwnedUntil(st.AlertOwners, nil, a.now)
 			for _, f := range base.Firing("") {
 				wantOwned := (tc.name == "alertname only" || tc.name == "namespace" || f.Cluster == "cluster-a") && (tc.name == "alertname only" || tc.name == "cluster" || f.Labels["namespace"] == litNamespaceA)
 				_, owned := until(f.Key)

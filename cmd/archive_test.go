@@ -148,10 +148,10 @@ func TestSeedArchivesAgainOnlyWhatReseedTakes(t *testing.T) {
 	back := state.Party{Session: "w-back", HostSession: "local_w-back", Name: "brought back"}
 	stale := state.Party{Session: kindStale, HostSession: "local_stale", Name: "left stale"}
 	st.Starts = []state.Start{{Party: supA}, {Party: supB}, {Party: done}, {Party: back}, {Party: stale}}
-	if _, _, err := guideRole.relay(st, supA, supB, relayNow, 15*time.Minute); err != nil {
+	if _, _, err := guideRole.Relay(st, supA, supB, relayNow, 15*time.Minute); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := guideRole.start(st, supB, true, false, relayNow.Add(time.Minute)); err != nil {
+	if _, _, err := guideRole.Start(st, supB, true, false, relayNow.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	st.Archives, st.ArchivesSeeded, st.FinishedSeeded = nil, true, true
@@ -276,10 +276,10 @@ func TestHandoverChainOwesEachOldSession(t *testing.T) {
 func TestRelievedRunStaysThePersons(t *testing.T) {
 	st := handOverState()
 	st.Starts = []state.Start{{Party: supA, Role: guideName}, {Party: supB}}
-	if _, _, err := guideRole.relay(st, supA, supB, relayNow, 15*time.Minute); err != nil {
+	if _, _, err := guideRole.Relay(st, supA, supB, relayNow, 15*time.Minute); err != nil {
 		t.Fatal(err)
 	}
-	msg, _, err := guideRole.start(st, supB, true, false, relayNow.Add(time.Minute))
+	msg, _, err := guideRole.Start(st, supB, true, false, relayNow.Add(time.Minute))
 	if err != nil || !strings.Contains(msg, "stays in the person's session list until they archive it") {
 		t.Fatalf("start: %q, %v", msg, err)
 	}
@@ -320,10 +320,10 @@ func TestTakenOverGuideStaysThePersons(t *testing.T) {
 	if keepsRole(st, old) {
 		t.Fatal("keepsRole before it guided")
 	}
-	if _, _, err := guideRole.start(st, old, false, false, relayNow); err != nil {
+	if _, _, err := guideRole.Start(st, old, false, false, relayNow); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := guideRole.start(st, next, false, false, relayNow.Add(time.Hour)); err != nil {
+	if _, _, err := guideRole.Start(st, next, false, false, relayNow.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	if holdsRole(st, old) || !keepsRole(st, old) {

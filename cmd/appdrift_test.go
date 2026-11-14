@@ -37,13 +37,13 @@ func TestAppConsentManifestDrift(t *testing.T) {
 	}
 	var out bytes.Buffer
 	w := a.newWatcher(false, false)
-	w.a.out = &out
-	w.sayAppDrifts(drift)
+	w.Host.out = &out
+	w.SayAppDrifts(drift)
 	if !strings.Contains(out.String(), line) {
 		t.Fatalf("watch output: %s", out.String())
 	}
 	out.Reset()
-	w.sayAppDrifts(nil)
+	w.SayAppDrifts(nil)
 	if !strings.Contains(out.String(), "ENDED") {
 		t.Fatalf("watch did not clear drift: %s", out.String())
 	}

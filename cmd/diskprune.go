@@ -349,7 +349,7 @@ func (a *app) pruneDisk(dry, pressure bool, read func() (diskMachine, error)) di
 		r.uncovered = uncoveredCaches(m.cacheHome, m.entries, diskHoldingMin, 5)
 	}
 	if !dry && a.context().Err() == nil {
-		_ = a.store.Log(event(watchParty, "disk.prune", "%s", r))
+		_ = a.store.Log(event(WatchParty, "disk.prune", "%s", r))
 		if pressure {
 			_ = a.store.WriteFile(diskHoldingFile, diskHolding{At: a.now, Text: r.holdingText()})
 		}
@@ -463,33 +463,33 @@ func diskCacheTarget(size, capBytes int64, pressure bool) (int64, bool) {
 
 // watchDiskPrune runs on schedule and under pressure. All watches share the mark
 // and lock; pressure retries are bounded to once per five minutes.
-func watchDiskPrune(w *watcher, now time.Time, pressure bool) {
-	if !w.diskPruneOn || !w.a.cfg.Disk.Auto() || !w.diskPruning.CompareAndSwap(false, true) {
+func watchDiskPrune(w *Watcher, now time.Time, pressure bool) {
+	if !w.DiskPruneOn || !w.Host.cfg.Disk.Auto() || !w.DiskPruning.CompareAndSwap(false, true) {
 		return
 	}
-	if now.Before(w.diskPruneNext) && !pressure {
-		w.diskPruning.Store(false)
+	if now.Before(w.DiskPruneNext) && !pressure {
+		w.DiskPruning.Store(false)
 		return
 	}
-	d := *w.a
+	d := *w.Host
 	d.now = now
-	w.bg.Add(1)
+	w.Bg.Add(1)
 	go func() {
-		defer w.bg.Done()
-		defer w.diskPruning.Store(false)
-		schedule := flock.New(filepath.Join(w.a.store.Dir(), "disk-prune-schedule.lock"))
+		defer w.Bg.Done()
+		defer w.DiskPruning.Store(false)
+		schedule := flock.New(filepath.Join(w.Host.store.Dir(), "disk-prune-schedule.lock"))
 		ok, err := schedule.TryLock()
 		if err != nil || !ok {
-			w.diskPruneNext = now.Add(goCacheRetry)
+			w.DiskPruneNext = now.Add(goCacheRetry)
 			if err != nil {
-				w.emitNow("disk-prune", "DISK PRUNE kept everything: %v", err)
+				w.EmitNow("disk-prune", "DISK PRUNE kept everything: %v", err)
 			}
 			return
 		}
 		defer func() { _ = schedule.Unlock() }()
 		var mark worktreesMark
-		_, _ = w.a.store.ReadFile(diskPruneFile, &mark)
-		every := w.a.cfg.Disk.Every.Duration
+		_, _ = w.Host.store.ReadFile(diskPruneFile, &mark)
+		every := w.Host.cfg.Disk.Every.Duration
 		if every <= 0 {
 			every = time.Hour
 		}
@@ -497,7 +497,7 @@ func watchDiskPrune(w *watcher, now time.Time, pressure bool) {
 			every = min(every, goCacheRetry)
 		}
 		if now.Sub(mark.At) < every {
-			w.diskPruneNext = mark.At.Add(every)
+			w.DiskPruneNext = mark.At.Add(every)
 			return
 		}
 		r := d.pruneDisk(false, pressure, func() (diskMachine, error) { return liveDisk(&d) })
@@ -505,12 +505,12 @@ func watchDiskPrune(w *watcher, now time.Time, pressure bool) {
 			return
 		}
 		if r.locked {
-			w.diskPruneNext = now.Add(goCacheRetry)
+			w.DiskPruneNext = now.Add(goCacheRetry)
 			return
 		}
-		w.diskPruneNext = now.Add(every)
-		_ = w.a.store.WriteFile(diskPruneFile, worktreesMark{At: now})
-		w.emitNow("disk-prune", "DISK PRUNE %s", r)
+		w.DiskPruneNext = now.Add(every)
+		_ = w.Host.store.WriteFile(diskPruneFile, worktreesMark{At: now})
+		w.EmitNow("disk-prune", "DISK PRUNE %s", r)
 	}()
 }
 

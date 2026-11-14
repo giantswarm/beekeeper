@@ -104,8 +104,8 @@ func TestADesktopSendWaitsForTheHeadlessTurn(t *testing.T) {
 // yet.
 func TestTheWatchSaysATwinCLI(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
-	w.a.now = time.Now()
-	old := w.a.now.Add(-time.Hour)
+	w.Host.now = time.Now()
+	old := w.Host.now.Add(-time.Hour)
 	sessions := []*claude.Session{{PID: 11, ID: "s1", HostID: twinHost, Name: twinName}, {PID: 12, ID: "o", Name: "someone else"}}
 	head := &proc.Process{PID: 10, Comm: claudeComm, Start: old, Args: []string{claudeComm, "-p", resumeFlag, "s1", "--", "msg"}}
 	desk := &proc.Process{PID: 11, Comm: claudeComm, Start: old, Args: []string{claudeComm, "--resume=s1"}}
@@ -118,18 +118,18 @@ func TestTheWatchSaysATwinCLI(t *testing.T) {
 		return tb
 	}
 	young := *head
-	young.Start = w.a.now.Add(-time.Second)
-	w.twins(sessions, table(&young, desk, other))
+	young.Start = w.Host.now.Add(-time.Second)
+	w.Twins(sessions, table(&young, desk, other))
 	if strings.Contains(out.String(), "TWIN CLI") {
 		t.Errorf("a restart's overlap counts as a twin:\n%s", out)
 	}
-	w.twins(sessions, table(head, desk, other))
-	w.twins(sessions, table(head, desk, other))
+	w.Twins(sessions, table(head, desk, other))
+	w.Twins(sessions, table(head, desk, other))
 	if s := out.String(); strings.Count(s, "TWIN CLI") != 1 ||
 		!strings.Contains(s, `"Twin worker" runs 2 CLIs on session s1 (PID 10 in `) || !strings.Contains(s, "PID 11 in ") {
 		t.Errorf("output:\n%s", s)
 	}
-	w.twins(sessions, table(desk, other))
+	w.Twins(sessions, table(desk, other))
 	if !strings.Contains(out.String(), "ENDED TWIN CLI") {
 		t.Errorf("no end once one CLI is left:\n%s", out)
 	}

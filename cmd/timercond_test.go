@@ -57,7 +57,7 @@ func TestTimersOnOneReferenceShareOneCheck(t *testing.T) {
 	timers = append(timers, state.Timer{ID: 11, Due: relayNow.Add(time.Minute), Probe: probeHolds})
 	held := checkTimers(context.Background(), timers, relayNow, false)
 	b, _ := os.ReadFile(count) //nolint:gosec // the test's temp file
-	if string(b) != "x\n" || len(held) != 10 || held[1].holds || held[1].unreadable {
+	if string(b) != "x\n" || len(held) != 10 || held[1].Holds || held[1].Unreadable {
 		t.Fatalf("ran %q, held %v", b, held)
 	}
 	for i := range timers {
@@ -76,8 +76,8 @@ func TestTimersOnOneReferenceShareOneCheck(t *testing.T) {
 // once, and closes.
 func TestConditionalTimerWakesItsAgentOnceItHolds(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
-	w.doctoring.Store(true) // the doctor is not under test; its goroutine outlives the watch
-	w.chores = true         // a running watch, not --once
+	w.Doctoring.Store(true) // the doctor is not under test; its goroutine outlives the watch
+	w.Chores = true         // a running watch, not --once
 	merged := false
 	fakeRead(t, func(cmd string) ([]byte, error) {
 		if !strings.Contains(cmd, "repos/o/r/pulls/7") {
@@ -92,7 +92,7 @@ func TestConditionalTimerWakesItsAgentOnceItHolds(t *testing.T) {
 		return nil
 	}
 	t.Cleanup(func() { wakeOwner = wasWake })
-	if err := w.a.store.Update(func(st *state.State) ([]state.Event, error) {
+	if err := w.Host.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Agents = []state.Agent{{Party: state.Party{Session: "s9", Name: bk228}}}
 		st.Timers = []state.Timer{{ID: 1, Due: relayNow.Add(-time.Minute), When: prMerged7, Wake: bk228, What: "rebase on it"}}
 		return nil, nil
@@ -100,20 +100,20 @@ func TestConditionalTimerWakesItsAgentOnceItHolds(t *testing.T) {
 		t.Fatal(err)
 	}
 	live := []*claude.Session{}
-	w.pending(context.Background(), live)
-	st, _ := w.a.store.Read()
+	w.Pending(context.Background(), live)
+	st, _ := w.Host.store.Read()
 	if len(woke) != 0 || len(st.Timers) != 1 || !st.Timers[0].Checked.Equal(relayNow.UTC()) {
 		t.Fatalf("before the merge: woke %v, timers %+v", woke, st.Timers)
 	}
 	merged = true
-	w.a.now = relayNow.Add(timerEvery)
-	w.pending(context.Background(), live)
-	w.pending(context.Background(), live)
-	w.timerActs.Wait()
+	w.Host.now = relayNow.Add(timerEvery)
+	w.Pending(context.Background(), live)
+	w.Pending(context.Background(), live)
+	w.TimerActs.Wait()
 	if len(woke) != 1 || woke[0] != "BK 228: beekeeper timer #1 (pr-merged o/r#7 holds): rebase on it" {
 		t.Fatalf("woke %q", woke)
 	}
-	if st, _ := w.a.store.Read(); len(st.Timers) != 0 {
+	if st, _ := w.Host.store.Read(); len(st.Timers) != 0 {
 		t.Fatalf("still open: %+v", st.Timers)
 	}
 	if !strings.Contains(out.String(), `TIMER: #1, pr-merged o/r#7 holds: waking "BK 228": rebase on it`) {
@@ -126,7 +126,7 @@ func TestConditionalTimerWakesItsAgentOnceItHolds(t *testing.T) {
 // timer neither closed nor re-armed nor checked.
 func TestWatchOnceFiresNoTimer(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
-	w.chores = false // --once
+	w.Chores = false // --once
 	fakeRead(t, func(cmd string) ([]byte, error) { return []byte("true\n"), nil })
 	var woke []string
 	wasWake := wakeOwner
@@ -144,22 +144,22 @@ func TestWatchOnceFiresNoTimer(t *testing.T) {
 		{ID: 4, Due: past, Wake: bk228, Repeat: "daily", What: "standup"},
 		{ID: 5, Due: past, Probe: probeFails, Checked: relayNow, Every: time.Hour, Until: relayNow, Expire: true, What: "moot"},
 	}
-	if err := w.a.store.Update(func(st *state.State) ([]state.Event, error) {
+	if err := w.Host.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Agents = []state.Agent{{Party: state.Party{Session: "s9", Name: bk228}}}
 		st.Timers = timers
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	w.pending(context.Background(), []*claude.Session{})
-	w.timerActs.Wait()
+	w.Pending(context.Background(), []*claude.Session{})
+	w.TimerActs.Wait()
 	if len(woke) != 0 {
 		t.Fatalf("--once woke %q", woke)
 	}
 	if _, err := os.Stat(ran); err == nil {
 		t.Fatal("--once ran a timer's command")
 	}
-	st, _ := w.a.store.Read()
+	st, _ := w.Host.store.Read()
 	if len(st.Timers) != len(timers) {
 		t.Fatalf("--once settled timers: %+v", st.Timers)
 	}
@@ -168,7 +168,7 @@ func TestWatchOnceFiresNoTimer(t *testing.T) {
 			t.Errorf("--once changed timer #%d: %+v", x.ID, x)
 		}
 	}
-	if evs, _ := w.a.store.Events(0, func(e state.Event) bool { return strings.HasPrefix(e.Verb, "timer.") }); len(evs) != 0 {
+	if evs, _ := w.Host.store.Events(0, func(e state.Event) bool { return strings.HasPrefix(e.Verb, "timer.") }); len(evs) != 0 {
 		t.Errorf("--once logged %+v", evs)
 	}
 	for _, want := range []string{
@@ -196,12 +196,12 @@ func TestTimersTimeOutExpireAndFireAtTheirTime(t *testing.T) {
 		{ID: 5, Due: past, Probe: probeFails, Until: relayNow.Add(time.Hour), What: "waits"},
 		{ID: 6, Due: relayNow.Add(time.Hour), Wake: "a", What: "later"},
 	}}
-	lines, evs, fires, changed := settleTimers(st, map[int]checkResult{5: {}}, relayNow)
-	if !changed || len(fires) != 2 || !fires[0].timedOut || fires[0].t.ID != 1 || fires[1].t.ID != 4 || fires[1].timedOut {
+	lines, evs, fires, changed := SettleTimers(st, map[int]checkResult{5: {}}, relayNow)
+	if !changed || len(fires) != 2 || !fires[0].TimedOut || fires[0].T.ID != 1 || fires[1].T.ID != 4 || fires[1].TimedOut {
 		t.Fatalf("fires %+v", fires)
 	}
-	if !strings.HasPrefix(fires[0].message(), "beekeeper timer #1 (timed out at 02:00, probe `false` did not hold): late") {
-		t.Errorf("message %q", fires[0].message())
+	if !strings.HasPrefix(fires[0].Message(), "beekeeper timer #1 (timed out at 02:00, probe `false` did not hold): late") {
+		t.Errorf("message %q", fires[0].Message())
 	}
 	if len(lines) != 3 || !strings.HasPrefix(lines[1], "TIMER EXPIRED: #2") || len(evs) != 3 || evs[1].Verb != "timer.expired" {
 		t.Fatalf("lines %q, events %+v", lines, evs)
@@ -213,19 +213,19 @@ func TestTimersTimeOutExpireAndFireAtTheirTime(t *testing.T) {
 	if len(open) != 3 || open[0] != 3 || open[1] != 5 || open[2] != 6 || !st.Timers[1].Checked.Equal(relayNow.UTC()) {
 		t.Fatalf("open %v, %+v", open, st.Timers)
 	}
-	if lines, _ := firePending(st, nil, relayNow); len(lines) != 1 || !strings.HasPrefix(lines[0], "TIMER: #3 due") {
+	if lines, _ := FirePending(st, nil, relayNow); len(lines) != 1 || !strings.HasPrefix(lines[0], "TIMER: #3 due") {
 		t.Fatalf("firePending %q", lines)
 	}
 }
 
 func TestTimerRunLogsItsExitCode(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
-	w.runTimer(context.Background(), timerFire{t: state.Timer{ID: 4, Run: "echo hi; exit 3", What: "resume"}})
-	evs, err := w.a.store.Events(0, func(e state.Event) bool { return e.Verb == "timer.ran" })
+	w.RunTimer(context.Background(), timerFire{T: state.Timer{ID: 4, Run: "echo hi; exit 3", What: "resume"}})
+	evs, err := w.Host.store.Events(0, func(e state.Event) bool { return e.Verb == "timer.ran" })
 	if err != nil || len(evs) != 1 || !strings.HasPrefix(evs[0].Detail, "#4 exit 3") {
 		t.Fatalf("events %+v, %v", evs, err)
 	}
-	if b, _ := os.ReadFile(filepath.Join(w.a.store.Dir(), "timers", "4.log")); string(b) != "hi\n" {
+	if b, _ := os.ReadFile(filepath.Join(w.Host.store.Dir(), "timers", "4.log")); string(b) != "hi\n" {
 		t.Fatalf("log %q", b)
 	}
 	if !strings.Contains(out.String(), "TIMER RAN: #4 exit 3") {
@@ -236,7 +236,7 @@ func TestTimerRunLogsItsExitCode(t *testing.T) {
 func TestTimerAddRefusesWhatCannotFire(t *testing.T) {
 	a := &app{now: relayNow}
 	w, _, _ := notifyingWatch(t, t.TempDir(), false)
-	a.store = w.a.store
+	a.store = w.Host.store
 	due := relayNow.Add(time.Minute)
 	for name, spec := range map[string]timerSpec{
 		"until without a condition": {until: "1h"},
@@ -266,7 +266,7 @@ func TestRepeatingTimerReArmsAtItsLocalTime(t *testing.T) {
 		{ID: 2, Due: past, Run: probeHolds, Repeat: state.RepeatWeekdays, What: "daily summary"},
 		{ID: 3, Due: past, Wake: "a", Repeat: state.RepeatWeekly, What: "weekly summary"},
 	}}
-	lines, _, fires, changed := settleTimers(st, nil, relayNow)
+	lines, _, fires, changed := SettleTimers(st, nil, relayNow)
 	if !changed || len(fires) != 3 || len(st.Timers) != 3 {
 		t.Fatalf("fires %+v, open %+v", fires, st.Timers)
 	}
@@ -287,7 +287,7 @@ func TestRepeatingTimerReArmsAtItsLocalTime(t *testing.T) {
 func TestTimerAddRefusesARepeatThatCannotFire(t *testing.T) {
 	a := &app{now: relayNow}
 	w, _, _ := notifyingWatch(t, t.TempDir(), false)
-	a.store = w.a.store
+	a.store = w.Host.store
 	due := relayNow.Add(time.Minute)
 	for name, spec := range map[string]timerSpec{
 		"an unknown repeat":       {run: probeHolds, repeat: "hourly"},
@@ -313,7 +313,7 @@ func TestTimerAddRefusesARepeatThatCannotFire(t *testing.T) {
 func TestTimerNotHoldingForADayIsOneWatchLine(t *testing.T) {
 	st := &state.State{Timers: []state.Timer{{ID: 7, Due: relayNow.Add(-time.Hour), Probe: probeFails, What: "check the rollout"}}}
 	settle := func(at time.Time) []string {
-		lines, _, fires, _ := settleTimers(st, map[int]checkResult{7: {reason: "exit status 1"}}, at)
+		lines, _, fires, _ := SettleTimers(st, map[int]checkResult{7: {Reason: "exit status 1"}}, at)
 		if len(fires) != 0 || len(st.Timers) != 1 {
 			t.Fatalf("fires %+v, open %+v", fires, st.Timers)
 		}
@@ -326,7 +326,7 @@ func TestTimerNotHoldingForADayIsOneWatchLine(t *testing.T) {
 		t.Fatalf("under a day: %q", lines)
 	}
 	day := relayNow.Add(timerStuckAfter)
-	lines, evs, _, _ := settleTimers(st, map[int]checkResult{7: {reason: "exit status 1"}}, day)
+	lines, evs, _, _ := SettleTimers(st, map[int]checkResult{7: {Reason: "exit status 1"}}, day)
 	want := "TIMER STUCK: #7, probe `false` has not held since Sep 25 02:00 (exit status 1); it keeps waiting: check the rollout"
 	if len(lines) != 1 || lines[0] != want || len(evs) != 1 || evs[0].Verb != "timer.stuck" || !st.Timers[0].Stuck {
 		t.Fatalf("after a day: %q, %+v", lines, evs)
@@ -353,23 +353,23 @@ func TestTimerFiredLateSaysHowLateAndWhy(t *testing.T) {
 			{ID: 3, Due: relayNow.Add(-timerTick), Run: probeHolds, What: "on time"},
 		},
 	}
-	_, _, fires, changed := settleTimers(st, nil, relayNow)
+	_, _, fires, changed := SettleTimers(st, nil, relayNow)
 	if !changed || len(fires) != 2 || len(st.Timers) != 1 {
 		t.Fatalf("while stopped: fires %+v, open %+v", fires, st.Timers)
 	}
 	want := "due 01:46 " + z + ", fired 02:00 " + z + ", 14m late: " + timerHeldDown
-	if fires[0].reason != want || fires[0].late != "14m late: "+timerHeldDown {
-		t.Errorf("down: reason %q, want %q", fires[0].reason, want)
+	if fires[0].Reason != want || fires[0].Late != "14m late: "+timerHeldDown {
+		t.Errorf("down: reason %q, want %q", fires[0].Reason, want)
 	}
-	if fires[1].reason != "due 01:59 "+z || fires[1].late != "" {
-		t.Errorf("on time: reason %q, late %q", fires[1].reason, fires[1].late)
+	if fires[1].Reason != "due 01:59 "+z || fires[1].Late != "" {
+		t.Errorf("on time: reason %q, late %q", fires[1].Reason, fires[1].Late)
 	}
 	if held := st.Timers[0]; held.Held != "held by the beekeeper stop since 01:45 "+z {
 		t.Fatalf("the stop's hold was not recorded: %+v", held)
 	}
 	st.Stop = nil
-	lines, _, fires, _ := settleTimers(st, nil, relayNow.Add(10*time.Minute))
-	if len(fires) != 1 || !strings.Contains(fires[0].message(), "24m late: held by the beekeeper stop since 01:45 "+z) || !strings.Contains(lines[0], "fired 02:10 "+z) {
+	lines, _, fires, _ := SettleTimers(st, nil, relayNow.Add(10*time.Minute))
+	if len(fires) != 1 || !strings.Contains(fires[0].Message(), "24m late: held by the beekeeper stop since 01:45 "+z) || !strings.Contains(lines[0], "fired 02:10 "+z) {
 		t.Fatalf("after the resume: fires %+v, lines %q", fires, lines)
 	}
 }
@@ -379,8 +379,8 @@ func TestTimerFiredLateSaysHowLateAndWhy(t *testing.T) {
 func TestTimerRunPassesTheTimerToItsCommand(t *testing.T) {
 	w, _, _ := notifyingWatch(t, t.TempDir(), false)
 	due := time.Date(2026, 11, 2, 7, 30, 0, 0, time.UTC)
-	w.runTimer(context.Background(), timerFire{t: state.Timer{ID: 9, Due: due, Run: `echo "$BEEKEEPER_TIMER_ID $BEEKEEPER_TIMER_DUE $BEEKEEPER_TIMER_LATE"`}, late: "14m late: down"})
-	if b, _ := os.ReadFile(filepath.Join(w.a.store.Dir(), "timers", "9.log")); string(b) != "9 2026-11-02T07:30:00Z 14m late: down\n" {
+	w.RunTimer(context.Background(), timerFire{T: state.Timer{ID: 9, Due: due, Run: `echo "$BEEKEEPER_TIMER_ID $BEEKEEPER_TIMER_DUE $BEEKEEPER_TIMER_LATE"`}, Late: "14m late: down"})
+	if b, _ := os.ReadFile(filepath.Join(w.Host.store.Dir(), "timers", "9.log")); string(b) != "9 2026-11-02T07:30:00Z 14m late: down\n" {
 		t.Fatalf("the command read %q", b)
 	}
 }
@@ -388,8 +388,8 @@ func TestTimerRunPassesTheTimerToItsCommand(t *testing.T) {
 func TestTimerRunMarksInheritedSession(t *testing.T) {
 	t.Setenv(envTimerCommand, "outer")
 	w, _, _ := notifyingWatch(t, t.TempDir(), false)
-	w.runTimer(t.Context(), timerFire{t: state.Timer{ID: 9, Run: `sh -c 'printf "%s" "$BEEKEEPER_TIMER_COMMAND"'`}})
-	out, err := os.ReadFile(filepath.Join(w.a.store.Dir(), "timers", "9.log"))
+	w.RunTimer(t.Context(), timerFire{T: state.Timer{ID: 9, Run: `sh -c 'printf "%s" "$BEEKEEPER_TIMER_COMMAND"'`}})
+	out, err := os.ReadFile(filepath.Join(w.Host.store.Dir(), "timers", "9.log"))
 	if err != nil || string(out) != "run" {
 		t.Fatalf("run subprocess marker = %q, %v", out, err)
 	}
@@ -402,17 +402,17 @@ func TestTimerRunInterruptedByWatchRestart(t *testing.T) {
 		t.Run("repeat="+repeat, func(t *testing.T) {
 			w, _, out := notifyingWatch(t, t.TempDir(), false)
 			ready := filepath.Join(t.TempDir(), "ready")
-			timer := state.Timer{ID: 42, Due: w.a.now, What: "start worker", Repeat: repeat,
+			timer := state.Timer{ID: 42, Due: w.Host.now, What: "start worker", Repeat: repeat,
 				Run: fmt.Sprintf("touch %s; exec sleep 60", ready)}
-			if err := w.a.store.Update(func(st *state.State) ([]state.Event, error) {
+			if err := w.Host.store.Update(func(st *state.State) ([]state.Event, error) {
 				st.Timers = []state.Timer{timer}
 				return nil, nil
 			}); err != nil {
 				t.Fatal(err)
 			}
 			var fires []timerFire
-			if err := w.a.store.Update(func(st *state.State) ([]state.Event, error) {
-				_, evs, f, _ := settleTimers(st, nil, w.a.now)
+			if err := w.Host.store.Update(func(st *state.State) ([]state.Event, error) {
+				_, evs, f, _ := SettleTimers(st, nil, w.Host.now)
 				fires = f
 				return evs, nil
 			}); err != nil {
@@ -420,7 +420,7 @@ func TestTimerRunInterruptedByWatchRestart(t *testing.T) {
 			}
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
-			w.actTimers(ctx, fires)
+			w.ActTimers(ctx, fires)
 			deadline := time.Now().Add(5 * time.Second)
 			for {
 				if _, err := os.Stat(ready); err == nil {
@@ -428,14 +428,14 @@ func TestTimerRunInterruptedByWatchRestart(t *testing.T) {
 				}
 				if time.Now().After(deadline) {
 					cancel()
-					w.timerActs.Wait()
+					w.TimerActs.Wait()
 					t.Fatal("timer command did not start")
 				}
 				time.Sleep(10 * time.Millisecond)
 			}
 			cancel()
-			w.timerActs.Wait()
-			st, err := w.a.store.Read()
+			w.TimerActs.Wait()
+			st, err := w.Host.store.Read()
 			if err != nil || len(st.Timers) != 1 || !st.Timers[0].Due.Equal(timer.Due) || !st.Timers[0].Fired.IsZero() {
 				t.Fatalf("interrupted occurrence lost: %+v, %v", st, err)
 			}
@@ -444,8 +444,8 @@ func TestTimerRunInterruptedByWatchRestart(t *testing.T) {
 					t.Fatalf("missing %q in %q", want, out.String())
 				}
 			}
-			_, _, retried, _ := settleTimers(st, nil, w.a.now)
-			if len(retried) != 1 || retried[0].t.ID != timer.ID {
+			_, _, retried, _ := SettleTimers(st, nil, w.Host.now)
+			if len(retried) != 1 || retried[0].T.ID != timer.ID {
 				t.Fatalf("replacement watch did not retry: %+v", retried)
 			}
 		})
@@ -454,8 +454,8 @@ func TestTimerRunInterruptedByWatchRestart(t *testing.T) {
 
 func TestTimerRunKilledRearms(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
-	w.runTimer(t.Context(), timerFire{t: state.Timer{ID: 43, Due: w.a.now, Run: litKillKill, What: "killed command"}})
-	st, err := w.a.store.Read()
+	w.RunTimer(t.Context(), timerFire{T: state.Timer{ID: 43, Due: w.Host.now, Run: litKillKill, What: "killed command"}})
+	st, err := w.Host.store.Read()
 	if err != nil || len(st.Timers) != 1 || st.Timers[0].ID != 43 {
 		t.Fatalf("killed timer lost: %+v, %v", st, err)
 	}

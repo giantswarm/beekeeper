@@ -51,9 +51,9 @@ func quietLog(t *testing.T, a *app) []string {
 func TestShortLivedSessionsAreQuiet(t *testing.T) {
 	var out bytes.Buffer
 	a := quietApp(t, &out)
-	w := &watcher{a: a}
-	w.sessions = map[string]*claude.Session{"local_1": {ID: "s1", HostID: "local_1", Name: "test: wake-target"}}
-	w.sessionChanges([]*claude.Session{
+	w := &Watcher{Host: a}
+	w.Sessions = map[string]*claude.Session{"local_1": {ID: "s1", HostID: "local_1", Name: "test: wake-target"}}
+	w.SessionChanges([]*claude.Session{
 		{ID: "s2", HostID: "local_2", Name: "test: beekeeper#54 probe sender 3"},
 		{ID: "s3", HostID: "local_3", Name: agentEleven},
 	})

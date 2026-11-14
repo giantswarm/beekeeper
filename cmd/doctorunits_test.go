@@ -122,7 +122,7 @@ func TestDoctorStopsRunnerUnitsWithoutLiveSession(t *testing.T) {
 		l := &failedLauncher{running: running}
 		plat.Launcher = l
 		var a *app
-		line := a.doctorRunnerUnits(context.Background(), st, busy, watchParty, tc.dryRun)
+		line := a.doctorRunnerUnits(context.Background(), st, busy, WatchParty, tc.dryRun)
 		if line != tc.prefix || !slices.Equal(l.stopped, tc.stopped) {
 			t.Errorf("%s: line = %q (want %q), stopped = %v (want %v)", name, line, tc.prefix, l.stopped, tc.stopped)
 		}

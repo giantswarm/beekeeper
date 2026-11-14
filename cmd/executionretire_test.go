@@ -35,7 +35,7 @@ func (f *retireTransport) Retire(_ context.Context, ref execution.Ref, q executi
 
 // retireFixture is an ended execution whose log reached the transcript store,
 // shaped by change, and the watcher and transport that retire it.
-func retireFixture(t *testing.T, change func(*state.State, *state.ExecutionRecord)) (*app, *watcher, *retireTransport, execution.Ref) {
+func retireFixture(t *testing.T, change func(*state.State, *state.ExecutionRecord)) (*app, *Watcher, *retireTransport, execution.Ref) {
 	t.Helper()
 	a, r := executionTestApp(t)
 	fake := &retireTransport{testExecutionTransport: &testExecutionTransport{}}
@@ -51,7 +51,7 @@ func retireFixture(t *testing.T, change func(*state.State, *state.ExecutionRecor
 	}); err != nil {
 		t.Fatal(err)
 	}
-	return a, &watcher{a: a}, fake, r.Ref
+	return a, &Watcher{Host: a}, fake, r.Ref
 }
 
 func retirementOf(t *testing.T, a *app, ref execution.Ref) *state.ExecutionRetirement {
@@ -64,13 +64,13 @@ func retirementOf(t *testing.T, a *app, ref execution.Ref) *state.ExecutionRetir
 	return rec.Retirement
 }
 
-func tick(t *testing.T, a *app, w *watcher) {
+func tick(t *testing.T, a *app, w *Watcher) {
 	t.Helper()
 	st, err := a.store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
-	w.retireEndedExecutions(context.Background(), st)
+	w.RetireEndedExecutions(context.Background(), st)
 }
 
 func TestExecutionRetirementTriggers(t *testing.T) {
@@ -117,7 +117,7 @@ func TestExecutionRetirementTriggers(t *testing.T) {
 				if tc.change != nil {
 					tc.change(st, r)
 				}
-				got = executionRetirementTrigger(st, r)
+				got = ExecutionRetirementTrigger(st, r)
 			})
 			if got != tc.want {
 				t.Fatalf("trigger = %q, want %q", got, tc.want)
@@ -159,7 +159,7 @@ func TestExecutionRetirementSurvivesAnUnreachableHost(t *testing.T) {
 	fake.fail = &execution.UnreachableError{Operation: "retire", Cause: errors.New("connection refused")}
 	tick(t, a, w)
 	x := retirementOf(t, a, ref)
-	if x.RevokedAt.IsZero() || !x.RetiredAt.IsZero() || x.HostError == "" || x.Attempts != 1 || !x.NextAttempt.After(w.a.now) || x.Finished() {
+	if x.RevokedAt.IsZero() || !x.RetiredAt.IsZero() || x.HostError == "" || x.Attempts != 1 || !x.NextAttempt.After(w.Host.now) || x.Finished() {
 		t.Fatalf("retirement = %+v", x)
 	}
 	tick(t, a, w)
@@ -167,7 +167,7 @@ func TestExecutionRetirementSurvivesAnUnreachableHost(t *testing.T) {
 		t.Fatalf("a retry ignored its backoff: %d", len(fake.requests))
 	}
 	fake.fail = nil
-	w.a.now = x.NextAttempt.Add(time.Second)
+	w.Host.now = x.NextAttempt.Add(time.Second)
 	tick(t, a, w)
 	done := retirementOf(t, a, ref)
 	if !done.Finished() || done.ID != x.ID || done.HostError != "" || !done.RevokedAt.Equal(x.RevokedAt) {
@@ -197,7 +197,7 @@ func TestExecutionRevocationRetriesWithoutFalseSuccess(t *testing.T) {
 	if err := os.WriteFile(ledger, []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	w.a.now = x.NextAttempt.Add(time.Second)
+	w.Host.now = x.NextAttempt.Add(time.Second)
 	tick(t, a, w)
 	done := retirementOf(t, a, ref)
 	if !done.Finished() || done.RevokeError != "" || len(fake.requests) != 1 {
@@ -279,10 +279,10 @@ func TestExecutionRetirementWaitsForAnOlderHost(t *testing.T) {
 	fake.fail = execution.ErrUnsupported
 	tick(t, a, w)
 	x := retirementOf(t, a, ref)
-	if !x.RetiredAt.IsZero() || x.HostError == "" || !x.NextAttempt.After(w.a.now) {
+	if !x.RetiredAt.IsZero() || x.HostError == "" || !x.NextAttempt.After(w.Host.now) {
 		t.Fatalf("retirement = %+v", x)
 	}
-	if w.isActive(executionRetireEmitKey) {
+	if w.IsActive(ExecutionRetireEmitKey) {
 		t.Fatal("an older host was raised as a failure")
 	}
 }
@@ -292,7 +292,7 @@ func TestExecutionRetirementBoundsATick(t *testing.T) {
 	a, w, fake, _ := retireFixture(t, func(st *state.State, _ *state.ExecutionRecord) {
 		first := st.Starts[0]
 		st.Agents = nil
-		for range executionRetireBatch {
+		for range ExecutionRetireBatch {
 			next := first
 			copied := *first.Execution
 			copied.Handle.Ref.Execution = execution.ExecutionID(uuid.NewString())
@@ -301,11 +301,11 @@ func TestExecutionRetirementBoundsATick(t *testing.T) {
 		}
 	})
 	tick(t, a, w)
-	if len(fake.requests) != executionRetireBatch {
+	if len(fake.requests) != ExecutionRetireBatch {
 		t.Fatalf("first tick retired %d", len(fake.requests))
 	}
 	tick(t, a, w)
-	if len(fake.requests) != executionRetireBatch+1 {
+	if len(fake.requests) != ExecutionRetireBatch+1 {
 		t.Fatalf("second tick left a total of %d", len(fake.requests))
 	}
 }

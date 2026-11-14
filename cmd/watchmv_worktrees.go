@@ -5,6 +5,6 @@ import (
 )
 
 // worktrees runs in the command, which holds what it needs (watchWorktrees).
-func (w *watcher) worktrees(now time.Time) {
+func (w *Watcher) worktrees(now time.Time) {
 	watchWorktrees(w, now)
 }

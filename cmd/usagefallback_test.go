@@ -68,9 +68,9 @@ func TestCodexUnreadableFallback(t *testing.T) {
 							return capacity.UsageReading{}, errors.New("reader offline")
 						}
 						w := a.newWatcher(false, chores)
-						w.clock, w.a.now = clk, now
-						w.readHeadroom = func(context.Context, *capacity.SwapReading) *capacity.Headroom { return roomy() }
-						view := w.watchUsage(t.Context(), &state.State{}, nil)
+						w.Clock, w.Host.now = clk, now
+						w.ReadHeadroom = func(context.Context, *capacity.SwapReading) *capacity.Headroom { return roomy() }
+						view := w.WatchUsage(t.Context(), &state.State{}, nil)
 						want := 3
 						if strings.Contains(saved, "high") {
 							want = 0
@@ -98,7 +98,7 @@ func TestCodexUnreadableFallback(t *testing.T) {
 							if err != nil {
 								t.Fatal(err)
 							}
-							w.guideMonitor(t.Context(), st, nil)
+							w.GuideMonitor(t.Context(), st, nil)
 							st, err = store.Read()
 							if err != nil || len(st.GuideWork) != 1 || !strings.Contains(st.GuideWork[0].Text, "unreadable") {
 								t.Fatalf("guide did not receive failure: state=%+v err=%v", st, err)

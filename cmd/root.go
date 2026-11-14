@@ -483,7 +483,7 @@ func (a *app) rebindCallerSession(t *proc.Table, p *state.Party) {
 	}
 	oldIDs := resumedStateSessions(st, p.Session, prevID, jobID, desktopInitID, priorIDs)
 	needsHost := p.HostSession != "" && slices.ContainsFunc(roles, func(rl role) bool {
-		h := rl.get(st).Holder
+		h := rl.Get(st).Holder
 		return h != nil && h.Session == p.Session && h.HostSession == ""
 	})
 	if len(oldIDs) > 0 || needsHost {
@@ -499,9 +499,9 @@ func (a *app) rebindCallerSession(t *proc.Table, p *state.Party) {
 		})
 	}
 	for _, rl := range roles {
-		if h := rl.get(st).Holder; h != nil && h.Is(*p) && rl.runOf(h.Name) > 0 && rl.runOf(p.Name) == 0 {
+		if h := rl.Get(st).Holder; h != nil && h.Is(*p) && rl.RunOf(h.Name) > 0 && rl.RunOf(p.Name) == 0 {
 			p.Name = h.Name
-		} else if s, ok := st.BypassStartOf(*p); ok && s.Role == rl.name && rl.runOf(s.Name) > 0 && rl.runOf(p.Name) == 0 {
+		} else if s, ok := st.BypassStartOf(*p); ok && s.Role == rl.Name && rl.RunOf(s.Name) > 0 && rl.RunOf(p.Name) == 0 {
 			p.Name = s.Name
 		}
 	}
@@ -522,7 +522,7 @@ func hasStateSession(st *state.State, id string) bool {
 		}
 	}
 	for _, rl := range roles {
-		r := rl.get(st)
+		r := rl.Get(st)
 		if r.Holder != nil && r.Holder.Session == id {
 			return true
 		}
@@ -550,7 +550,7 @@ func hasAnyStateSession(st *state.State) bool {
 		}
 	}
 	for _, rl := range roles {
-		r := rl.get(st)
+		r := rl.Get(st)
 		if r.Holder != nil && r.Holder.Session != "" {
 			return true
 		}
@@ -605,7 +605,7 @@ func resumedStateSessions(st *state.State, curID, prevID, jobID, desktopInitID s
 		add(ag.Session)
 	}
 	for _, rl := range roles {
-		r := rl.get(st)
+		r := rl.Get(st)
 		if r.Holder != nil {
 			add(r.Holder.Session)
 		}

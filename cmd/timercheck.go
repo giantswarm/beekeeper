@@ -89,23 +89,23 @@ func (c timerCheck) result(out []byte, err error) checkResult {
 	var cannotRun probeRunError
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):
-		return checkResult{unreadable: true, reason: "probe timed out after 10 s"}
+		return checkResult{Unreadable: true, Reason: "probe timed out after 10 s"}
 	case c.judge == nil && errors.As(err, &cannotRun):
 		// A probe that could not run says nothing of its condition.
-		return checkResult{unreadable: true, reason: err.Error()}
+		return checkResult{Unreadable: true, Reason: err.Error()}
 	case err != nil && c.judge == nil:
 		// A probe that ran and exits non-zero says "not yet".
-		return checkResult{reason: err.Error()}
+		return checkResult{Reason: err.Error()}
 	case err != nil:
-		return checkResult{unreadable: true, reason: err.Error()}
+		return checkResult{Unreadable: true, Reason: err.Error()}
 	case c.judge == nil:
-		return checkResult{holds: true}
+		return checkResult{Holds: true}
 	}
 	holds, why, err := c.judge(out)
 	if err != nil {
-		return checkResult{unreadable: true, reason: err.Error()}
+		return checkResult{Unreadable: true, Reason: err.Error()}
 	}
-	return checkResult{holds: holds, reason: why}
+	return checkResult{Holds: holds, Reason: why}
 }
 
 // conditionCheck is the check of a typed condition "<kind> <ref>".

@@ -56,36 +56,36 @@ func sameUnderuseWindow(prev, cur time.Time) bool {
 	return diff <= episodeGap
 }
 
-func (w *watcher) checkUsageUnderused(condKey, file, target string, sd *capacity.UsageWindow, u config.Usage) {
-	underused := capacity.WindowUnderused(sd, u, w.a.now)
+func (w *Watcher) checkUsageUnderused(condKey, file, target string, sd *capacity.UsageWindow, u config.Usage) {
+	underused := capacity.WindowUnderused(sd, u, w.Host.now)
 	if !underused {
-		w.check(condKey, false, "")
-		if w.chores && w.a.store != nil && sd != nil && !sd.ResetsAt.IsZero() {
+		w.Check(condKey, false, "")
+		if w.Chores && w.Host.store != nil && sd != nil && !sd.ResetsAt.IsZero() {
 			var l usageUnderusedLedger
-			if found, err := w.a.store.ReadFile(file, &l); err == nil && found && !l.ReportedAt.IsZero() && !sameUnderuseWindow(l.ResetsAt, sd.ResetsAt) {
-				_ = w.a.store.WriteFile(file, usageUnderusedLedger{})
+			if found, err := w.Host.store.ReadFile(file, &l); err == nil && found && !l.ReportedAt.IsZero() && !sameUnderuseWindow(l.ResetsAt, sd.ResetsAt) {
+				_ = w.Host.store.WriteFile(file, usageUnderusedLedger{})
 			}
 		}
 		return
 	}
-	fig := capacity.UnderusedFigureText(sd, u, w.a.now)
+	fig := capacity.UnderusedFigureText(sd, u, w.Host.now)
 	line := "USAGE UNDERUSED: " + fig + "; P1 finding filed"
 	if target != "" {
 		line = fmt.Sprintf("USAGE UNDERUSED (%s): %s; P1 finding filed", target, fig)
 	}
-	w.check(condKey, true, "%s", line)
-	if !w.chores || w.a.store == nil {
+	w.Check(condKey, true, "%s", line)
+	if !w.Chores || w.Host.store == nil {
 		return
 	}
 	var l usageUnderusedLedger
-	_, _ = w.a.store.ReadFile(file, &l)
+	_, _ = w.Host.store.ReadFile(file, &l)
 	if !l.ReportedAt.IsZero() && sameUnderuseWindow(l.ResetsAt, sd.ResetsAt) {
 		return
 	}
-	l = usageUnderusedLedger{ResetsAt: sd.ResetsAt, ReportedAt: w.a.now.UTC()}
-	_ = w.a.store.WriteFile(file, l)
+	l = usageUnderusedLedger{ResetsAt: sd.ResetsAt, ReportedAt: w.Host.now.UTC()}
+	_ = w.Host.store.WriteFile(file, l)
 	subject := cmp.Or(target, "subscription")
-	winKey := w.a.now.UTC().Format(time.RFC3339)
+	winKey := w.Host.now.UTC().Format(time.RFC3339)
 	if !sd.ResetsAt.IsZero() {
 		winKey = sd.ResetsAt.UTC().Format(time.RFC3339)
 	}
@@ -93,12 +93,12 @@ func (w *watcher) checkUsageUnderused(condKey, file, target string, sd *capacity
 		subject, fig)
 	detail := fmt.Sprintf("[%s %s] P1 subscription budget underused (%s)%s%s",
 		condKey, winKey, subject, loop.FileReportSeparator, report)
-	if err := w.a.store.Record(state.Event{At: w.a.now, By: watchParty, Verb: loop.LoopFileVerb, Detail: detail}); err != nil {
-		w.fail(condKey+"-guide", "cannot retain usage underuse finding for guide: %v", err)
+	if err := w.Host.store.Record(state.Event{At: w.Host.now, By: WatchParty, Verb: loop.LoopFileVerb, Detail: detail}); err != nil {
+		w.Fail(condKey+"-guide", "cannot retain usage underuse finding for guide: %v", err)
 	}
 }
 
-func (w *watcher) usageNeedsRefresh(k config.Capacity, now time.Time) bool {
+func (w *Watcher) usageNeedsRefresh(k config.Capacity, now time.Time) bool {
 	if len(k.Providers) > 0 {
 		for _, name := range k.ProviderNames() {
 			p := k.Providers[name]
@@ -109,46 +109,46 @@ func (w *watcher) usageNeedsRefresh(k config.Capacity, now time.Time) bool {
 		return false
 	}
 	var cached capacity.UsageReading
-	if found, err := w.a.store.ReadFile(usageFile, &cached); err == nil && found &&
+	if found, err := w.Host.store.ReadFile(usageFile, &cached); err == nil && found &&
 		capacity.UsageFresh(cached, k.Usage, now) && capacity.ValidateReadingAt(cached, k.Usage, now) == nil {
-		w.mu.Lock()
-		w.usageErr = ""
-		w.mu.Unlock()
+		w.Mu.Lock()
+		w.UsageErr = ""
+		w.Mu.Unlock()
 		return false
 	}
-	w.mu.Lock()
+	w.Mu.Lock()
 	last := w.lastUsage
-	w.mu.Unlock()
+	w.Mu.Unlock()
 	retry := min(k.Usage.EffectiveEvery(), w.usageRetryFloor())
 	return last.IsZero() || now.Sub(last) >= retry
 }
 
-func (w *watcher) providerUsageNeedsRefresh(name string, u config.Usage, now time.Time) bool {
+func (w *Watcher) providerUsageNeedsRefresh(name string, u config.Usage, now time.Time) bool {
 	var cached capacity.UsageReading
-	if found, err := w.a.store.ReadFile(usageProviderFile(name), &cached); err == nil && found &&
-		!w.a.useCodexRolloutUsage(u, cached) &&
+	if found, err := w.Host.store.ReadFile(usageProviderFile(name), &cached); err == nil && found &&
+		!w.Host.useCodexRolloutUsage(u, cached) &&
 		capacity.UsageFresh(cached, u, now) && capacity.ValidateReadingAt(cached, u, now) == nil {
-		w.mu.Lock()
-		delete(w.providerUsageErr, name)
-		w.mu.Unlock()
+		w.Mu.Lock()
+		delete(w.ProviderUsageErr, name)
+		w.Mu.Unlock()
 		return false
 	}
-	w.mu.Lock()
+	w.Mu.Lock()
 	last := w.providerLastUsage[name]
-	w.mu.Unlock()
+	w.Mu.Unlock()
 	retry := min(u.EffectiveEvery(), w.usageRetryFloor())
 	return last.IsZero() || now.Sub(last) >= retry
 }
 
-func (w *watcher) usageRetryFloor() time.Duration {
-	if w.a.cfg != nil {
-		return max(w.a.cfg.Watch.Interval.Duration, time.Second)
+func (w *Watcher) usageRetryFloor() time.Duration {
+	if w.Host.cfg != nil {
+		return max(w.Host.cfg.Watch.Interval.Duration, time.Second)
 	}
 	return time.Second
 }
 
 // Providers are read sequentially; allow each its configured command deadline.
-func usageRefreshTimeout(k config.Capacity) time.Duration {
+func UsageRefreshTimeout(k config.Capacity) time.Duration {
 	var timeout time.Duration
 	for _, p := range k.Providers {
 		if p.Enabled() {
@@ -158,86 +158,86 @@ func usageRefreshTimeout(k config.Capacity) time.Duration {
 	return max(timeout, k.Usage.EffectiveTimeout())
 }
 
-func (w *watcher) usageNow() time.Time {
-	if w.clock != nil || w.polls.Load() > 0 || w.a.now.IsZero() {
-		return w.clk().Now()
+func (w *Watcher) UsageNow() time.Time {
+	if w.Clock != nil || w.Polls.Load() > 0 || w.Host.now.IsZero() {
+		return w.Clk().Now()
 	}
-	return w.a.now
+	return w.Host.now
 }
 
-// execUsageNow runs in the command, which holds what it needs (watchExecUsageNow).
-func (w *watcher) execUsageNow(ctx context.Context, file string, u config.Usage) (capacity.UsageReading, error) {
+// ExecUsageNow runs in the command, which holds what it needs (watchExecUsageNow).
+func (w *Watcher) ExecUsageNow(ctx context.Context, file string, u config.Usage) (capacity.UsageReading, error) {
 	return watchExecUsageNow(w, ctx, file, u)
 }
 
-// refreshUsage stamps every provider read with its own observation time: a
+// RefreshUsage stamps every provider read with its own observation time: a
 // slow earlier provider must not age the schedule of the next one.
-func (w *watcher) refreshUsage(ctx context.Context, k config.Capacity) {
+func (w *Watcher) RefreshUsage(ctx context.Context, k config.Capacity) {
 	if len(k.Providers) > 0 {
 		for _, name := range k.ProviderNames() {
-			now := w.usageNow()
+			now := w.UsageNow()
 			p := k.Providers[name]
 			if !p.Enabled() || !w.providerUsageNeedsRefresh(name, p.Usage, now) {
 				continue
 			}
-			r, err := w.execUsageNow(ctx, usageProviderFile(name), p.Usage)
+			r, err := w.ExecUsageNow(ctx, usageProviderFile(name), p.Usage)
 			if err != nil && isProbeInProgress(err.Error()) || isProbeInProgress(r.Fallback) {
 				continue
 			}
-			w.mu.Lock()
+			w.Mu.Lock()
 			if w.providerLastUsage == nil {
 				w.providerLastUsage = map[string]time.Time{}
 			}
 			w.providerLastUsage[name] = now
-			if w.providerUsageErr == nil {
-				w.providerUsageErr = map[string]string{}
+			if w.ProviderUsageErr == nil {
+				w.ProviderUsageErr = map[string]string{}
 			}
 			if err != nil {
-				w.providerUsageErr[name] = err.Error()
-				w.mu.Unlock()
-				w.a.retainUsageStop(usageProviderFile(name), err)
+				w.ProviderUsageErr[name] = err.Error()
+				w.Mu.Unlock()
+				w.Host.retainUsageStop(usageProviderFile(name), err)
 				continue
 			}
-			w.providerUsageErr[name] = r.Fallback
-			w.mu.Unlock()
+			w.ProviderUsageErr[name] = r.Fallback
+			w.Mu.Unlock()
 		}
 		return
 	}
-	now := w.usageNow()
-	r, err := w.execUsageNow(ctx, usageFile, k.Usage)
+	now := w.UsageNow()
+	r, err := w.ExecUsageNow(ctx, usageFile, k.Usage)
 	if err != nil && isProbeInProgress(err.Error()) || isProbeInProgress(r.Fallback) {
 		return
 	}
-	w.mu.Lock()
+	w.Mu.Lock()
 	w.lastUsage = now
 	if err != nil {
-		w.usageErr = err.Error()
-		w.mu.Unlock()
-		w.a.retainUsageStop(usageFile, err)
+		w.UsageErr = err.Error()
+		w.Mu.Unlock()
+		w.Host.retainUsageStop(usageFile, err)
 		return
 	}
-	w.usageErr = r.Fallback
-	w.mu.Unlock()
+	w.UsageErr = r.Fallback
+	w.Mu.Unlock()
 }
 
-func (w *watcher) currentUsage(k config.Capacity, now time.Time) (config.Capacity, *capacity.UsageView) {
+func (w *Watcher) CurrentUsage(k config.Capacity, now time.Time) (config.Capacity, *capacity.UsageView) {
 	if len(k.Providers) > 0 {
-		w.mu.Lock()
-		errs := maps.Clone(w.providerUsageErr)
-		w.mu.Unlock()
-		return w.a.cachedProvidersCapacityAt(k, now, errs)
+		w.Mu.Lock()
+		errs := maps.Clone(w.ProviderUsageErr)
+		w.Mu.Unlock()
+		return w.Host.cachedProvidersCapacityAt(k, now, errs)
 	}
 	if !k.Usage.Enabled() {
 		return k, nil
 	}
-	w.mu.Lock()
-	uerr := w.usageErr
-	w.mu.Unlock()
+	w.Mu.Lock()
+	uerr := w.UsageErr
+	w.Mu.Unlock()
 	var cause error
 	if uerr != "" {
 		cause = errors.New(uerr)
 	}
-	r, err := w.a.cachedUsageReading(usageFile, k.Usage, now, cause)
+	r, err := w.Host.cachedUsageReading(usageFile, k.Usage, now, cause)
 	if err != nil {
 		if uerr == "" && !slices.Equal(k.Usage.Command, config.DefaultCodexUsageCommand) {
 			return k, nil
@@ -249,41 +249,41 @@ func (w *watcher) currentUsage(k config.Capacity, now time.Time) (config.Capacit
 
 // reportUsageFallback keeps unreadability visible even when starts can continue.
 // The keyed report feeds the guide's existing durable problem queue.
-func (w *watcher) reportUsageFallback(key, provider, failure string) {
+func (w *Watcher) reportUsageFallback(key, provider, failure string) {
 	if failure == "" || isProbeInProgress(failure) {
-		w.clear(key)
+		w.Clear(key)
 		return
 	}
 	label := "USAGE"
 	if provider != "" {
 		label += " " + provider
 	}
-	line := w.fail(key, "%s unreadable: %s", label, failure)
-	if line != "" && w.chores && w.a.store != nil {
-		detail := fmt.Sprintf("[%s %s] usage reader failure%s%s", key, w.a.now.UTC().Format(time.RFC3339Nano), loop.FileReportSeparator, line)
-		if err := w.a.store.Record(state.Event{At: w.a.now, By: watchParty, Verb: loop.LoopFileVerb, Detail: detail}); err != nil {
-			w.fail(key+"-guide", "cannot retain usage failure for guide: %v", err)
+	line := w.Fail(key, "%s unreadable: %s", label, failure)
+	if line != "" && w.Chores && w.Host.store != nil {
+		detail := fmt.Sprintf("[%s %s] usage reader failure%s%s", key, w.Host.now.UTC().Format(time.RFC3339Nano), loop.FileReportSeparator, line)
+		if err := w.Host.store.Record(state.Event{At: w.Host.now, By: WatchParty, Verb: loop.LoopFileVerb, Detail: detail}); err != nil {
+			w.Fail(key+"-guide", "cannot retain usage failure for guide: %v", err)
 		}
 	}
 }
 
-// watchUsage refreshes subscription usage when due, prints USAGE lines, tracks
+// WatchUsage refreshes subscription usage when due, prints USAGE lines, tracks
 // USAGE HIGH / ENDED USAGE HIGH and tells live busy workers once per USAGE HIGH
 // episode to finish their step and park.
-func (w *watcher) watchUsage(ctx context.Context, st *state.State, sessions []*claude.Session) *capacity.UsageView {
-	k := w.a.liveCapacity()
+func (w *Watcher) WatchUsage(ctx context.Context, st *state.State, sessions []*claude.Session) *capacity.UsageView {
+	k := w.Host.liveCapacity()
 	if len(k.Providers) > 0 {
-		return w.watchProvidersUsage(ctx, k, st, sessions)
+		return w.WatchProvidersUsage(ctx, k, st, sessions)
 	}
 	if !k.Usage.Enabled() {
-		w.clear("usage-error")
-		w.clear("usage-high")
-		w.clear("usage-underused")
+		w.Clear("usage-error")
+		w.Clear("usage-high")
+		w.Clear("usage-underused")
 		w.clearUsageHighEpisode(usageHighFile)
 		return nil
 	}
-	if !w.chores {
-		_, u := w.a.resolveUsage(ctx, k)
+	if !w.Chores {
+		_, u := w.Host.resolveUsage(ctx, k)
 		if u == nil {
 			return nil
 		}
@@ -292,21 +292,21 @@ func (w *watcher) watchUsage(ctx context.Context, st *state.State, sessions []*c
 			return u
 		}
 		w.reportUsageFallback("usage-error", "", u.Fallback)
-		w.emitNow("usage", "USAGE: %s", u.WatchLine(w.a.now))
-		w.check("usage-high", u.High, "%s", u.HighWatchLine(w.a.now))
+		w.EmitNow("usage", "USAGE: %s", u.WatchLine(w.Host.now))
+		w.Check("usage-high", u.High, "%s", u.HighWatchLine(w.Host.now))
 		w.checkUsageUnderused("usage-underused", usageUnderusedFile, "", u.SevenDay, k.Usage)
 		return u
 	}
-	now := w.usageNow()
-	w.a.now = now
+	now := w.UsageNow()
+	w.Host.now = now
 	if w.usageNeedsRefresh(k, now) {
-		w.inFlight(ctx, k.Usage.EffectiveTimeout(), &w.usageBusy, func(ctx context.Context) {
-			w.refreshUsage(ctx, k)
+		w.InFlight(ctx, k.Usage.EffectiveTimeout(), &w.usageBusy, func(ctx context.Context) {
+			w.RefreshUsage(ctx, k)
 		})
-		now = w.usageNow()
-		w.a.now = now
+		now = w.UsageNow()
+		w.Host.now = now
 	}
-	_, u := w.currentUsage(k, w.a.now)
+	_, u := w.CurrentUsage(k, w.Host.now)
 	if u == nil {
 		return nil
 	}
@@ -316,80 +316,80 @@ func (w *watcher) watchUsage(ctx context.Context, st *state.State, sessions []*c
 	}
 	w.reportUsageFallback("usage-error", "", u.Fallback)
 	if rep := k.Usage.ReportEvery.Duration; rep > 0 {
-		w.mu.Lock()
-		due := w.usageReported.IsZero() || w.a.now.Sub(w.usageReported) >= rep
+		w.Mu.Lock()
+		due := w.UsageReported.IsZero() || w.Host.now.Sub(w.UsageReported) >= rep
 		if due {
-			w.usageReported = w.a.now
-			w.dirty = true
+			w.UsageReported = w.Host.now
+			w.Dirty = true
 		}
-		w.mu.Unlock()
+		w.Mu.Unlock()
 		if due {
-			w.emitNow("usage", "USAGE: %s", u.WatchLine(w.a.now))
+			w.EmitNow("usage", "USAGE: %s", u.WatchLine(w.Host.now))
 		}
 	}
-	w.check("usage-high", u.High, "%s", u.HighWatchLine(w.a.now))
+	w.Check("usage-high", u.High, "%s", u.HighWatchLine(w.Host.now))
 	w.checkUsageUnderused("usage-underused", usageUnderusedFile, "", u.SevenDay, k.Usage)
 	if !u.High {
 		w.clearUsageHighEpisode(usageHighFile)
 		return u
 	}
 	if st.Stop == nil {
-		w.tellBusyWorkersUsageHigh(ctx, st, sessions, u, usageHighFile, nil)
+		w.TellBusyWorkersUsageHigh(ctx, st, sessions, u, usageHighFile, nil)
 	}
 	return u
 }
 
-func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st *state.State, sessions []*claude.Session) *capacity.UsageView {
-	w.a.syncAgyQuotaFromState(st, w.a.now)
+func (w *Watcher) WatchProvidersUsage(ctx context.Context, k config.Capacity, st *state.State, sessions []*claude.Session) *capacity.UsageView {
+	w.Host.syncAgyQuotaFromState(st, w.Host.now)
 	readings := map[string]capacity.ProviderReadingResult{}
-	if !w.chores {
+	if !w.Chores {
 		for _, name := range k.ProviderNames() {
 			p := k.Providers[name]
 			if !p.Enabled() {
 				continue
 			}
-			r, err := w.a.resolveReading(ctx, usageProviderFile(name), p.Usage)
+			r, err := w.Host.resolveReading(ctx, usageProviderFile(name), p.Usage)
 			if err != nil {
-				w.mu.Lock()
-				if w.providerUsageErr == nil {
-					w.providerUsageErr = map[string]string{}
+				w.Mu.Lock()
+				if w.ProviderUsageErr == nil {
+					w.ProviderUsageErr = map[string]string{}
 				}
-				w.providerUsageErr[name] = err.Error()
-				w.mu.Unlock()
+				w.ProviderUsageErr[name] = err.Error()
+				w.Mu.Unlock()
 				readings[name] = capacity.ProviderReadingResult{Err: err}
 				continue
 			}
 			readings[name] = capacity.ProviderReadingResult{Reading: r, OK: true}
 		}
 	} else {
-		now := w.usageNow()
-		w.a.now = now
+		now := w.UsageNow()
+		w.Host.now = now
 		if w.usageNeedsRefresh(k, now) {
-			w.inFlight(ctx, usageRefreshTimeout(k), &w.usageBusy, func(ctx context.Context) {
-				w.refreshUsage(ctx, k)
+			w.InFlight(ctx, UsageRefreshTimeout(k), &w.usageBusy, func(ctx context.Context) {
+				w.RefreshUsage(ctx, k)
 			})
-			now = w.usageNow()
-			w.a.now = now
+			now = w.UsageNow()
+			w.Host.now = now
 		}
 		for _, name := range k.ProviderNames() {
 			p := k.Providers[name]
 			if !p.Enabled() {
 				continue
 			}
-			w.mu.Lock()
-			uerr := w.providerUsageErr[name]
-			w.mu.Unlock()
+			w.Mu.Lock()
+			uerr := w.ProviderUsageErr[name]
+			w.Mu.Unlock()
 			var cause error
 			if uerr != "" {
 				cause = errors.New(uerr)
 			}
-			r, err := w.a.cachedUsageReading(usageProviderFile(name), p.Usage, w.a.now, cause)
+			r, err := w.Host.cachedUsageReading(usageProviderFile(name), p.Usage, w.Host.now, cause)
 			readings[name] = capacity.ProviderReadingResult{Reading: r, Err: err, OK: err == nil}
 		}
 	}
 
-	c := countAgents(st, sessions, w.a.now, w.a.cfg)
-	pa := countProviderAgents(st, sessions, k, w.a.now, w.a.cfg)
+	c := countAgents(st, sessions, w.Host.now, w.Host.cfg)
+	pa := countProviderAgents(st, sessions, k, w.Host.now, w.Host.cfg)
 	for _, name := range k.ProviderNames() {
 		p := k.Providers[name]
 		if !p.SelfHosted() {
@@ -398,19 +398,19 @@ func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st
 		// A self-hosted provider reads no subscription usage; its ceiling may
 		// follow the serving mode of the model it serves, and the modes a
 		// node constraint holds back lower it before any switch ran.
-		readings[name] = w.a.serveModeReadings(ctx, name, p)
+		readings[name] = w.Host.serveModeReadings(ctx, name, p)
 	}
-	w.mu.Lock()
+	w.Mu.Lock()
 	swap := w.swap
-	w.mu.Unlock()
+	w.Mu.Unlock()
 	var h *capacity.Headroom
-	if w.readHeadroom != nil {
-		h = w.readHeadroom(ctx, swap)
+	if w.ReadHeadroom != nil {
+		h = w.ReadHeadroom(ctx, swap)
 	} else {
-		h = w.a.readHeadroom(ctx, k, swap)
+		h = w.Host.readHeadroom(ctx, k, swap)
 	}
-	withPaceOffs(readings, st, w.a.now)
-	v := capacityStopped(capacity.BuildProvidersCapacity(c, pa, k, readings, h, false, nil, capacity.ForWorker, w.a.now), w.a, st)
+	withPaceOffs(readings, st, w.Host.now)
+	v := capacityStopped(capacity.BuildProvidersCapacity(c, pa, k, readings, h, false, nil, capacity.ForWorker, w.Host.now), w.Host, st)
 
 	var parts []string
 	allHigh := len(k.Providers) > 0
@@ -430,11 +430,11 @@ func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st
 			// workers to park for; its own ceiling is the only guard.
 			allHigh = false
 			if pv.ServingModeError != "" {
-				w.fail("serve-mode-error-"+name, "SERVE MODE %s unreadable: %s", name, pv.ServingModeError)
+				w.Fail("serve-mode-error-"+name, "SERVE MODE %s unreadable: %s", name, pv.ServingModeError)
 			} else {
-				w.clear("serve-mode-error-" + name)
+				w.Clear("serve-mode-error-" + name)
 			}
-			parts = append(parts, name+": "+pv.WatchSummary(w.a.now))
+			parts = append(parts, name+": "+pv.WatchSummary(w.Host.now))
 			continue
 		}
 		if pv.Error != "" {
@@ -442,7 +442,7 @@ func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st
 		} else {
 			w.reportUsageFallback("usage-error-"+name, name, pv.Fallback)
 		}
-		parts = append(parts, name+": "+pv.WatchSummary(w.a.now))
+		parts = append(parts, name+": "+pv.WatchSummary(w.Host.now))
 		if len(pv.Buckets) > 0 && !pv.SupplementalBuckets {
 			for _, bName := range pv.BucketOrder {
 				bv := pv.Buckets[bName]
@@ -451,8 +451,8 @@ func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st
 				}
 				target := name + "/" + bName
 				highLine := fmt.Sprintf("USAGE HIGH (%s): %s; new starts and resumes on %s wait until reset, telling busy workers to finish their step and park",
-					target, capacity.HighFigureText(bv.FiveHour, pv.HighPercent, w.a.now), target)
-				w.check("usage-high-"+name+"-"+bName, bv.High, "%s", highLine)
+					target, capacity.HighFigureText(bv.FiveHour, pv.HighPercent, w.Host.now), target)
+				w.Check("usage-high-"+name+"-"+bName, bv.High, "%s", highLine)
 				w.checkUsageUnderused("usage-underused-"+name+"-"+bName, usageUnderusedTargetFile(target), target, bv.SevenDay, p.Usage)
 				ledgerFile := usageHighBucketFile(name, bName)
 				if !bv.High {
@@ -460,7 +460,7 @@ func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st
 					w.clearUsageHighEpisode(ledgerFile)
 				} else if st.Stop == nil {
 					u := &capacity.UsageView{FiveHour: bv.FiveHour, High: true, HighPercent: pv.HighPercent}
-					w.tellBusyWorkersUsageHigh(ctx, st, sessions, u, ledgerFile, func(ag state.Agent) bool {
+					w.TellBusyWorkersUsageHigh(ctx, st, sessions, u, ledgerFile, func(ag state.Agent) bool {
 						return slices.Contains(bv.Busy, ag.Name)
 					})
 				}
@@ -468,15 +468,15 @@ func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st
 			continue
 		}
 		highLine := fmt.Sprintf("USAGE HIGH (%s): %s; new starts and resumes on %s wait until reset, telling busy workers to finish their step and park",
-			name, capacity.HighFigureText(pv.FiveHour, pv.HighPercent, w.a.now), name)
-		w.check("usage-high-"+name, pv.High, "%s", highLine)
+			name, capacity.HighFigureText(pv.FiveHour, pv.HighPercent, w.Host.now), name)
+		w.Check("usage-high-"+name, pv.High, "%s", highLine)
 		w.checkUsageUnderused("usage-underused-"+name, usageUnderusedTargetFile(name), name, pv.SevenDay, p.Usage)
 		if !pv.High {
 			allHigh = false
 			w.clearUsageHighEpisode(usageHighProviderFile(name))
 		} else if st.Stop == nil {
 			u := &capacity.UsageView{FiveHour: pv.FiveHour, High: true, HighPercent: pv.HighPercent}
-			w.tellBusyWorkersUsageHigh(ctx, st, sessions, u, usageHighProviderFile(name), func(ag state.Agent) bool {
+			w.TellBusyWorkersUsageHigh(ctx, st, sessions, u, usageHighProviderFile(name), func(ag state.Agent) bool {
 				return slices.Contains(pv.Busy, ag.Name)
 			})
 		}
@@ -484,39 +484,39 @@ func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st
 	if v.Choice != nil {
 		parts = append(parts, "choice: "+v.Choice.Summary())
 	}
-	shouldEmit := !w.chores
-	if w.chores {
+	shouldEmit := !w.Chores
+	if w.Chores {
 		switch {
 		case !k.Usage.ReportEverySet():
 			shouldEmit = true
 		case k.Usage.ReportEvery.Duration > 0:
-			w.mu.Lock()
-			due := w.usageReported.IsZero() || w.a.now.Sub(w.usageReported) >= k.Usage.ReportEvery.Duration
+			w.Mu.Lock()
+			due := w.UsageReported.IsZero() || w.Host.now.Sub(w.UsageReported) >= k.Usage.ReportEvery.Duration
 			if due {
-				w.usageReported = w.a.now
-				w.dirty = true
+				w.UsageReported = w.Host.now
+				w.Dirty = true
 			}
-			w.mu.Unlock()
+			w.Mu.Unlock()
 			shouldEmit = due
 		}
 	}
 	if shouldEmit && len(parts) > 0 {
-		w.emitNow("usage", "USAGE: %s", strings.Join(parts, "; "))
+		w.EmitNow("usage", "USAGE: %s", strings.Join(parts, "; "))
 	}
 	return &capacity.UsageView{Ceiling: v.Ceiling, High: allHigh, Underused: anyUnderused}
 }
 
-func (w *watcher) clearUsageHighEpisode(file string) {
-	if w.a.store == nil {
+func (w *Watcher) clearUsageHighEpisode(file string) {
+	if w.Host.store == nil {
 		return
 	}
 	var l usageHighLedger
-	if found, err := w.a.store.ReadFile(file, &l); err == nil && found && l.Episode != "" {
-		_ = w.a.store.WriteFile(file, usageHighLedger{})
+	if found, err := w.Host.store.ReadFile(file, &l); err == nil && found && l.Episode != "" {
+		_ = w.Host.store.WriteFile(file, usageHighLedger{})
 	}
 }
 
-// tellBusyWorkersUsageHigh runs in the command, which holds what it needs (watchTellBusyWorkersUsageHigh).
-func (w *watcher) tellBusyWorkersUsageHigh(ctx context.Context, st *state.State, sessions []*claude.Session, u *capacity.UsageView, ledgerFile string, match func(state.Agent) bool) {
+// TellBusyWorkersUsageHigh runs in the command, which holds what it needs (watchTellBusyWorkersUsageHigh).
+func (w *Watcher) TellBusyWorkersUsageHigh(ctx context.Context, st *state.State, sessions []*claude.Session, u *capacity.UsageView, ledgerFile string, match func(state.Agent) bool) {
 	watchTellBusyWorkersUsageHigh(w, ctx, st, sessions, u, ledgerFile, match)
 }

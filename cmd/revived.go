@@ -34,8 +34,8 @@ func superseded(st *state.State, p state.Party, now time.Time) (by string, since
 	}
 	if pastRun(st, p, now) {
 		for _, rl := range roles {
-			if r := relievedIn(rl.get(st), p); r != nil && !r.Taken.IsZero() {
-				return fmt.Sprintf("%q, who took the %s's role", r.By.Name, rl.name), r.Taken
+			if r := relievedIn(rl.Get(st), p); r != nil && !r.Taken.IsZero() {
+				return fmt.Sprintf("%q, who took the %s's role", r.By.Name, rl.Name), r.Taken
 			}
 		}
 	}

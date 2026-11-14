@@ -109,14 +109,14 @@ func TestWatchSaysMissingSectionsOnce(t *testing.T) {
 	out := &syncBuffer{}
 	a.out = out
 	w := a.newWatcher(true, false)
-	w.lastBudget = time.Now()
+	w.LastBudget = time.Now()
 	ctx := context.Background()
-	if err := w.run(ctx, true); err != nil {
+	if err := w.Run(ctx, true); err != nil {
 		t.Fatal(err)
 	}
 	for range 3 {
-		w.sample(ctx)
-		w.poll(ctx)
+		w.Sample(ctx)
+		w.Poll(ctx)
 	}
 	for _, sec := range []string{secLoad, secPressure, secMemory, secScope, secSessions} {
 		if n := strings.Count(out.String(), platform.Unavailable(sec)); n != 1 {
@@ -130,7 +130,7 @@ func TestWatchSaysMissingSectionsOnce(t *testing.T) {
 	}
 	// The conditions a platform part feeds; tmpfs and disk are portable.
 	for _, key := range []string{"proc", "journal", "noscope", "avail", "swap", "swapoff", "oomd", "psi", "load", "loadrising", "cpupsi", "slowed", "scopeanon"} {
-		if c, ok := w.active[key]; ok {
+		if c, ok := w.Active[key]; ok {
 			t.Errorf("open condition %q (%s) for a part the stub does not have", key, c.Label)
 		}
 	}

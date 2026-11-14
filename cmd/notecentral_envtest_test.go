@@ -257,19 +257,19 @@ func TestEnvtestCentralParkAndFold(t *testing.T) {
 
 	var watched bytes.Buffer
 	w := ana.watcher(&watched)
-	st, err := w.a.store.Read()
+	st, err := w.Host.store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if parks := w.settledParks(context.Background(), st); len(parks) != 0 {
+	if parks := w.SettledParks(context.Background(), st); len(parks) != 0 {
 		t.Fatalf("parks settled while the note is open: %+v", parks)
 	}
 	if out, code = bo.run("note", "answer", laneRef, "--choice", "2", "until Friday"); code != 0 {
 		t.Fatalf("bo's answer: exit %d: %s", code, out)
 	}
-	parks := w.settledParks(context.Background(), st)
-	if len(parks) != 1 || parks[0].on != laneRef || !strings.HasPrefix(parks[0].answer, "note "+laneRef+" answered by ") ||
-		!strings.HasSuffix(parks[0].answer, ": own — until Friday") {
+	parks := w.SettledParks(context.Background(), st)
+	if len(parks) != 1 || parks[0].On != laneRef || !strings.HasPrefix(parks[0].Answer, "note "+laneRef+" answered by ") ||
+		!strings.HasSuffix(parks[0].Answer, ": own — until Friday") {
 		t.Fatalf("parks settled after bo's answer: %+v (watch: %s)", parks, watched.String())
 	}
 }

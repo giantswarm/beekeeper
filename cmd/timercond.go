@@ -115,15 +115,15 @@ func timerProbeFailed(t state.Timer, now time.Time) state.Event {
 	}
 	finding := fmt.Sprintf("TIMER PROBE FAILED: #%d, %s could not run at %s (%s): its condition is unknown, not false. The timer keeps waiting%s: %s",
 		t.ID, timerCond(t), clockZone(now, now), t.Reason, acts, truncate(t.What, 200))
-	return event(watchParty, loop.LoopFileVerb, "[%s] %s reported at %s%s%s",
-		timerProbeKey(t), watchParty.Name, now.UTC().Format(time.RFC3339), loop.FileReportSeparator, finding)
+	return event(WatchParty, loop.LoopFileVerb, "[%s] %s reported at %s%s%s",
+		timerProbeKey(t), WatchParty.Name, now.UTC().Format(time.RFC3339), loop.FileReportSeparator, finding)
 }
 
 // timerProbeRecovered closes the guide's report of t's probe once a check
 // runs it again at now.
 func timerProbeRecovered(t state.Timer, now time.Time) state.Event {
-	return event(watchParty, loop.LoopFileVerb, "[%s] %s reported at %s%sRECOVERED: timer #%d's probe runs again at %s",
-		timerProbeKey(t), watchParty.Name, now.UTC().Format(time.RFC3339), loop.FileReportSeparator, t.ID, clockZone(now, now))
+	return event(WatchParty, loop.LoopFileVerb, "[%s] %s reported at %s%sRECOVERED: timer #%d's probe runs again at %s",
+		timerProbeKey(t), WatchParty.Name, now.UTC().Format(time.RFC3339), loop.FileReportSeparator, t.ID, clockZone(now, now))
 }
 
 // checkTimers runs the checks of the conditional timers whose check is due
@@ -188,7 +188,7 @@ func settleTimersMatching(st *state.State, found map[int]checkResult, now time.T
 	for _, t := range st.Timers {
 		if endedTimerTarget(st, t.Wake) {
 			changed = true
-			evs = append(evs, event(watchParty, "timer.cancelled", "#%d: wake target ended: %s", t.ID, t.Wake))
+			evs = append(evs, event(WatchParty, "timer.cancelled", "#%d: wake target ended: %s", t.ID, t.Wake))
 			continue
 		}
 		if (accept != nil && !accept(t)) || !t.Auto() || t.Due.After(now) {
@@ -210,50 +210,50 @@ func settleTimersMatching(st *state.State, found map[int]checkResult, now time.T
 		}
 		r, checked := found[t.ID]
 		over := !t.Until.IsZero() && !now.Before(t.Until)
-		f := timerFire{t: t}
+		f := timerFire{T: t}
 		switch {
 		case t.PendingWakeReason != "":
-			f.reason, f.timedOut = t.PendingWakeReason, t.PendingWakeTimedOut
+			f.Reason, f.TimedOut = t.PendingWakeReason, t.PendingWakeTimedOut
 		case !t.Conditional():
-			f.reason = "due " + clockZone(now, t.Due)
-			if f.late = timerLate(t, now, tick); f.late != "" {
-				f.reason += ", fired " + clockZone(now, now) + ", " + f.late
+			f.Reason = "due " + clockZone(now, t.Due)
+			if f.Late = timerLate(t, now, tick); f.Late != "" {
+				f.Reason += ", fired " + clockZone(now, now) + ", " + f.Late
 			}
-		case r.holds:
+		case r.Holds:
 			// A condition that says how it settled (pr-checks: green or
 			// red) tells the woken agent.
-			f.reason = timerCond(t) + " holds"
-			if r.reason != "" {
-				f.reason += ": " + r.reason
+			f.Reason = timerCond(t) + " holds"
+			if r.Reason != "" {
+				f.Reason += ": " + r.Reason
 			}
 			if !t.Failing.IsZero() {
 				evs = append(evs, timerProbeRecovered(t, now))
 				// A wake not delivered re-arms the timer from its firing
 				// (rearmTimerInState): its probe ran there too.
-				t.Failing, f.t.Failing = time.Time{}, time.Time{}
+				t.Failing, f.T.Failing = time.Time{}, time.Time{}
 			}
 		case over && t.Expire:
 			changed = true
 			lines = append(lines, fmt.Sprintf("TIMER EXPIRED: #%d, %s %s by %s%s: %s", t.ID, timerCond(t), notHeld(t), clock(now, t.Until), lastFound(t), truncate(t.What, 200)))
-			evs = append(evs, event(watchParty, "timer.expired", "#%d %s: %s", t.ID, timerCond(t), t.What))
+			evs = append(evs, event(WatchParty, "timer.expired", "#%d %s: %s", t.ID, timerCond(t), t.What))
 			continue
 		case over:
-			f.timedOut, f.reason = true, fmt.Sprintf("timed out at %s, %s %s%s", clock(now, t.Until), timerCond(t), notHeld(t), lastFound(t))
+			f.TimedOut, f.Reason = true, fmt.Sprintf("timed out at %s, %s %s%s", clock(now, t.Until), timerCond(t), notHeld(t), lastFound(t))
 		default:
 			if checked {
-				if r.unreadable && (!t.Unreadable || t.Reason != r.reason) {
-					lines = append(lines, fmt.Sprintf("TIMER UNREADABLE: #%d, %s %s (%s); it keeps waiting: %s", t.ID, timerCond(t), unchecked(t), r.reason, truncate(t.What, 200)))
-					evs = append(evs, event(watchParty, "timer.unreadable", "#%d %s: %s", t.ID, timerCond(t), r.reason))
+				if r.Unreadable && (!t.Unreadable || t.Reason != r.Reason) {
+					lines = append(lines, fmt.Sprintf("TIMER UNREADABLE: #%d, %s %s (%s); it keeps waiting: %s", t.ID, timerCond(t), unchecked(t), r.Reason, truncate(t.What, 200)))
+					evs = append(evs, event(WatchParty, "timer.unreadable", "#%d %s: %s", t.ID, timerCond(t), r.Reason))
 				}
-				t.Checked, t.Reason, t.Unreadable, changed = now.UTC(), r.reason, r.unreadable, true
+				t.Checked, t.Reason, t.Unreadable, changed = now.UTC(), r.Reason, r.Unreadable, true
 				// A probe that could not run is the guide's to hear of once
 				// for the checks in a row that fail so; a clean check ends
 				// them. Only a clean false is "not yet".
 				switch {
-				case t.Probe != "" && r.unreadable && t.Failing.IsZero():
+				case t.Probe != "" && r.Unreadable && t.Failing.IsZero():
 					t.Failing = now.UTC()
 					evs = append(evs, timerProbeFailed(t, now))
-				case !r.unreadable && !t.Failing.IsZero():
+				case !r.Unreadable && !t.Failing.IsZero():
 					evs = append(evs, timerProbeRecovered(t, now))
 					t.Failing = time.Time{}
 				}
@@ -263,7 +263,7 @@ func settleTimersMatching(st *state.State, found map[int]checkResult, now time.T
 				if !t.Stuck && now.Sub(t.Since) >= timerStuckAfter {
 					t.Stuck = true
 					lines = append(lines, fmt.Sprintf("TIMER STUCK: #%d, %s %s%s; it keeps waiting: %s", t.ID, timerCond(t), notHeldSince(now, t), lastFound(t), truncate(t.What, 200)))
-					evs = append(evs, event(watchParty, "timer.stuck", "#%d %s since %s: %s", t.ID, timerCond(t), t.Since.Format(time.RFC3339), t.Reason))
+					evs = append(evs, event(WatchParty, "timer.stuck", "#%d %s since %s: %s", t.ID, timerCond(t), t.Since.Format(time.RFC3339), t.Reason))
 				}
 			}
 			kept = append(kept, t)
@@ -283,79 +283,79 @@ func settleTimersMatching(st *state.State, found map[int]checkResult, now time.T
 		} else if t.Repeat != "" {
 			t.Due, t.Checked, t.Held = t.Next(now), time.Time{}, ""
 			t.PendingWakeReason, t.PendingWakeTimedOut = "", false
-			f.nextDue = t.Due
+			f.NextDue = t.Due
 			act += "next " + clock(now, t.Due) + ": "
 			kept = append(kept, t)
 		}
 		fires = append(fires, f)
-		lines = append(lines, fmt.Sprintf("TIMER: #%d, %s: %s%s", t.ID, f.reason, act, truncate(t.What, 200)))
-		evs = append(evs, event(watchParty, "timer.fired", "#%d %s: %s%s", t.ID, f.reason, act, t.What))
+		lines = append(lines, fmt.Sprintf("TIMER: #%d, %s: %s%s", t.ID, f.Reason, act, truncate(t.What, 200)))
+		evs = append(evs, event(WatchParty, "timer.fired", "#%d %s: %s%s", t.ID, f.Reason, act, t.What))
 	}
 	clear(st.Timers[len(kept):])
 	st.Timers = kept
 	return lines, evs, fires, changed
 }
 
-func watchDeliverWakeTimer(w *watcher, ctx context.Context, st *state.State, original, f timerFire) timerWakeOutcome {
-	if i, err := findAgent(st, f.t.Wake); err == nil && freshPark(st, st.Agents[i]) {
+func watchDeliverWakeTimer(w *Watcher, ctx context.Context, st *state.State, original, f timerFire) timerWakeOutcome {
+	if i, err := findAgent(st, f.T.Wake); err == nil && freshPark(st, st.Agents[i]) {
 		ag := st.Agents[i]
 		// The loop owns CI, budget retries, approval and merge for a
 		// proven review request; reminders need no worker turn.
 		if rp, ok := st.ReviewParkFor(ag.Park.On); ok && rp.Party.Is(ag.Party) && ag.Park.ReviewHead != "" && rp.ReviewHead == ag.Park.ReviewHead {
-			return timerWakeOutcome{fire: original, closeCI: true}
+			return timerWakeOutcome{Fire: original, CloseCI: true}
 		}
-		handed, err := w.handCITimerToReview(ctx, f, ag)
+		handed, err := w.HandCITimerToReview(ctx, f, ag)
 		if err != nil {
 			return timerWakeOutcome{
-				fire: original, rearm: true,
-				line: fmt.Sprintf("TIMER HANDOFF FAILED: #%d: %v", f.t.ID, err),
+				Fire: original, Rearm: true,
+				Line: fmt.Sprintf("TIMER HANDOFF FAILED: #%d: %v", f.T.ID, err),
 			}
 		}
 		if !handed {
-			quiet := *w.a
+			quiet := *w.Host
 			quiet.out = io.Discard
-			if err := quiet.queueContinuation(watchParty, ag, f.message()); err != nil {
+			if err := quiet.queueContinuation(WatchParty, ag, f.Message()); err != nil {
 				return timerWakeOutcome{
-					fire: original, rearm: true,
-					line: fmt.Sprintf("TIMER CONTINUATION FAILED: #%d: %v", f.t.ID, err),
+					Fire: original, Rearm: true,
+					Line: fmt.Sprintf("TIMER CONTINUATION FAILED: #%d: %v", f.T.ID, err),
 				}
 			}
 		}
-		return timerWakeOutcome{fire: original, closeCI: true}
+		return timerWakeOutcome{Fire: original, CloseCI: true}
 	}
 
-	quiet := *w.a // the wake's own report is not a watch line
+	quiet := *w.Host // the wake's own report is not a watch line
 	quiet.out = io.Discard
-	if !f.t.Due.IsZero() {
-		quiet.executionRequestID = fmt.Sprintf("timer/%d/%s/%s", f.t.ID, f.t.Due.UTC().Format(time.RFC3339Nano), execution.Digest([]byte(f.message())))
+	if !f.T.Due.IsZero() {
+		quiet.executionRequestID = fmt.Sprintf("timer/%d/%s/%s", f.T.ID, f.T.Due.UTC().Format(time.RFC3339Nano), execution.Digest([]byte(f.Message())))
 	}
 	// A CI park belongs to this wake until the execution harness accepts
 	// it. Pass the park through the durable delivery ledger so acceptance
 	// clears it, while storage or an uncertain delivery keeps it parked.
 	var wakeErr error
-	if i, findErr := findAgent(st, f.t.Wake); findErr == nil && !freshPark(st, st.Agents[i]) && st.Agents[i].Execution != nil && st.Agents[i].Park != nil && st.Agents[i].Park.Checks {
+	if i, findErr := findAgent(st, f.T.Wake); findErr == nil && !freshPark(st, st.Agents[i]) && st.Agents[i].Execution != nil && st.Agents[i].Park != nil && st.Agents[i].Park.Checks {
 		ag := st.Agents[i]
-		wakeErr = quiet.enqueueExecutionWake(ctx, watchParty, ag, f.message(), ag.Park)
+		wakeErr = quiet.enqueueExecutionWake(ctx, WatchParty, ag, f.Message(), ag.Park)
 	} else {
-		wakeErr = wakeOwner(&quiet, ctx, watchParty, f.t.Wake, f.message(), "")
+		wakeErr = wakeOwner(&quiet, ctx, WatchParty, f.T.Wake, f.Message(), "")
 	}
 	if err := wakeErr; err != nil {
 		var pending *executionDeliveryPending
 		if errors.As(err, &pending) {
 			return timerWakeOutcome{
-				fire:    original,
-				closeCI: !f.t.WakeParkAt.IsZero(),
-				line:    fmt.Sprintf("TIMER WAKE QUEUED: #%d for %q; delivery pending: %s", f.t.ID, f.t.Wake, truncate(f.t.What, 200)),
+				Fire:    original,
+				CloseCI: !f.T.WakeParkAt.IsZero(),
+				Line:    fmt.Sprintf("TIMER WAKE QUEUED: #%d for %q; delivery pending: %s", f.T.ID, f.T.Wake, truncate(f.T.What, 200)),
 			}
 		}
 		return timerWakeOutcome{
-			fire:  original,
-			rearm: true,
-			line:  fmt.Sprintf("TIMER WAKE FAILED: #%d could not wake %q (%v): %s", f.t.ID, f.t.Wake, err, truncate(f.t.What, 200)),
+			Fire:  original,
+			Rearm: true,
+			Line:  fmt.Sprintf("TIMER WAKE FAILED: #%d could not wake %q (%v): %s", f.T.ID, f.T.Wake, err, truncate(f.T.What, 200)),
 		}
 	}
 	return timerWakeOutcome{
-		fire:    original,
-		closeCI: !f.t.WakeParkAt.IsZero(),
+		Fire:    original,
+		CloseCI: !f.T.WakeParkAt.IsZero(),
 	}
 }

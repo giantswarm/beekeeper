@@ -395,11 +395,11 @@ capacity:
 	// pending may notify the guide asynchronously. Drain every watch's
 	// deliveries before the shared state directory and globals are restored,
 	// just as the production watch drains them on shutdown.
-	drainWatch := func(w *watcher) {
+	drainWatch := func(w *Watcher) {
 		t.Cleanup(func() {
-			w.bg.Wait()
-			w.stand.inflight.Wait()
-			w.timerActs.Wait()
+			w.Bg.Wait()
+			w.Stand.Inflight.Wait()
+			w.TimerActs.Wait()
 		})
 	}
 
@@ -460,10 +460,10 @@ capacity:
 	aOnceErr := &app{cfgPath: cfgPath, cfg: cfg, store: store, now: t0, out: &onceErrOut, as: usageCaller, readUsage: reader}
 	wOnceErr := aOnceErr.newWatcher(false, false)
 	drainWatch(wOnceErr)
-	wOnceErr.a.now = t0
-	wOnceErr.pending(context.Background(), sessionsAt(t0, false))
-	if wOnceErr.onceErr() == nil || !strings.Contains(onceErrOut.String(), "USAGE unreadable: reader offline") {
-		t.Fatalf("watch --once on error: err=%v, out=%q", wOnceErr.onceErr(), onceErrOut.String())
+	wOnceErr.Host.now = t0
+	wOnceErr.Pending(context.Background(), sessionsAt(t0, false))
+	if wOnceErr.OnceErr() == nil || !strings.Contains(onceErrOut.String(), "USAGE unreadable: reader offline") {
+		t.Fatalf("watch --once on error: err=%v, out=%q", wOnceErr.OnceErr(), onceErrOut.String())
 	}
 
 	readErr = nil
@@ -471,37 +471,37 @@ capacity:
 	aOnce := &app{cfgPath: cfgPath, cfg: cfg, store: store, now: t0, out: &onceOut, as: usageCaller, readUsage: reader}
 	wOnce := aOnce.newWatcher(false, false)
 	drainWatch(wOnce)
-	wOnce.a.now = t0
-	wOnce.pending(context.Background(), sessionsAt(t0, false))
-	if err := wOnce.onceErr(); err != nil || !strings.Contains(onceOut.String(), "USAGE: 5h 40%") || !strings.Contains(onceOut.String(), "target ceiling 8") {
+	wOnce.Host.now = t0
+	wOnce.Pending(context.Background(), sessionsAt(t0, false))
+	if err := wOnce.OnceErr(); err != nil || !strings.Contains(onceOut.String(), "USAGE: 5h 40%") || !strings.Contains(onceOut.String(), "target ceiling 8") {
 		t.Fatalf("watch --once ok: err=%v, out=\n%s", err, onceOut.String())
 	}
 
 	// 2. Continuous watch prints USAGE on first poll, persists UsageReported in
 	// seen.watch.<caller>.json, and a restarted watch stays quiet before 30m.
-	newWatch := func(now time.Time) (*watcher, *bytes.Buffer) {
+	newWatch := func(now time.Time) (*Watcher, *bytes.Buffer) {
 		var out bytes.Buffer
 		a := &app{cfgPath: cfgPath, cfg: cfg, store: store, now: now, out: &out, as: usageCaller, readUsage: reader}
 		w := a.newWatcher(false, true)
-		w.a.now = now
-		w.clock = &fakeClock{now: now}
-		w.doctoring.Store(true) // the doctor is not under test
-		w.readHeadroom = func(context.Context, *capacity.SwapReading) *capacity.Headroom { return roomy() }
+		w.Host.now = now
+		w.Clock = &fakeClock{now: now}
+		w.Doctoring.Store(true) // the doctor is not under test
+		w.ReadHeadroom = func(context.Context, *capacity.SwapReading) *capacity.Headroom { return roomy() }
 		drainWatch(w)
 		return w, &out
 	}
 
 	w1, out1 := newWatch(t0)
-	w1.pending(context.Background(), sessionsAt(t0, false))
-	w1.saveMark()
+	w1.Pending(context.Background(), sessionsAt(t0, false))
+	w1.SaveMark()
 	if !strings.Contains(out1.String(), "USAGE: 5h 40%") || strings.Contains(out1.String(), "CAPACITY LOW") {
 		t.Fatalf("poll 1 output:\n%s", out1.String())
 	}
 
 	t5 := t0.Add(6 * time.Minute)
 	w2, out2 := newWatch(t5)
-	w2.pending(context.Background(), sessionsAt(t5, false))
-	w2.saveMark()
+	w2.Pending(context.Background(), sessionsAt(t5, false))
+	w2.SaveMark()
 	if strings.Contains(out2.String(), "USAGE: ") {
 		t.Fatalf("restarted watch repeated USAGE before 30m:\n%s", out2.String())
 	}
@@ -520,11 +520,11 @@ capacity:
 		t.Fatal(err)
 	}
 	woke = nil
-	w2.a.now = t31
-	w2.clock.(*fakeClock).advance(w2.a.now.Sub(w2.clk().Now()))
+	w2.Host.now = t31
+	w2.Clock.(*fakeClock).advance(w2.Host.now.Sub(w2.Clk().Now()))
 	out2.Reset()
-	w2.pending(context.Background(), sessionsAt(t31, false))
-	w2.saveMark()
+	w2.Pending(context.Background(), sessionsAt(t31, false))
+	w2.SaveMark()
 	got31 := out2.String()
 	if !strings.Contains(got31, "USAGE: 5h 96%") ||
 		!strings.Contains(got31, "USAGE HIGH: 5h 96% at or past 95%") ||
@@ -543,8 +543,8 @@ capacity:
 	cur.FiveHour = &capacity.UsageWindow{UsedPercent: 97, ResetsAt: reset5h.Add(3 * time.Second)}
 	woke = nil
 	w3, out3 := newWatch(t37)
-	w3.pending(context.Background(), sessionsAt(t37, true))
-	w3.saveMark()
+	w3.Pending(context.Background(), sessionsAt(t37, true))
+	w3.SaveMark()
 	if strings.Contains(out3.String(), "USAGE HIGH:") || strings.Contains(out3.String(), "AGENT RESUME FAILED") {
 		t.Fatalf("at 37m repeated USAGE HIGH or failed resume:\n%s", out3.String())
 	}
@@ -581,11 +581,11 @@ capacity:
 	tAfterReset := reset5h.Add(10 * time.Second)
 	cur.FiveHour = &capacity.UsageWindow{UsedPercent: 3, ResetsAt: reset5h.Add(5 * time.Hour)}
 	woke = nil
-	w3.a.now = tAfterReset
-	w3.clock.(*fakeClock).advance(w3.a.now.Sub(w3.clk().Now()))
+	w3.Host.now = tAfterReset
+	w3.Clock.(*fakeClock).advance(w3.Host.now.Sub(w3.Clk().Now()))
 	out3.Reset()
-	w3.pending(context.Background(), sessionsAt(tAfterReset, true))
-	w3.saveMark()
+	w3.Pending(context.Background(), sessionsAt(tAfterReset, true))
+	w3.SaveMark()
 	if !strings.Contains(out3.String(), "ENDED USAGE HIGH") {
 		t.Fatalf("after 5h reset, missing ENDED USAGE HIGH:\n%s", out3.String())
 	}
@@ -603,20 +603,20 @@ capacity:
 	// 7. Live-reloading config.yaml without capacity.usage clears an active USAGE HIGH.
 	tSecondHigh := tAfterReset.Add(10 * time.Minute)
 	cur.FiveHour = &capacity.UsageWindow{UsedPercent: 98, ResetsAt: reset5h.Add(5 * time.Hour)}
-	w3.a.now = tSecondHigh
-	w3.clock.(*fakeClock).advance(w3.a.now.Sub(w3.clk().Now()))
+	w3.Host.now = tSecondHigh
+	w3.Clock.(*fakeClock).advance(w3.Host.now.Sub(w3.Clk().Now()))
 	out3.Reset()
-	w3.pending(context.Background(), sessionsAt(tSecondHigh, false))
+	w3.Pending(context.Background(), sessionsAt(tSecondHigh, false))
 	if !strings.Contains(out3.String(), "USAGE HIGH: 5h 98%") {
 		t.Fatalf("second episode did not fire:\n%s", out3.String())
 	}
 	if err := os.WriteFile(cfgPath, []byte("agents:\n  autoResume: true\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	w3.a.now = tSecondHigh.Add(time.Minute)
-	w3.clock.(*fakeClock).advance(w3.a.now.Sub(w3.clk().Now()))
+	w3.Host.now = tSecondHigh.Add(time.Minute)
+	w3.Clock.(*fakeClock).advance(w3.Host.now.Sub(w3.Clk().Now()))
 	out3.Reset()
-	w3.pending(context.Background(), sessionsAt(w3.a.now, false))
+	w3.Pending(context.Background(), sessionsAt(w3.Host.now, false))
 	if !strings.Contains(out3.String(), "ENDED USAGE HIGH") {
 		t.Fatalf("removing capacity.usage did not clear USAGE HIGH:\n%s", out3.String())
 	}
@@ -1072,12 +1072,12 @@ func TestProvidersChoicesPaceMarginExcludeAndMachineGuards(t *testing.T) {
 	aWatch, _ := newApp(t0, false)
 	aWatch.out = &watchOut
 	w := aWatch.newWatcher(false, true)
-	w.a.now = t0
-	w.clock = &fakeClock{now: t0}
-	w.doctoring.Store(true)
-	w.readHeadroom = func(context.Context, *capacity.SwapReading) *capacity.Headroom { return roomy() }
-	t.Cleanup(func() { w.bg.Wait() })
-	w.pending(context.Background(), nil)
+	w.Host.now = t0
+	w.Clock = &fakeClock{now: t0}
+	w.Doctoring.Store(true)
+	w.ReadHeadroom = func(context.Context, *capacity.SwapReading) *capacity.Headroom { return roomy() }
+	t.Cleanup(func() { w.Bg.Wait() })
+	w.Pending(context.Background(), nil)
 	if got := watchOut.String(); !strings.Contains(got, "USAGE: claude: ") ||
 		!strings.Contains(got, "; agy: ") ||
 		!strings.Contains(got, "; choice: claude/claude-opus-4-7") {
@@ -1822,15 +1822,15 @@ func TestCachedProvidersCapacityAndWatcherCurrentUsage(t *testing.T) {
 		return capacity.UsageReading{}, errors.New("endpoint timeout")
 	}
 	w := aWatch.newWatcher(false, true)
-	w.a.now = t0
-	w.readHeadroom = func(context.Context, *capacity.SwapReading) *capacity.Headroom { return roomy() }
-	w.providerUsageErr = map[string]string{claudeComm: "endpoint timeout"}
+	w.Host.now = t0
+	w.ReadHeadroom = func(context.Context, *capacity.SwapReading) *capacity.Headroom { return roomy() }
+	w.ProviderUsageErr = map[string]string{claudeComm: "endpoint timeout"}
 
-	kw, uw := w.currentUsage(cfg.Capacity, t0)
+	kw, uw := w.CurrentUsage(cfg.Capacity, t0)
 	if kw.Ceiling != 6 || uw != nil {
 		t.Fatalf("watcher.currentUsage with providerUsageErr: kw=%d, uw=%+v", kw.Ceiling, uw)
 	}
-	w.watchProvidersUsage(context.Background(), cfg.Capacity, &state.State{}, nil)
+	w.WatchProvidersUsage(context.Background(), cfg.Capacity, &state.State{}, nil)
 	if !strings.Contains(watchOut.String(), "last good read 6m") || !strings.Contains(watchOut.String(), "endpoint timeout") || probeCalls != 1 {
 		t.Fatalf("watch lost fallback: %s", watchOut.String())
 	}
@@ -1841,9 +1841,9 @@ func TestCachedProvidersCapacityAndWatcherCurrentUsage(t *testing.T) {
 		t.Fatal(err)
 	}
 	watchOut.Reset()
-	w.watchProvidersUsage(context.Background(), cfg.Capacity, &state.State{}, nil)
-	if w.providerUsageErr[claudeComm] != "" || strings.Contains(watchOut.String(), "last good read") || probeCalls != 1 {
-		t.Fatalf("fresh cache did not clear fallback without probing: calls=%d, error=%q, output=%s", probeCalls, w.providerUsageErr[claudeComm], watchOut.String())
+	w.WatchProvidersUsage(context.Background(), cfg.Capacity, &state.State{}, nil)
+	if w.ProviderUsageErr[claudeComm] != "" || strings.Contains(watchOut.String(), "last good read") || probeCalls != 1 {
+		t.Fatalf("fresh cache did not clear fallback without probing: calls=%d, error=%q, output=%s", probeCalls, w.ProviderUsageErr[claudeComm], watchOut.String())
 	}
 
 	// 4. Nit check: watchProvidersUsage with !w.chores and w.store == nil reuses the in-memory reading.
@@ -1859,9 +1859,9 @@ func TestCachedProvidersCapacityAndWatcherCurrentUsage(t *testing.T) {
 		},
 	}
 	wOnce := aStoreless.newWatcher(false, false)
-	wOnce.a.now = t0
-	wOnce.readHeadroom = func(context.Context, *capacity.SwapReading) *capacity.Headroom { return roomy() }
-	wOnce.watchProvidersUsage(context.Background(), cfg.Capacity, &state.State{}, nil)
+	wOnce.Host.now = t0
+	wOnce.ReadHeadroom = func(context.Context, *capacity.SwapReading) *capacity.Headroom { return roomy() }
+	wOnce.WatchProvidersUsage(context.Background(), cfg.Capacity, &state.State{}, nil)
 	if !strings.Contains(storelessOut.String(), "USAGE: claude: ") ||
 		!strings.Contains(storelessOut.String(), "usage 5h 10%") ||
 		strings.Contains(storelessOut.String(), "unreadable") {
@@ -2013,12 +2013,12 @@ capacity:
 	var watchOut bytes.Buffer
 	aWatch := &app{cfgPath: cfgPath, cfg: cfg, store: store, now: t0, out: &watchOut, as: usageCaller, readUsage: reader}
 	w := aWatch.newWatcher(false, true)
-	w.a.now = t0
-	w.clock = &fakeClock{now: t0}
-	w.doctoring.Store(true)
-	w.readHeadroom = func(context.Context, *capacity.SwapReading) *capacity.Headroom { return roomy() }
-	t.Cleanup(func() { w.bg.Wait() })
-	w.pending(context.Background(), sessions)
+	w.Host.now = t0
+	w.Clock = &fakeClock{now: t0}
+	w.Doctoring.Store(true)
+	w.ReadHeadroom = func(context.Context, *capacity.SwapReading) *capacity.Headroom { return roomy() }
+	t.Cleanup(func() { w.Bg.Wait() })
+	w.Pending(context.Background(), sessions)
 
 	gotWatch := watchOut.String()
 	if !strings.Contains(gotWatch, "USAGE HIGH (agy/Claude and GPT models): 5h 96% at or past 95%") ||
@@ -3171,14 +3171,14 @@ func TestSelfHostedWatchSilentAtCeilingZero(t *testing.T) {
 	var watchOut bytes.Buffer
 	aWatch := &app{cfgPath: cfgPath, cfg: cfg, store: store, now: t0, out: &watchOut}
 	w := aWatch.newWatcher(false, true)
-	w.a.now = t0
-	w.readHeadroom = func(context.Context, *capacity.SwapReading) *capacity.Headroom { return roomy() }
+	w.Host.now = t0
+	w.ReadHeadroom = func(context.Context, *capacity.SwapReading) *capacity.Headroom { return roomy() }
 	// The derived ceiling is the self-hosted one (2); busy is 2, so a naive
 	// check against the derived total would raise CAPACITY FULL.
-	if k, u := w.currentUsage(w.a.liveCapacity(), t0); k.Ceiling == 0 {
+	if k, u := w.CurrentUsage(w.Host.liveCapacity(), t0); k.Ceiling == 0 {
 		t.Fatalf("derived ceiling = %d, want the self-hosted room above the held total (u %+v)", k.Ceiling, u)
 	}
-	w.capacity(context.Background(), supervised(2), nil)
+	w.Capacity(context.Background(), supervised(2), nil)
 	if s := watchOut.String(); strings.Contains(s, "CAPACITY FULL") || strings.Contains(s, "CAPACITY LOW") {
 		t.Fatalf("watch at configured ceiling 0 with busy at the self-hosted ceiling:\n%s", s)
 	}
@@ -3746,8 +3746,8 @@ func TestUsageReaderDeadline(t *testing.T) {
 	}
 	u := config.Usage{Command: []string{usageTestReader}, Timeout: config.Duration{Duration: 2 * time.Minute}}
 	k := config.Capacity{Providers: map[string]config.Provider{"one": {Usage: u}, "two": {Usage: u}}}
-	if usageRefreshTimeout(k) != 4*time.Minute {
-		t.Fatalf("refresh cancels provider deadline: %s", usageRefreshTimeout(k))
+	if UsageRefreshTimeout(k) != 4*time.Minute {
+		t.Fatalf("refresh cancels provider deadline: %s", UsageRefreshTimeout(k))
 	}
 }
 
@@ -3786,10 +3786,10 @@ func TestUsageFallbackReportedAgeExpires(t *testing.T) {
 	if derived.Ceiling != 0 || view == nil || !strings.Contains(view.Error, "20m old") {
 		t.Fatalf("cached provider: %+v %+v", derived, view)
 	}
-	w := &watcher{a: a}
-	w.a.now = a.now
-	w.providerUsageErr = map[string]string{claudeComm: readFailure}
-	derived, view = w.currentUsage(k, a.now)
+	w := &Watcher{Host: a}
+	w.Host.now = a.now
+	w.ProviderUsageErr = map[string]string{claudeComm: readFailure}
+	derived, view = w.CurrentUsage(k, a.now)
 	if derived.Ceiling != 0 || view == nil || !strings.Contains(view.Error, "20m old") {
 		t.Fatalf("watch cache: %+v %+v", derived, view)
 	}
@@ -3994,14 +3994,14 @@ func TestUsageRefreshValidatesAtCompletion(t *testing.T) {
 					SevenDay: &capacity.UsageWindow{UsedPercent: 24, ResetsAt: start.Add(24 * time.Hour)}}, nil
 			}
 			w := a.newWatcher(false, true)
-			w.a.now = start
-			w.clock = clk
-			w.readHeadroom = func(context.Context, *capacity.SwapReading) *capacity.Headroom { return roomy() }
-			view := w.watchUsage(context.Background(), &state.State{}, nil)
+			w.Host.now = start
+			w.Clock = clk
+			w.ReadHeadroom = func(context.Context, *capacity.SwapReading) *capacity.Headroom { return roomy() }
+			view := w.WatchUsage(context.Background(), &state.State{}, nil)
 			if view == nil || view.Error != "" || view.Ceiling == 0 || strings.Contains(out.String(), "unreadable") ||
-				w.usageErr != "" || w.providerUsageErr[codex.Harness] != "" {
+				w.UsageErr != "" || w.ProviderUsageErr[codex.Harness] != "" {
 				t.Fatalf("fresh reading refused: view=%+v, out=%s, usageErr=%q, providerErr=%v",
-					view, out.String(), w.usageErr, w.providerUsageErr)
+					view, out.String(), w.UsageErr, w.ProviderUsageErr)
 			}
 			var r capacity.UsageReading
 			if found, err := store.ReadFile(file, &r); err != nil || !found {
@@ -4077,10 +4077,10 @@ func TestCodexUnreadableKeepsStartsQuotaStopHolds(t *testing.T) {
 					return good(clk.Now()), nil
 				}
 				w := a.newWatcher(false, true)
-				w.a.now = start
-				w.clock = clk
-				w.readHeadroom = func(context.Context, *capacity.SwapReading) *capacity.Headroom { return roomy() }
-				view := w.watchUsage(context.Background(), &state.State{}, nil)
+				w.Host.now = start
+				w.Clock = clk
+				w.ReadHeadroom = func(context.Context, *capacity.SwapReading) *capacity.Headroom { return roomy() }
+				view := w.WatchUsage(context.Background(), &state.State{}, nil)
 				if view == nil || !strings.Contains(out.String(), tc.wantLine) {
 					t.Fatalf("want watch line %q, view=%+v, out=%s", tc.wantLine, view, out.String())
 				}
@@ -4158,9 +4158,9 @@ func TestSubscriptionUnderuseDetectionAndEscalation(t *testing.T) {
 		}
 	}
 	w := a.newWatcher(false, true)
-	w.a.now = t0
-	w.clock = clk
-	w.readHeadroom = func(context.Context, *capacity.SwapReading) *capacity.Headroom { return roomy() }
+	w.Host.now = t0
+	w.Clock = clk
+	w.ReadHeadroom = func(context.Context, *capacity.SwapReading) *capacity.Headroom { return roomy() }
 
 	countFiled := func() (int, string) {
 		evs, rerr := store.Events(0, nil)
@@ -4180,7 +4180,7 @@ func TestSubscriptionUnderuseDetectionAndEscalation(t *testing.T) {
 
 	// 1. First tick: agy/Gemini Models is at 10% vs 33.3% pace (< 16.6% threshold, 112h left).
 	//    claude (9% vs 10.7% pace) and codex (50% vs 71.4% pace) are not underused.
-	view := w.watchUsage(context.Background(), &state.State{}, nil)
+	view := w.WatchUsage(context.Background(), &state.State{}, nil)
 	if view == nil || !view.Underused {
 		t.Fatalf("first tick view = %+v, want Underused=true", view)
 	}
@@ -4197,7 +4197,7 @@ func TestSubscriptionUnderuseDetectionAndEscalation(t *testing.T) {
 	out.Reset()
 	agyReset7d = agyReset7d.Add(2 * time.Minute)
 	clk.advance(a.cfg.Capacity.Providers[capacity.HarnessAgy].EffectiveEvery())
-	w.watchUsage(context.Background(), &state.State{}, nil)
+	w.WatchUsage(context.Background(), &state.State{}, nil)
 	if strings.Contains(out.String(), "USAGE UNDERUSED") {
 		t.Fatalf("repeat tick in same window emitted again:\n%s", out.String())
 	}
@@ -4209,7 +4209,7 @@ func TestSubscriptionUnderuseDetectionAndEscalation(t *testing.T) {
 	out.Reset()
 	agy7d = 20
 	clk.advance(a.cfg.Capacity.Providers[capacity.HarnessAgy].EffectiveEvery())
-	view = w.watchUsage(context.Background(), &state.State{}, nil)
+	view = w.WatchUsage(context.Background(), &state.State{}, nil)
 	if view == nil || view.Underused {
 		t.Fatalf("caught-up view = %+v, want Underused=false", view)
 	}
@@ -4224,7 +4224,7 @@ func TestSubscriptionUnderuseDetectionAndEscalation(t *testing.T) {
 	t0 = t0.Add(7 * 24 * time.Hour)
 	reset5h = reset5h.Add(7 * 24 * time.Hour)
 	clk.advance(7 * 24 * time.Hour)
-	w.watchUsage(context.Background(), &state.State{}, nil)
+	w.WatchUsage(context.Background(), &state.State{}, nil)
 	if !strings.Contains(out.String(), "USAGE UNDERUSED (agy/Gemini Models):") {
 		t.Fatalf("new window tick output:\n%s", out.String())
 	}

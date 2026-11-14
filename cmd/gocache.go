@@ -206,7 +206,7 @@ func (a *app) trimGoCache(dryRun bool, builds func() []int) goCacheRun {
 		}
 	}
 	if r.removed > 0 {
-		_ = a.store.Log(event(watchParty, goCacheVerb, "%s", r))
+		_ = a.store.Log(event(WatchParty, goCacheVerb, "%s", r))
 	}
 	return r
 }
@@ -235,30 +235,30 @@ func (r *goCacheRun) holdForRuns(parent context.Context) (release func(), ok boo
 // across two intervals, the watch says GO CACHE with its size, its cap and
 // how long the trim has waited, until it is under the cap. A failed read or
 // trim is GO CACHE too.
-func watchGoCacheLook(w *watcher, now time.Time, builds func() []int) {
-	every := w.a.cfg.Doctor.GoCacheEvery.Duration
+func watchGoCacheLook(w *Watcher, now time.Time, builds func() []int) {
+	every := w.Host.cfg.Doctor.GoCacheEvery.Duration
 	var m goCacheMark
-	_, _ = w.a.store.ReadFile(goCacheFile, &m)
+	_, _ = w.Host.store.ReadFile(goCacheFile, &m)
 	if m.Waiting.IsZero() && now.Sub(m.Checked) < every {
-		w.goCacheNext = m.Checked.Add(every)
+		w.GoCacheNext = m.Checked.Add(every)
 		return
 	}
-	r := w.a.trimGoCache(false, builds)
+	r := w.Host.trimGoCache(false, builds)
 	switch {
 	case r.locked:
-		w.goCacheNext = now.Add(goCacheRetry)
+		w.GoCacheNext = now.Add(goCacheRetry)
 		return
 	case r.err == nil && r.after > r.max:
 		if m.Waiting.IsZero() {
 			m.Waiting = now
 		}
 		r.waited = now.Sub(m.Waiting)
-		w.goCacheNext = now.Add(goCacheRetry)
+		w.GoCacheNext = now.Add(goCacheRetry)
 	default:
 		m.Waiting = time.Time{}
-		w.goCacheNext = now.Add(every)
+		w.GoCacheNext = now.Add(every)
 	}
 	m.Checked = now
-	_ = w.a.store.WriteFile(goCacheFile, m)
-	w.check("gocache", r.err != nil || (r.waited > 0 && r.waited >= every), "GO CACHE: %s", r)
+	_ = w.Host.store.WriteFile(goCacheFile, m)
+	w.Check("gocache", r.err != nil || (r.waited > 0 && r.waited >= every), "GO CACHE: %s", r)
 }

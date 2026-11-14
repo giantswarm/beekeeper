@@ -22,14 +22,14 @@ type watchResolver interface {
 
 type resolverWatch struct {
 	mu       sync.Mutex
-	resolver watchResolver
-	checked  time.Time
+	Resolver watchResolver
+	Checked  time.Time
 	suppress bool
 }
 
 // resolverFailure coalesces concurrent target failures for one watch interval.
 // The reset and its verification finish before any caller prints its failure.
-func (w *watcher) resolverFailure(line string) bool {
+func (w *Watcher) resolverFailure(line string) bool {
 	// Only failed network readings are candidates; a report or notification
 	// can quote a timeout without representing a failed watch reading.
 	targetFailure := (strings.HasPrefix(line, "ALERTS ") && strings.Contains(line, " unreachable")) ||
@@ -40,14 +40,14 @@ func (w *watcher) resolverFailure(line string) bool {
 	if !targetFailure {
 		return false
 	}
-	r := &w.resolverState
+	r := &w.ResolverState
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if time.Since(r.checked) < 30*time.Second {
+	if time.Since(r.Checked) < 30*time.Second {
 		return r.suppress
 	}
-	r.checked, r.suppress = time.Now(), false
-	resolver := r.resolver
+	r.Checked, r.suppress = time.Now(), false
+	resolver := r.Resolver
 	if resolver == nil {
 		resolver = systemWatchResolver{}
 	}
@@ -69,7 +69,7 @@ func (w *watcher) resolverFailure(line string) bool {
 		}
 	}
 	if !upstream {
-		w.emitNow("resolver", "DNS OUTAGE: local stub and upstream DNS failed; no reset attempted")
+		w.EmitNow("resolver", "DNS OUTAGE: local stub and upstream DNS failed; no reset attempted")
 		return true
 	}
 	result := "reset succeeded"
@@ -81,7 +81,7 @@ func (w *watcher) resolverFailure(line string) bool {
 	} else {
 		result += "; stub still failing afterwards"
 	}
-	w.emitNow("resolver", "LOCAL RESOLVER: local resolver wedged, upstream DNS fine; %s", result)
+	w.EmitNow("resolver", "LOCAL RESOLVER: local resolver wedged, upstream DNS fine; %s", result)
 	return true
 }
 

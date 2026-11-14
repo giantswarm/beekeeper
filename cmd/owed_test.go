@@ -56,7 +56,7 @@ func ownedState(t *testing.T, a *app) []state.Owed {
 
 // laterWatch is a watch on a's state, owedRetry after the merge-child that
 // owed the outcome ended.
-func laterWatch(t *testing.T, a *app, after time.Duration) *watcher {
+func laterWatch(t *testing.T, a *app, after time.Duration) *Watcher {
 	t.Helper()
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		for i := range st.Owed {
@@ -67,7 +67,7 @@ func laterWatch(t *testing.T, a *app, after time.Duration) *watcher {
 		t.Fatal(err)
 	}
 	a.now = time.Now().Add(after)
-	return &watcher{a: a}
+	return &Watcher{Host: a}
 }
 
 // A merge whose waiter was stopped while GitHub did not answer (its user
@@ -87,11 +87,11 @@ func TestAStoppedMergeGitHubDoesNotAnswerForIsHandedOverByTheWatch(t *testing.T)
 	}
 
 	w := laterWatch(t, a, time.Second)
-	w.owedOutcomes(context.Background())
+	w.OwedOutcomes(context.Background())
 	if len(*woke) != 0 || len(ownedState(t, a)) != 1 {
 		t.Fatalf("a try within owedRetry: woke %q, owed %+v", *woke, ownedState(t, a))
 	}
-	w.owedOutcomes(context.Background())
+	w.OwedOutcomes(context.Background())
 	evs, _ := a.store.Events(0, func(e state.Event) bool {
 		return e.Verb == verbUnheard && strings.Contains(e.Detail, "GitHub does not answer")
 	})
@@ -101,7 +101,7 @@ func TestAStoppedMergeGitHubDoesNotAnswerForIsHandedOverByTheWatch(t *testing.T)
 
 	stubPull(t, github.Pull{State: github.Merged, MergedAt: mergedAt}, nil)
 	w = laterWatch(t, a, owedRetry)
-	w.owedOutcomes(context.Background())
+	w.OwedOutcomes(context.Background())
 	if len(*woke) != 1 || (*woke)[0] != "beekeeper gate → s1: "+stoppedMerged {
 		t.Errorf("woke %q, want %q", *woke, stoppedMerged)
 	}
@@ -133,7 +133,7 @@ func TestAStoppedMergeSaysWhatGitHubSays(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	laterWatch(t, a, owedRetry).owedOutcomes(context.Background())
+	laterWatch(t, a, owedRetry).OwedOutcomes(context.Background())
 	if len(*woke) != 1 || !strings.Contains((*woke)[0], "GitHub has not answered for o/r#7 since: check the pull request") {
 		t.Errorf("unanswered past owedAsk: woke %q", *woke)
 	}
@@ -156,7 +156,7 @@ func TestARefusedWakeIsRetriedByTheWatch(t *testing.T) {
 		t.Fatalf("owed %+v", owed)
 	}
 	refuse = nil
-	laterWatch(t, a, owedRetry).owedOutcomes(context.Background())
+	laterWatch(t, a, owedRetry).OwedOutcomes(context.Background())
 	if want := "beekeeper gate → s1: devctl pr wait o/r 7 exit 0: green: every check passed (output in /k/pr-wait.log)"; len(*woke) != 1 || (*woke)[0] != want {
 		t.Errorf("woke %q, want %q", *woke, want)
 	}
@@ -175,7 +175,7 @@ func TestTheWatchHandsOverWhatAKilledMergeChildOwed(t *testing.T) {
 		t.Fatal(err)
 	}
 	w := laterWatch(t, a, 0)
-	w.owedOutcomes(context.Background())
+	w.OwedOutcomes(context.Background())
 	if len(*woke) != 1 || len(ownedState(t, a)) != 0 {
 		t.Errorf("woke %q, owed %+v", *woke, ownedState(t, a))
 	}
@@ -191,16 +191,16 @@ func TestTheWatchHandsOverWhatAKilledMergeChildOwed(t *testing.T) {
 	if err := os.WriteFile(o.Heard, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	laterWatch(t, a, 0).owedOutcomes(context.Background())
+	laterWatch(t, a, 0).OwedOutcomes(context.Background())
 	if len(*woke) != 0 || len(ownedState(t, a)) != 0 {
 		t.Errorf("a heard outcome: woke %q, owed %+v", *woke, ownedState(t, a))
 	}
 
 	a, r, woke = tellOwnerRun(t, state.Party{Session: "s1", Name: ownerName})
-	if err := a.owe(r.owed(time.Now().Add(-owedFor - time.Minute))); err != nil {
+	if err := a.owe(r.owed(time.Now().Add(-OwedFor - time.Minute))); err != nil {
 		t.Fatal(err)
 	}
-	laterWatch(t, a, 0).owedOutcomes(context.Background())
+	laterWatch(t, a, 0).OwedOutcomes(context.Background())
 	evs, _ := a.store.Events(0, func(e state.Event) bool { return e.Verb == verbUnheard && strings.Contains(e.Detail, "given up") })
 	if len(*woke) != 0 || len(ownedState(t, a)) != 0 || len(evs) != 1 {
 		t.Errorf("past owedFor: woke %q, owed %+v, events %+v", *woke, ownedState(t, a), evs)
@@ -215,7 +215,7 @@ func TestTheWatchLeavesAnOutcomeItsMergeChildHandsOver(t *testing.T) {
 		t.Fatal(err)
 	}
 	a.now = time.Now()
-	(&watcher{a: a}).owedOutcomes(context.Background())
+	(&Watcher{Host: a}).OwedOutcomes(context.Background())
 	if len(*woke) != 0 || len(ownedState(t, a)) != 1 {
 		t.Errorf("woke %q, owed %+v", *woke, ownedState(t, a))
 	}
@@ -230,7 +230,7 @@ func TestRequestedCancellationSurvivesDeferredWatchDelivery(t *testing.T) {
 		t.Fatalf("owed %+v", owed)
 	}
 	stubPull(t, github.Pull{State: github.Open}, nil)
-	laterWatch(t, a, owedRetry).owedOutcomes(context.Background())
+	laterWatch(t, a, owedRetry).OwedOutcomes(context.Background())
 	if len(*woke) != 1 || !strings.Contains((*woke)[0], "cancelled on request") || !strings.Contains((*woke)[0], "do not rerun it") {
 		t.Fatalf("woke %q", *woke)
 	}

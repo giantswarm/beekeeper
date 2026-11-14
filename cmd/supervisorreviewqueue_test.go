@@ -267,8 +267,8 @@ func TestReviewVerdictsPrintACommentedVerdict(t *testing.T) {
 // A wake that cannot reach the starter is said, not dropped.
 func TestWatchSaysAVerdictItCouldNotDeliver(t *testing.T) {
 	r := newLoopRig(t)
-	w := &watcher{a: r.a, last: map[string]time.Time{}, reported: map[string]bool{}}
-	w.tellReviewVerdicts(context.Background(), []state.WorkerReport{{By: state.Party{Name: queueReviewer}, Text: queueVerdict, TellTo: state.Party{Session: holderGone, Name: "gone-guide"}}})
+	w := &Watcher{Host: r.a, Last: map[string]time.Time{}, Reported: map[string]bool{}}
+	w.TellReviewVerdicts(context.Background(), []state.WorkerReport{{By: state.Party{Name: queueReviewer}, Text: queueVerdict, TellTo: state.Party{Session: holderGone, Name: "gone-guide"}}})
 	if !strings.Contains(r.out.String(), "REVIEW VERDICT NOT DELIVERED") {
 		t.Fatalf("output:\n%s", r.out)
 	}

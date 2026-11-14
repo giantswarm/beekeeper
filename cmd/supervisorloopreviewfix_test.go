@@ -245,11 +245,11 @@ func TestReviewFixMetadataBelongsOnlyToRosterReviewParks(t *testing.T) {
 				if !roster {
 					me = offSession
 				}
-				line, err := w.a.park(me, refOne, deskReviewWait, "")
+				line, err := w.Host.park(me, refOne, deskReviewWait, "")
 				if err != nil {
 					t.Fatal(err)
 				}
-				st, err := w.a.store.Read()
+				st, err := w.Host.store.Read()
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -272,18 +272,18 @@ func TestReviewFixMetadataBelongsOnlyToRosterReviewParks(t *testing.T) {
 func TestReviewFixOldOffRosterReviewParkStillSettles(t *testing.T) {
 	w := parkingWatch(t, map[string]string{refOne: github.Merged})
 	work := ""
-	if err := w.a.store.Update(func(st *state.State) ([]state.Event, error) {
+	if err := w.Host.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Parks = append(st.Parks, state.Park{By: offSession, On: refOne, At: relayNow, RefKind: github.RefPullRequest, ReviewHead: loopHead, PostMerge: &work})
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	st, err := w.a.store.Read()
+	st, err := w.Host.store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
-	settled := w.settledParks(t.Context(), st)
-	if !slices.ContainsFunc(settled, func(p settledPark) bool { return p.party.Is(offSession) }) {
+	settled := w.SettledParks(t.Context(), st)
+	if !slices.ContainsFunc(settled, func(p settledPark) bool { return p.Party.Is(offSession) }) {
 		t.Fatalf("off-roster park stranded: %+v", settled)
 	}
 }

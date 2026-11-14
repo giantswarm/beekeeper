@@ -11,7 +11,7 @@ import (
 func TestLoopBudgetHoldsNewStartsUntilRecovery(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, loopPR, time.Now())
-	if err := r.a.store.Record(event(watchParty, "watch.budget-state", "true")); err != nil {
+	if err := r.a.store.Record(event(WatchParty, "watch.budget-state", "true")); err != nil {
 		t.Fatal(err)
 	}
 	r.pass(t)
@@ -21,7 +21,7 @@ func TestLoopBudgetHoldsNewStartsUntilRecovery(t *testing.T) {
 	if !strings.Contains(r.out.String(), "SUPERVISOR STARTS HELD") {
 		t.Fatal("budget hold absent from loop log")
 	}
-	if err := r.a.store.Record(event(watchParty, "watch.budget-state", "false")); err != nil {
+	if err := r.a.store.Record(event(WatchParty, "watch.budget-state", "false")); err != nil {
 		t.Fatal(err)
 	}
 	r.pass(t)

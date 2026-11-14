@@ -10,8 +10,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
-func watchHandCITimerToReviewRead(w *watcher, ctx context.Context, f timerFire, ag state.Agent, ref string) (bool, error) {
-	c := checkOf(f.t)
+func watchHandCITimerToReviewRead(w *Watcher, ctx context.Context, f timerFire, ag state.Agent, ref string) (bool, error) {
+	c := checkOf(f.T)
 	out, err := readProbe(ctx, c.cmd)
 	if err != nil {
 		return false, err
@@ -24,7 +24,7 @@ func watchHandCITimerToReviewRead(w *watcher, ctx context.Context, f timerFire, 
 		return false, nil
 	}
 	if ag.Execution != nil {
-		st, err := w.a.store.Read()
+		st, err := w.Host.store.Read()
 		if err != nil {
 			return false, err
 		}
@@ -35,7 +35,7 @@ func watchHandCITimerToReviewRead(w *watcher, ctx context.Context, f timerFire, 
 	} else if ag.Park.ReviewHead != p.Head {
 		return false, nil
 	}
-	err = w.a.store.Update(func(st *state.State) ([]state.Event, error) {
+	err = w.Host.store.Update(func(st *state.State) ([]state.Event, error) {
 		for i := range st.Agents {
 			cur := &st.Agents[i]
 			if !cur.Is(ag.Party) {
@@ -56,7 +56,7 @@ func watchHandCITimerToReviewRead(w *watcher, ctx context.Context, f timerFire, 
 			cur.Park.Resumable = state.Park{}.Resumable
 			cur.Park.Answer = ""
 			recordAgentReviewPark(st, *cur)
-			return []state.Event{event(watchParty, "agents.ci-review", "%s: %s at %s; no worker turn", cur.Name, ref, p.Head)}, nil
+			return []state.Event{event(WatchParty, "agents.ci-review", "%s: %s at %s; no worker turn", cur.Name, ref, p.Head)}, nil
 		}
 		return nil, fmt.Errorf("CI owner left roster before review handoff")
 	})

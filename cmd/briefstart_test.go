@@ -54,7 +54,7 @@ func TestCleanBriefPrintsNoWarning(t *testing.T) {
 // A relay's brief names the successor's run, which the lint's role-run rule
 // flags. A hand-over must survive that, as a file too.
 func TestRelayBriefIsNeverRefused(t *testing.T) {
-	text := guideRole.successorBrief(config.Role{Skill: guideName}, guideRole.runName(12), guideRole.runName(11)) + "\nGuide run 12 takes over.\n"
+	text := guideRole.SuccessorBrief(config.Role{Skill: guideName}, guideRole.RunName(12), guideRole.RunName(11)) + "\nGuide run 12 takes over.\n"
 	path := filepath.Join(t.TempDir(), "brief.md")
 	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
 		t.Fatal(err)

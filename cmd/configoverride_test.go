@@ -68,7 +68,7 @@ func (r *overrideRig) app(now time.Time) *app {
 func (r *overrideRig) tick(now time.Time) []string {
 	r.t.Helper()
 	a := r.app(now)
-	lines, err := a.settleOverrides(context.Background(), watchParty, func(ts []state.Timer) map[int]checkResult {
+	lines, err := a.settleOverrides(context.Background(), WatchParty, func(ts []state.Timer) map[int]checkResult {
 		return checkTimers(context.Background(), ts, now, false)
 	})
 	if err != nil {

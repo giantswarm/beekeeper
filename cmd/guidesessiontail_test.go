@@ -57,7 +57,7 @@ func TestSuccessorGuideReadsPersonsWordsFromPastGuideSession(t *testing.T) {
 
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		// Guide run 16 replaced Guide run 15 (so Guide run 15 is no longer in st.Agents).
-		st.Agents = []state.Agent{{Party: nextGuide, Task: guideRole.duty}}
+		st.Agents = []state.Agent{{Party: nextGuide, Task: guideRole.Duty}}
 		st.SetGuideRole(state.Role{Holder: &state.Supervisor{Party: nextGuide, Since: now}})
 		return []state.Event{
 			{At: now.Add(-10 * time.Minute), By: pastGuide, Verb: guideStartVerb, Detail: "as " + pastGuideName},

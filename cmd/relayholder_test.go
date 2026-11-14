@@ -24,10 +24,10 @@ func TestStatusAndWakeNameTheHolderAfterARelay(t *testing.T) {
 		st.Guide = &state.Role{Holder: &state.Supervisor{Party: from, Since: a.now.Add(-time.Hour)}}
 		st.Guide.Run = 11
 		st.Agents = []state.Agent{{Party: from}, {Party: to}, {Party: worker}}
-		if _, _, err := guideRole.relay(st, from, to, a.now, 15*time.Minute); err != nil {
+		if _, _, err := guideRole.Relay(st, from, to, a.now, 15*time.Minute); err != nil {
 			return nil, err
 		}
-		_, evs, err := guideRole.start(st, to, true, false, a.now.Add(time.Minute))
+		_, evs, err := guideRole.Start(st, to, true, false, a.now.Add(time.Minute))
 		return evs, err
 	}); err != nil {
 		t.Fatal(err)

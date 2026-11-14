@@ -59,9 +59,9 @@ func TestLanesAndWatchSayAStall(t *testing.T) {
 	}
 
 	out.Reset()
-	w := &watcher{a: a, last: map[string]time.Time{}}
-	w.stalls()
-	w.stalls()
+	w := &Watcher{Host: a, Last: map[string]time.Time{}}
+	w.Stalls()
+	w.Stalls()
 	if lines := strings.Count(out.String(), "LANE STALLED ap: stalled for"); lines != 1 {
 		t.Errorf("watch said the stall %d times:\n%s", lines, out.String())
 	}
@@ -110,7 +110,7 @@ func TestWatchSettlesALaneReadyAfterTheSettleTimeout(t *testing.T) {
 	var out bytes.Buffer
 	a := &app{cfg: cfg, store: store, now: now, out: &out}
 	raw, readErr := gazelleHRs("4.78.0", "True"), error(nil)
-	w := &watcher{a: a, last: map[string]time.Time{}, readHRs: func(context.Context, config.Lane) ([]merge.HelmRelease, error) {
+	w := &Watcher{Host: a, Last: map[string]time.Time{}, ReadHRs: func(context.Context, config.Lane) ([]merge.HelmRelease, error) {
 		if readErr != nil {
 			return nil, readErr
 		}
@@ -124,8 +124,8 @@ func TestWatchSettlesALaneReadyAfterTheSettleTimeout(t *testing.T) {
 		return len(st.Merges) == 1
 	}
 
-	w.settled(context.Background(), now)
-	w.settled(context.Background(), now)
+	w.Settled(context.Background(), now)
+	w.Settled(context.Background(), now)
 	if !settling() || strings.Count(out.String(), "LANE STUCK agent-platform: giantswarm/agent-platform#701 has not settled 40m after its merge: flux-giantswarm/agent-platform is on 4.78.0, rolling to 4.79.0") != 1 {
 		t.Fatalf("a release that has not rolled is not one LANE STUCK line:\n%s", out.String())
 	}
@@ -137,14 +137,14 @@ func TestWatchSettlesALaneReadyAfterTheSettleTimeout(t *testing.T) {
 
 	out.Reset()
 	readErr = errors.New("exec: tsh: not logged in")
-	w.settled(context.Background(), now)
+	w.Settled(context.Background(), now)
 	if !settling() {
 		t.Fatal("an unreadable installation settled the merge")
 	}
 
 	out.Reset()
 	raw, readErr = gazelleHRs("4.79.0", "True"), nil
-	w.settled(context.Background(), now)
+	w.Settled(context.Background(), now)
 	if settling() {
 		t.Fatalf("the lane Ready on 4.79.0+5848dde334c3 past the settle timeout still settles:\n%s", out.String())
 	}
@@ -169,8 +169,8 @@ func TestWatchUnknownReleaseNamesRecoveryAndRegistration(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	w := &watcher{a: &app{cfg: cfg, store: store, out: &out, now: now}, last: map[string]time.Time{}, readHRs: func(context.Context, config.Lane) ([]merge.HelmRelease, error) { return nil, nil }}
-	w.settled(context.Background(), now)
+	w := &Watcher{Host: &app{cfg: cfg, store: store, out: &out, now: now}, Last: map[string]time.Time{}, ReadHRs: func(context.Context, config.Lane) ([]merge.HelmRelease, error) { return nil, nil }}
+	w.Settled(context.Background(), now)
 	for _, want := range []string{"LANE STUCK", "devctl release wait o/r --pr 7", "beekeeper lanes settle o/r 7 --release <version>"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("missing %q: %s", want, out.String())

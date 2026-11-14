@@ -80,7 +80,7 @@ func TestSimCommands(t *testing.T) {
 		events = append(events, state.Event{At: at, By: loop.LoopParty, Verb: "supervisor.claim", Detail: "[go o/r#1@abc] w"})
 	}
 	for at := since; at.Before(now); at = at.Add(30 * time.Minute) {
-		events = append(events, state.Event{At: at, By: watchParty, Verb: "watch.usage", Detail: "USAGE: codex: 2 busy of ceiling 7, usage 7d 30%"})
+		events = append(events, state.Event{At: at, By: WatchParty, Verb: "watch.usage", Detail: "USAGE: codex: 2 busy of ceiling 7, usage 7d 30%"})
 	}
 	events = append(events,
 		state.Event{At: t0, By: loop.LoopParty, Verb: "supervisor.failure", Detail: `[review o/r#2@abc] {"message":"o/r#2 already requested this head or review round","count":3}`},

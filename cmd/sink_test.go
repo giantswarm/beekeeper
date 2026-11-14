@@ -42,9 +42,9 @@ func sinkApp(t *testing.T, sinkYAML string) (*app, *bytes.Buffer) {
 func fakeSinkGH(t *testing.T, fail *bool) *[]string {
 	t.Helper()
 	var calls []string
-	prev := sinkGH
-	t.Cleanup(func() { sinkGH = prev })
-	sinkGH = func(_ context.Context, args ...string) ([]byte, error) {
+	prev := SinkGH
+	t.Cleanup(func() { SinkGH = prev })
+	SinkGH = func(_ context.Context, args ...string) ([]byte, error) {
 		calls = append(calls, strings.Join(args, " "))
 		if *fail {
 			return nil, errors.New("HTTP 422: Unexpected inputs provided")
@@ -55,10 +55,10 @@ func fakeSinkGH(t *testing.T, fail *bool) *[]string {
 }
 
 // poll runs one poll's sink of w and waits for its dispatch.
-func sinkPoll(w *watcher) {
-	w.a.now = time.Now()
-	w.sink(context.Background())
-	w.bg.Wait()
+func sinkPoll(w *Watcher) {
+	w.Host.now = time.Now()
+	w.Sink(context.Background())
+	w.Bg.Wait()
 }
 
 // The watch dispatches the configured workflow once for each selected event
@@ -143,16 +143,16 @@ func TestTheSinkReleasesFailedClaimsAfterCancellation(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	previous := sinkGH
-	t.Cleanup(func() { sinkGH = previous })
+	previous := SinkGH
+	t.Cleanup(func() { SinkGH = previous })
 	var failed []string
-	sinkGH = func(ctx context.Context, args ...string) ([]byte, error) {
+	SinkGH = func(ctx context.Context, args ...string) ([]byte, error) {
 		failed = append(failed, strings.Join(args, " "))
 		cancel() // shutdown interrupts the first dispatch and the rest of its batch
 		return nil, ctx.Err()
 	}
-	w.sink(ctx)
-	w.bg.Wait()
+	w.Sink(ctx)
+	w.Bg.Wait()
 	if len(failed) != len(evs) {
 		t.Fatalf("failed dispatches: %q, want both events", failed)
 	}
@@ -166,7 +166,7 @@ func TestTheSinkReleasesFailedClaimsAfterCancellation(t *testing.T) {
 	}
 	replacement := other.newWatcher(false, true)
 	var retried []string
-	sinkGH = func(_ context.Context, args ...string) ([]byte, error) {
+	SinkGH = func(_ context.Context, args ...string) ([]byte, error) {
 		retried = append(retried, strings.Join(args, " "))
 		return nil, nil
 	}

@@ -252,11 +252,11 @@ func TestLoginNoteClosesOnceItsProbePasses(t *testing.T) {
 		{ID: 2, Kind: noteLogin, Until: probeFails, Text: "sign in elsewhere"},
 		{ID: 3, Kind: noteDecision, Text: "no probe"},
 	}}
-	passed := probeLogins(context.Background(), st.Notes)
+	passed := ProbeLogins(context.Background(), st.Notes)
 	if !slices.Equal(passed, []int{1}) {
 		t.Fatalf("passed %v", passed)
 	}
-	lines, evs := closeProbed(st, append(passed, 3))
+	lines, evs := CloseProbed(st, append(passed, 3))
 	if len(lines) != 1 || !strings.HasPrefix(lines[0], "NOTE CLOSED: #1") || len(evs) != 1 || evs[0].Verb != noteDone {
 		t.Fatalf("lines %q, events %+v", lines, evs)
 	}

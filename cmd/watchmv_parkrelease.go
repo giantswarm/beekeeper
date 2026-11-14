@@ -16,7 +16,7 @@ import (
 
 // Each watch poll makes a bounded availability check using the same artifact
 // and CI checks as devctl release wait. A timeout leaves the park pending.
-var readParkRelease = func(ctx context.Context, repo, version string) ([]byte, error) {
+var ReadParkRelease = func(ctx context.Context, repo, version string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	c := proc.CommandContext(ctx, merge.Tool, "release", "wait", repo, version, "--timeout", "5s") //nolint:gosec // validated repository and version, no shell
@@ -30,8 +30,8 @@ var readParkRelease = func(ctx context.Context, repo, version string) ([]byte, e
 	return raw, err
 }
 
-func (w *watcher) settledReleaseParks(ctx context.Context, st *state.State) []settledPark {
-	if loop.BoardBudgetLow(st.Budget, w.a.cfg.GitHub.Floor, w.a.now) {
+func (w *Watcher) settledReleaseParks(ctx context.Context, st *state.State) []settledPark {
+	if loop.BoardBudgetLow(st.Budget, w.Host.cfg.GitHub.Floor, w.Host.now) {
 		return nil
 	}
 	checked := map[string]bool{}
@@ -49,7 +49,7 @@ func (w *watcher) settledReleaseParks(ctx context.Context, st *state.State) []se
 		if !checked[p.On] {
 			checked[p.On] = true
 			read := func() error {
-				raw, err := readParkRelease(ctx, repo, version)
+				raw, err := ReadParkRelease(ctx, repo, version)
 				if err != nil {
 					return err
 				}
@@ -64,18 +64,18 @@ func (w *watcher) settledReleaseParks(ctx context.Context, st *state.State) []se
 				return nil
 			}
 			var err error
-			if w.loopOwned {
-				err = w.a.loopGitHub(ctx, "park-release", read)
+			if w.LoopOwned {
+				err = w.Host.loopGitHub(ctx, "park-release", read)
 			} else {
 				err = read()
 			}
 			key := "park-release-" + p.On
 			if err != nil {
 				if !errors.Is(err, loop.ErrLoopLater) {
-					w.fail(key, "cannot check release %s: %v", p.On, err)
+					w.Fail(key, "cannot check release %s: %v", p.On, err)
 				}
 			} else {
-				w.clear(key)
+				w.Clear(key)
 			}
 		}
 		if available[p.On] {

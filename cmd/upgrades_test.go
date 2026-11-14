@@ -138,19 +138,19 @@ func TestWatchReadsUpgradesOncePerEvery(t *testing.T) {
 	}
 	clk := &stepClock{now: time.Date(2026, 9, 25, 8, 30, 0, 0, time.UTC)}
 	w := a.newWatcher(false, false)
-	w.clock = clk
+	w.Clock = clk
 	ticks := func(n int) map[string]int {
 		t.Helper()
 		for range n {
 			clk.now = clk.now.Add(30 * time.Second)
-			w.upgradeCycle(context.Background())
+			w.UpgradeCycle(context.Background())
 		}
 		return takeCalls(t, log)
 	}
 
 	// 08:30: every installation is read once; prod's upgrade begins.
 	phase(t, dir, "0827-during")
-	w.upgradeCycle(context.Background())
+	w.UpgradeCycle(context.Background())
 	got := takeCalls(t, log)
 	for _, in := range a.cfg.Alerts.Installations {
 		if want := 1 + map[bool]int{true: 1}[in.Name == upgrading]; got[in.Name] != want {
@@ -189,8 +189,8 @@ func TestWatchReadsUpgradesOncePerEvery(t *testing.T) {
 	// A second watch, the snapshot and the ui use the fresh shared reading.
 	clk.now = clk.now.Add(time.Minute)
 	second := a.newWatcher(false, false)
-	second.clock = clk
-	second.upgradeCycle(context.Background())
+	second.Clock = clk
+	second.UpgradeCycle(context.Background())
 	st, err := a.store.Read()
 	if err != nil {
 		t.Fatal(err)
@@ -222,7 +222,7 @@ func TestStandbyWatchHoldsUpgradesWithoutSupervisorWatch(t *testing.T) {
 	a.cfg.Watch.Interval.Duration = 30 * time.Second
 	clk := &stepClock{now: time.Date(2026, 9, 25, 8, 30, 0, 0, time.UTC)}
 	standby := a.newWatcher(true, false)
-	standby.clock = clk
+	standby.Clock = clk
 	held := func() bool {
 		t.Helper()
 		st, err := a.store.Read()
@@ -235,7 +235,7 @@ func TestStandbyWatchHoldsUpgradesWithoutSupervisorWatch(t *testing.T) {
 
 	// 08:30: no supervisor's watch; the standby watch reads and holds.
 	phase(t, dir, "0827-during")
-	standby.upgradeCycle(context.Background())
+	standby.UpgradeCycle(context.Background())
 	if got := takeCalls(t, log); got[upgrading] == 0 || got["b"] != 1 {
 		t.Fatalf("the standby watch did not read: %v", got)
 	}
@@ -249,7 +249,7 @@ func TestStandbyWatchHoldsUpgradesWithoutSupervisorWatch(t *testing.T) {
 	// within one interval and its hold lifted.
 	phase(t, dir, "0843-after")
 	clk.now = clk.now.Add(30 * time.Second)
-	standby.upgradeCycle(context.Background())
+	standby.UpgradeCycle(context.Background())
 	if got := takeCalls(t, log); got[upgrading] != 1 || got["b"] != 0 {
 		t.Fatalf("after the upgrade: %v", got)
 	}
@@ -260,13 +260,13 @@ func TestStandbyWatchHoldsUpgradesWithoutSupervisorWatch(t *testing.T) {
 	// 08:35 to 08:45: a supervisor's watch runs; the standby watch reads
 	// nothing, however stale the readings, and its takeover ends.
 	super := a.newWatcher(false, false)
-	super.clock = clk
+	super.Clock = clk
 	clk.now = clk.now.Add(4*time.Minute + 30*time.Second)
 	for range 20 {
-		super.upgradeCycle(context.Background())
+		super.UpgradeCycle(context.Background())
 		takeCalls(t, log)
 		_ = os.Remove(filepath.Join(a.cfg.StateDir, upgrade.ReadingsFile))
-		standby.upgradeCycle(context.Background())
+		standby.UpgradeCycle(context.Background())
 		if got := takeCalls(t, log); len(got) != 0 {
 			t.Fatalf("the standby watch read beside a supervisor's watch at %s: %v", clk.now.Format("15:04:05"), got)
 		}
@@ -279,7 +279,7 @@ func TestStandbyWatchHoldsUpgradesWithoutSupervisorWatch(t *testing.T) {
 	// Five intervals after the supervisor's watch's last cycle, the standby
 	// watch reads again.
 	clk.now = clk.now.Add(2 * time.Minute)
-	standby.upgradeCycle(context.Background())
+	standby.UpgradeCycle(context.Background())
 	if got := takeCalls(t, log); len(got) != 2 {
 		t.Fatalf("the standby watch did not take over again: %v", got)
 	}
@@ -302,9 +302,9 @@ func TestWatchNamesInstallationsWithoutContextOnce(t *testing.T) {
 	a.cfg.Watch.Interval.Duration = 30 * time.Second
 	clk := &stepClock{now: time.Date(2026, 9, 25, 8, 30, 0, 0, time.UTC)}
 	w := a.newWatcher(false, false)
-	w.clock = clk
+	w.Clock = clk
 	for range 3 {
-		w.upgradeCycle(context.Background())
+		w.UpgradeCycle(context.Background())
 		clk.now = clk.now.Add(a.cfg.Upgrades.Every.Duration)
 	}
 	if got := takeCalls(t, log); got["lost"] != 0 || got["far"] != 0 || got["teleport.giantswarm.io-lost"] != 0 || got[snapshotInstallation] != 3 || got["broken"] != 6 {
@@ -391,24 +391,24 @@ func TestUpgradeHeldReaderFailuresReset(t *testing.T) {
 	a.cfg.Alerts.Installations = []config.Installation{{Name: snapshotInstallation, Context: snapshotInstallation}}
 	clk := &stepClock{now: time.Date(2026, 9, 25, 8, 30, 0, 0, time.UTC)}
 	w := a.newWatcher(false, false)
-	w.clock = clk
+	w.Clock = clk
 	phase(t, dir, "0827-during")
-	w.upgradeCycle(context.Background())
+	w.UpgradeCycle(context.Background())
 	if err := os.WriteFile(kubectl, []byte("#!/bin/sh\nkill -KILL $$\n"), 0700); err != nil { //nolint:gosec // a path of this test
 		t.Fatal(err)
 	}
 	for range 2 {
 		clk.now = clk.now.Add(time.Minute)
-		w.upgradeCycle(context.Background())
+		w.UpgradeCycle(context.Background())
 	}
 	if !strings.Contains(out.String(), "reader failed 2 consecutive ticks: signal: killed (deadline 2m0s") {
 		t.Fatalf("no failure streak: %s", out.String())
 	}
 	upgradeKubectl(t, dir, snapshotInstallation)
 	clk.now = clk.now.Add(time.Minute)
-	w.upgradeCycle(context.Background())
-	if w.upgradeFailures[snapshotInstallation] != 0 {
-		t.Fatalf("failure streak not reset: %v", w.upgradeFailures)
+	w.UpgradeCycle(context.Background())
+	if w.UpgradeFailures[snapshotInstallation] != 0 {
+		t.Fatalf("failure streak not reset: %v", w.UpgradeFailures)
 	}
 }
 
@@ -427,8 +427,8 @@ echo '{"items":[]}'
 	a.cfg.Alerts.Kubectl = exe
 	a.cfg.Alerts.Installations = []config.Installation{{Name: snapshotInstallation, Context: snapshotInstallation}}
 	w := a.newWatcher(false, false)
-	w.upgradeCycle(context.Background())
-	if strings.Contains(out.String(), "unreadable") || w.failed.Load() != 0 {
+	w.UpgradeCycle(context.Background())
+	if strings.Contains(out.String(), "unreadable") || w.Failed.Load() != 0 {
 		t.Fatalf("successful retry reported a failure: %s", out.String())
 	}
 	if _, err := os.Stat(exe + ".once"); err != nil {
@@ -493,7 +493,7 @@ func TestUpgradeWatchesSerializeObservationAndReconciliation(t *testing.T) {
 			}
 			go func() {
 				defer close(doneFirst)
-				first.upgradeCycleRead(context.Background(), func(_ context.Context, _ *state.State, _ time.Time, _ upgrade.Readings, _ func(string) time.Duration) []upgrade.Status {
+				first.UpgradeCycleRead(context.Background(), func(_ context.Context, _ *state.State, _ time.Time, _ upgrade.Readings, _ func(string) time.Duration) []upgrade.Status {
 					close(observed)
 					<-release
 					return status(firstRunning)
@@ -503,7 +503,7 @@ func TestUpgradeWatchesSerializeObservationAndReconciliation(t *testing.T) {
 			seen := make(chan bool, 1)
 			go func() {
 				defer close(doneSecond)
-				second.upgradeCycleRead(context.Background(), func(_ context.Context, st *state.State, now time.Time, _ upgrade.Readings, _ func(string) time.Duration) []upgrade.Status {
+				second.UpgradeCycleRead(context.Background(), func(_ context.Context, st *state.State, now time.Time, _ upgrade.Readings, _ func(string) time.Duration) []upgrade.Status {
 					_, held := upgrade.Held(st, snapshotInstallation, now)
 					seen <- held
 					return status(!firstRunning)
@@ -526,7 +526,7 @@ func TestUpgradeWatchesSerializeObservationAndReconciliation(t *testing.T) {
 				if err != nil {
 					t.Error(err)
 				} else {
-					timers.timerActs.Wait()
+					timers.TimerActs.Wait()
 					st, readErr := other.Read()
 					if readErr != nil || len(st.Timers) != 0 {
 						t.Errorf("timer did not settle during upgrade observation: %v", readErr)

@@ -102,18 +102,18 @@ func TestGuideStopRefusesDueWorkButAllowsTimedAndExternalWork(t *testing.T) {
 
 func TestIndependentGuideMonitorRetainsAndDeliversWithoutGuideWatch(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
-	w.a.now = relayNow
+	w.Host.now = relayNow
 	guide := state.Party{Session: "guide-without-monitor", Name: "Guide fixture"}
-	if err := w.a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.GuideReportsSince = w.a.now.Add(-time.Minute)
-		st.Guide = &state.Role{Holder: &state.Supervisor{Party: guide, Since: w.a.now.Add(-time.Hour)}}
-		return []state.Event{{At: w.a.now, Verb: loop.LoopFileVerb, Detail: "[fixture-report] issue to file" + loop.FileReportSeparator + "the full problem"}}, nil
+	if err := w.Host.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.GuideReportsSince = w.Host.now.Add(-time.Minute)
+		st.Guide = &state.Role{Holder: &state.Supervisor{Party: guide, Since: w.Host.now.Add(-time.Hour)}}
+		return []state.Event{{At: w.Host.now, Verb: loop.LoopFileVerb, Detail: "[fixture-report] issue to file" + loop.FileReportSeparator + "the full problem"}}, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
 	var sent []string
 	fail := true
-	w.stand = standbyWatch{send: func(_ context.Context, _, msg string) error {
+	w.Stand = standbyWatch{Send: func(_ context.Context, _, msg string) error {
 		sent = append(sent, msg)
 		if fail {
 			return errors.New("fixture unavailable")
@@ -121,12 +121,12 @@ func TestIndependentGuideMonitorRetainsAndDeliversWithoutGuideWatch(t *testing.T
 		return nil
 	}}
 	for round := 0; round < 3; round++ {
-		st, _ := w.a.store.Read()
-		w.guideMonitor(context.Background(), st, []*claude.Session{{ID: guide.Session, Name: guide.Name}})
-		w.stand.inflight.Wait()
+		st, _ := w.Host.store.Read()
+		w.GuideMonitor(context.Background(), st, []*claude.Session{{ID: guide.Session, Name: guide.Name}})
+		w.Stand.Inflight.Wait()
 		fail = false
 	}
-	st, _ := w.a.store.Read()
+	st, _ := w.Host.store.Read()
 	if len(st.GuideWork) != 1 || st.GuideWork[0].Text != "issue to file"+loop.FileReportSeparator+"the full problem" {
 		t.Fatalf("lost report: %+v", st.GuideWork)
 	}

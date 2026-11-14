@@ -19,15 +19,15 @@ import (
 
 func TestGuideRelayDueFiresOncePerTerm(t *testing.T) {
 	st := &state.State{}
-	guideRole.set(st, state.Role{Holder: &state.Supervisor{Party: agentC, Since: relayNow}})
-	lines, evs := guideRole.fireRelayDue(st, quietness{checked: true, context: 50_000, relayAt: 40_000}, nil, relayNow)
+	guideRole.Set(st, state.Role{Holder: &state.Supervisor{Party: agentC, Since: relayNow}})
+	lines, evs := guideRole.FireRelayDue(st, quietness{Checked: true, Context: 50_000, RelayAt: 40_000}, nil, relayNow)
 	if len(lines) != 1 || lines[0] != `GUIDE RELAY DUE: "Agent three" is at 50k tokens of context: beekeeper guide handover --prompt` || evs[0].Verb != "guide.relay-due" {
 		t.Fatalf("relay due: %q %v", lines, evs)
 	}
 	if st.Guide.RelayDue == nil {
 		t.Fatal("the guide's relay due is not recorded")
 	}
-	if lines, _ := guideRole.fireRelayDue(st, quietness{checked: true, context: 60_000, relayAt: 40_000}, nil, relayNow); lines != nil {
+	if lines, _ := guideRole.FireRelayDue(st, quietness{Checked: true, Context: 60_000, RelayAt: 40_000}, nil, relayNow); lines != nil {
 		t.Fatalf("relay due said twice: %q", lines)
 	}
 }
@@ -137,7 +137,7 @@ func TestGuideFeedSaysOnlyItsPersonsNotesOnce(t *testing.T) {
 	st := guideNotes(t)
 	a := &app{now: relayNow, cfg: &config.Config{Guide: config.Guide{Person: "PAT"}}}
 	// A feed before guide.person said the supervisor's and the team's notes.
-	guideRole.update(st, func(r *state.Role) { r.Fed = []string{"note#23", "note#37"} })
+	guideRole.Update(st, func(r *state.Role) { r.Fed = []string{"note#23", "note#37"} })
 	sessions := []*claude.Session{{ID: "s1", Name: agentOne}, {ID: "s3", Name: agentC.Name}}
 	lines, changed := a.feedLines(st, sessions, nil, nil)
 	want := []string{
@@ -166,7 +166,7 @@ const guideHost = "local_g"
 func TestGuideQueueSkipsArchivedTestAndOwnSessions(t *testing.T) {
 	guide := state.Party{Session: "sG", HostSession: guideHost, Name: "Guide Alex through his decisions"}
 	st := &state.State{}
-	guideRole.set(st, state.Role{Holder: &state.Supervisor{Party: guide, Since: relayNow}})
+	guideRole.Set(st, state.Role{Holder: &state.Supervisor{Party: guide, Since: relayNow}})
 	party := func(id, host, name string) state.Party {
 		return state.Party{Session: id, HostSession: host, Name: name}
 	}
@@ -330,9 +330,9 @@ func TestGuideCentralFeedLifecycle(t *testing.T) {
 		t.Run(verb, func(t *testing.T) {
 			a := &app{cfg: &config.Config{}}
 			a.cfg.Guide.Person = guideNoteReader
-			a.cfg.Central.Context = centralKey
+			a.cfg.Central.Context = CentralKey
 			st := &state.State{Notes: []state.Note{{ID: 1, For: guideNoteReader, Text: "local?"}}}
-			notes := []state.Note{{ID: 1, Central: centralKey, For: guideNoteReader, Text: "central?"}, {ID: 2, Central: centralKey, For: "Someone else", Text: "other?"}}
+			notes := []state.Note{{ID: 1, Central: CentralKey, For: guideNoteReader, Text: "central?"}, {ID: 2, Central: CentralKey, For: "Someone else", Text: "other?"}}
 			lines, changed := a.centralGuideLines(st, nil, notes, nil, true)
 			if !changed || len(lines) != 1 || !strings.Contains(lines[0], "GUIDE DECISION: central#1") {
 				t.Fatalf("first poll: %q, %v", lines, changed)

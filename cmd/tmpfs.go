@@ -91,7 +91,7 @@ func (a *app) freeTmpfs(dryRun bool, read func() (free.Machine, error)) tmpfsRun
 	o := free.Options{Apply: !dryRun, Only: free.Automatic, Stale: free.DefaultStale}
 	r.freed = (&free.Run{Options: o, Machine: m, Out: io.Discard}).Free()
 	if !dryRun && len(r.freed) > 0 {
-		_ = a.store.Log(event(watchParty, freeVerb, "%s", r.what()))
+		_ = a.store.Log(event(WatchParty, freeVerb, "%s", r.what()))
 	}
 	return r
 }
@@ -99,21 +99,21 @@ func (a *app) freeTmpfs(dryRun bool, read func() (free.Machine, error)) tmpfsRun
 // watchAutoFree runs the automatic free every doctor.freeEvery, in the background
 // so the sample goes on. The freeing flag orders the runs as goCaching orders
 // the Go build cache's looks: freeNext is read only with the flag held.
-func watchAutoFree(w *watcher, now time.Time) {
-	every := w.a.cfg.Doctor.FreeEvery.Duration
-	if !w.freeOn || every <= 0 || !w.freeing.CompareAndSwap(false, true) {
+func watchAutoFree(w *Watcher, now time.Time) {
+	every := w.Host.cfg.Doctor.FreeEvery.Duration
+	if !w.FreeOn || every <= 0 || !w.Freeing.CompareAndSwap(false, true) {
 		return
 	}
-	if now.Before(w.freeNext) {
-		w.freeing.Store(false)
+	if now.Before(w.FreeNext) {
+		w.Freeing.Store(false)
 		return
 	}
-	d := *w.a // reading the machine moves its now on
-	w.bg.Add(1)
+	d := *w.Host // reading the machine moves its now on
+	w.Bg.Add(1)
 	go func() {
-		defer w.bg.Done()
-		defer w.freeing.Store(false)
-		w.freeDue(func() (free.Machine, error) { return liveTmpfs(&d) }, now, every)
+		defer w.Bg.Done()
+		defer w.Freeing.Store(false)
+		w.FreeDue(func() (free.Machine, error) { return liveTmpfs(&d) }, now, every)
 	}()
 }
 
@@ -121,25 +121,25 @@ func watchAutoFree(w *watcher, now time.Time) {
 // ran it within every. A run that freed something is one FREED line; a failed
 // one is FREE FAILED until a run succeeds; a run another process holds the
 // lock for is tried again after goCacheRetry.
-func watchFreeDue(w *watcher, read func() (free.Machine, error), now time.Time, every time.Duration) {
-	if m := w.readFreeMark(); now.Sub(m.At) < every {
-		w.freeNext = m.At.Add(every)
+func watchFreeDue(w *Watcher, read func() (free.Machine, error), now time.Time, every time.Duration) {
+	if m := w.ReadFreeMark(); now.Sub(m.At) < every {
+		w.FreeNext = m.At.Add(every)
 		return
 	}
-	r := w.a.freeTmpfs(false, read)
+	r := w.Host.freeTmpfs(false, read)
 	if r.locked {
-		w.freeNext = now.Add(goCacheRetry)
+		w.FreeNext = now.Add(goCacheRetry)
 		return
 	}
-	w.freeNext = now.Add(every)
-	w.check("free", r.err != nil, "FREE FAILED: the automatic free of tmpfs: %v", r.err)
+	w.FreeNext = now.Add(every)
+	w.Check("free", r.err != nil, "FREE FAILED: the automatic free of tmpfs: %v", r.err)
 	if r.err != nil {
 		return
 	}
 	m := freeMark{At: now, Freed: r.what()}
-	_ = w.a.store.WriteFile(freeFile, m)
-	w.lastFree.Store(&m)
+	_ = w.Host.store.WriteFile(freeFile, m)
+	w.LastFree.Store(&m)
 	if m.Freed != "" {
-		w.emitNow("free", "FREED in tmpfs: %s (doctor.freeEvery)", m.Freed)
+		w.EmitNow("free", "FREED in tmpfs: %s (doctor.freeEvery)", m.Freed)
 	}
 }

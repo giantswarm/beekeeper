@@ -113,21 +113,21 @@ func (a *app) claudeLoginCmd() *cobra.Command {
 	}}
 }
 
-func watchClaudeLogin(w *watcher) {
-	v := readClaudeLogin(w.a.now)
+func watchClaudeLogin(w *Watcher) {
+	v := readClaudeLogin(w.Host.now)
 	// A changed expiry gets a new status line even if the state stays healthy.
 	key := claudeLoginKey + " " + v.State + " " + v.Expires.Format(time.RFC3339)
 	if v.needsLogin() || v.Expires.IsZero() {
-		w.clearMissing(claudeLoginKey+" ", map[string]bool{key: true})
-		w.emit(key, "%s", v.line())
+		w.ClearMissing(claudeLoginKey+" ", map[string]bool{key: true})
+		w.Emit(key, "%s", v.line())
 	} else {
-		w.clearMissing(claudeLoginKey+" ", nil)
-		if w.lastClaudeLogin != key {
-			w.emitNow(claudeLoginKey, "%s", v.line())
+		w.ClearMissing(claudeLoginKey+" ", nil)
+		if w.LastClaudeLogin != key {
+			w.EmitNow(claudeLoginKey, "%s", v.line())
 		}
 	}
-	w.lastClaudeLogin = key
-	if !v.needsLogin() || w.a.cfg.Guide.Person == "" {
+	w.LastClaudeLogin = key
+	if !v.needsLogin() || w.Host.cfg.Guide.Person == "" {
 		return
 	}
 	self, err := os.Executable()
@@ -138,19 +138,19 @@ func watchClaudeLogin(w *watcher) {
 	if dir := os.Getenv("CLAUDE_CONFIG_DIR"); dir != "" {
 		probe = "CLAUDE_CONFIG_DIR=" + guard.ShellQuote(dir) + " " + probe
 	}
-	if err := w.a.store.Update(func(st *state.State) ([]state.Event, error) {
+	if err := w.Host.store.Update(func(st *state.State) ([]state.Event, error) {
 		for _, n := range st.Notes {
 			if n.Kind == noteLogin && n.Until == probe {
 				return nil, nil
 			}
 		}
 		st.NextNote++
-		n := state.Note{ID: st.NextNote, For: w.a.cfg.Guide.Person, By: watchParty, At: w.a.now.UTC(), Due: w.a.now.UTC(), Kind: noteLogin, Until: probe, Text: v.line(), Default: "headless Claude turns may fail until the CLI login is renewed"}
+		n := state.Note{ID: st.NextNote, For: w.Host.cfg.Guide.Person, By: WatchParty, At: w.Host.now.UTC(), Due: w.Host.now.UTC(), Kind: noteLogin, Until: probe, Text: v.line(), Default: "headless Claude turns may fail until the CLI login is renewed"}
 		st.Notes = append(st.Notes, n)
-		return []state.Event{event(watchParty, "note.add", "#%d %s", n.ID, n.Text)}, nil
+		return []state.Event{event(WatchParty, "note.add", "#%d %s", n.ID, n.Text)}, nil
 	}); err != nil {
-		w.fail(claudeLoginKey+"-note", "CLAUDE CLI LOGIN: cannot record credential step")
+		w.Fail(claudeLoginKey+"-note", "CLAUDE CLI LOGIN: cannot record credential step")
 	} else {
-		w.clear(claudeLoginKey + "-note")
+		w.Clear(claudeLoginKey + "-note")
 	}
 }

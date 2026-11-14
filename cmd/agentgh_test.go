@@ -52,9 +52,9 @@ func TestTheWatchSaysAnUnbrokeredGH(t *testing.T) {
 	}
 	set(map[string]string{own: filepath.Join(link, "gh"), plain: "/usr/bin/gh", missing: ghNone})
 	var out bytes.Buffer
-	w := &watcher{a: &app{cfg: cfg, store: store, now: now, out: &out}, last: map[string]time.Time{}}
-	w.unbrokered()
-	w.unbrokered()
+	w := &Watcher{Host: &app{cfg: cfg, store: store, now: now, out: &out}, Last: map[string]time.Time{}}
+	w.Unbrokered()
+	w.Unbrokered()
 	s := out.String()
 	if strings.Count(s, line(plain, "/usr/bin/gh")) != 1 || strings.Count(s, line(missing, ghNone)) != 1 ||
 		strings.Contains(s, `"`+own+`"`) || strings.Contains(s, `"`+unread+`"`) {
@@ -63,7 +63,7 @@ func TestTheWatchSaysAnUnbrokeredGH(t *testing.T) {
 
 	out.Reset()
 	set(map[string]string{own: filepath.Join(link, "gh"), plain: filepath.Join(link, "gh"), missing: ghNone})
-	w.unbrokered()
+	w.Unbrokered()
 	if s := out.String(); !strings.Contains(s, fmt.Sprintf("ENDED GH UNBROKERED %q", plain)) || strings.Contains(s, fmt.Sprintf("ENDED GH UNBROKERED %q", missing)) {
 		t.Errorf("watch after %s's gh became its own:\n%s", plain, s)
 	}

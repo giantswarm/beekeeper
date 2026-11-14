@@ -269,47 +269,47 @@ type stateHoldersMark struct {
 // judge them (a process it cannot read). A watch that finds a fresh listing
 // another watch made says that listing's condition instead of walking
 // again.
-func watchStateHolders(w *watcher, now time.Time) {
-	cfg := w.a.cfg.Disk.Holders
-	if !w.holdersOn || cfg.WarnGiB < 0 || !w.holdering.CompareAndSwap(false, true) {
+func watchStateHolders(w *Watcher, now time.Time) {
+	cfg := w.Host.cfg.Disk.Holders
+	if !w.HoldersOn || cfg.WarnGiB < 0 || !w.Holdering.CompareAndSwap(false, true) {
 		return
 	}
-	if now.Before(w.holdersNext) {
-		w.holdering.Store(false)
+	if now.Before(w.HoldersNext) {
+		w.Holdering.Store(false)
 		return
 	}
-	d := *w.a
+	d := *w.Host
 	d.now = now
-	w.bg.Add(1)
+	w.Bg.Add(1)
 	go func() {
-		defer w.bg.Done()
-		defer w.holdering.Store(false)
+		defer w.Bg.Done()
+		defer w.Holdering.Store(false)
 		var m stateHoldersMark
-		if _, _ = w.a.store.ReadFile(stateHoldersFile, &m); now.Sub(m.At) < cfg.Every.Duration {
-			w.holdersNext = m.At.Add(cfg.Every.Duration)
-			w.check("stateholders", m.On, "%s", m.Line)
+		if _, _ = w.Host.store.ReadFile(stateHoldersFile, &m); now.Sub(m.At) < cfg.Every.Duration {
+			w.HoldersNext = m.At.Add(cfg.Every.Duration)
+			w.Check("stateholders", m.On, "%s", m.Line)
 			return
 		}
-		lock := flock.New(filepath.Join(w.a.store.Dir(), stateHoldersLock))
+		lock := flock.New(filepath.Join(w.Host.store.Dir(), stateHoldersLock))
 		if ok, err := lock.TryLock(); err != nil || !ok {
-			w.holdersNext = now.Add(goCacheRetry)
+			w.HoldersNext = now.Add(goCacheRetry)
 			return
 		}
 		defer func() { _ = lock.Unlock() }()
 		r := d.listHolders(func() (holderMachine, error) { return liveHolders(&d) })
 		if r.err != nil && len(r.Holders) == 0 {
 			// Unread, the holders are unknown: the next look tries again.
-			w.holdersNext = now.Add(goCacheRetry)
-			w.check("stateholders", true, "STATE HOLDERS unknown: %s unread: %v", r.Root, r.err)
+			w.HoldersNext = now.Add(goCacheRetry)
+			w.Check("stateholders", true, "STATE HOLDERS unknown: %s unread: %v", r.Root, r.err)
 			return
 		}
-		w.holdersNext = now.Add(cfg.Every.Duration)
+		w.HoldersNext = now.Add(cfg.Every.Duration)
 		m = stateHoldersMark{At: now, On: r.Eligible >= int64(cfg.WarnGiB)<<30, Line: r.summary()}
 		if r.err != nil {
 			m.On, m.Line = true, r.unknown()
 		}
-		_ = w.a.store.WriteFile(stateHoldersFile, m)
-		w.check("stateholders", m.On, "%s", m.Line)
+		_ = w.Host.store.WriteFile(stateHoldersFile, m)
+		w.Check("stateholders", m.On, "%s", m.Line)
 	}()
 }
 

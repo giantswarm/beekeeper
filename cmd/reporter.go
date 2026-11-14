@@ -33,44 +33,44 @@ func reportDue(r *state.Report, pause *state.ReportPause, rc config.Reporter, no
 	case !r.Running():
 		switch {
 		case pause.FinalDue(now):
-			return reportFinal
+			return ReportFinal
 		case pause.Paused():
 		case r == nil || slot.After(r.Slot):
-			return reportStart
+			return ReportStart
 		}
 	case posted:
-		return reportPosted
+		return ReportPosted
 	case ended:
-		return reportUnposted
+		return ReportUnposted
 	case now.Sub(r.Started) >= rc.Timeout.Duration:
-		return reportTimeout
+		return ReportTimeout
 	case slot.After(r.Slot) && !r.Skipped.Equal(slot) && !pause.Paused():
-		return reportSkip
+		return ReportSkip
 	}
-	return reportNone
+	return ReportNone
 }
 
 // watchStartReport starts the current slot's reporter: one headless turn in
 // bypassPermissions in a transient user unit, registered on the roster busy
 // with the brief's first line. It is not imported into the desktop: the
 // command-line turn has the connectors, and the person's window stays put.
-func watchStartReport(w *watcher, ctx context.Context, sessions []*claude.Session, action reportAction) error {
-	rc := w.a.cfg.Reporter
+func watchStartReport(w *Watcher, ctx context.Context, sessions []*claude.Session, action reportAction) error {
+	rc := w.Host.cfg.Reporter
 	brief, err := readBrief(rc.Brief)
 	if err != nil {
 		return err
 	}
-	zone, err := reportZone(rc.TZ, w.a.zone)
+	zone, err := reportZone(rc.TZ, w.Host.zone)
 	if err != nil {
 		return err
 	}
-	slot := reportSlot(rc.Every.Duration, w.a.now)
-	final := action == reportFinal
+	slot := reportSlot(rc.Every.Duration, w.Host.now)
+	final := action == ReportFinal
 	// A scheduled report covers the interval before its slot; the final one
 	// the time since the last report started, up to now.
 	from, to := slot.Add(-rc.Every.Duration), slot
 	if final {
-		from, to = w.a.now.Add(-rc.Every.Duration), w.a.now
+		from, to = w.Host.now.Add(-rc.Every.Duration), w.Host.now
 	}
 	id := uuid.NewString()
 	p := state.Party{Session: id, Name: "Status report " + to.In(zone).Format("15:04")}
@@ -80,8 +80,8 @@ func watchStartReport(w *watcher, ctx context.Context, sessions []*claude.Sessio
 		return ok
 	}
 	started := false
-	err = w.a.store.Update(func(st *state.State) ([]state.Event, error) {
-		if reportDue(st.Report, st.ReportPause, rc, w.a.now, false, false) != action {
+	err = w.Host.store.Update(func(st *state.State) ([]state.Event, error) {
+		if reportDue(st.Report, st.ReportPause, rc, w.Host.now, false, false) != action {
 			return nil, nil // another watch started it
 		}
 		if st.Stop != nil {
@@ -91,14 +91,14 @@ func watchStartReport(w *watcher, ctx context.Context, sessions []*claude.Sessio
 			if st.Report != nil {
 				from = st.Report.Started
 			}
-			st.ReportPause.Final, st.ReportPause.Since = time.Time{}, w.a.now.UTC()
+			st.ReportPause.Final, st.ReportPause.Since = time.Time{}, w.Host.now.UTC()
 		}
-		s := state.Start{Party: p, Mode: state.ModeBypass, Dir: rc.Dir, By: reporterParty, At: w.a.now.UTC()}
-		reg, err := w.a.recordStart(st, s, briefTask(brief), "", live)
+		s := state.Start{Party: p, Mode: state.ModeBypass, Dir: rc.Dir, By: reporterParty, At: w.Host.now.UTC()}
+		reg, err := w.Host.recordStart(st, s, briefTask(brief), "", live)
 		if err != nil {
 			return nil, err
 		}
-		st.Report = &state.Report{Party: p, Unit: unit, Slot: slot, Started: w.a.now.UTC()}
+		st.Report = &state.Report{Party: p, Unit: unit, Slot: slot, Started: w.Host.now.UTC()}
 		started = true
 		evs := []state.Event{event(reporterParty, "reporter.start", "%s: session %s for %s, busy with %q", p.Name, id, rc.Person, reg.task)}
 		if final {
@@ -109,15 +109,15 @@ func watchStartReport(w *watcher, ctx context.Context, sessions []*claude.Sessio
 	if err != nil || !started {
 		return err
 	}
-	run := w.runReport
+	run := w.RunReport
 	if run == nil {
-		run = w.launchReport
+		run = w.LaunchReport
 	}
 	if err := run(unit, id, p.Name, reportPrompt(rc, from, to, zone, final, brief)); err != nil {
-		w.endReport(ctx, "failed", err.Error())
+		w.EndReport(ctx, "failed", err.Error())
 		return err
 	}
-	w.emitNow("reporter", "REPORTER %s started: session %s (journalctl --user -u %s)", p.Name, id, unit)
+	w.EmitNow("reporter", "REPORTER %s started: session %s (journalctl --user -u %s)", p.Name, id, unit)
 	return nil
 }
 

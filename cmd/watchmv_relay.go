@@ -15,57 +15,57 @@ import (
 // role is one relayed role: how it reads and says itself, and where its
 // record and configuration live.
 type role struct {
-	name string // guide
+	Name string // guide
 	// title names its runs: "<title> run <n>".
-	title string
-	inf   string // guide
-	verb  string // guides
-	ing   string // guiding
+	Title string
+	Inf   string // guide
+	Verb  string // guides
+	Ing   string // guiding
 	// tag opens the role's watch lines.
-	tag string
+	Tag string
 	// duty is what a successor takes over.
-	duty string
+	Duty string
 	// handover is the command that prints the successor's prompt.
-	handover string
+	Handover string
 	// gone says what follows once the holder's CLI stayed gone.
-	gone string
-	get  func(*state.State) state.Role
-	set  func(*state.State, state.Role)
-	cfg  func(*config.Config) config.Role
+	Gone string
+	Get  func(*state.State) state.Role
+	Set  func(*state.State, state.Role)
+	Cfg  func(*config.Config) config.Role
 }
 
-// update applies f to rl's record in st.
-func (rl role) update(st *state.State, f func(r *state.Role)) {
-	r := rl.get(st)
+// Update applies f to rl's record in st.
+func (rl role) Update(st *state.State, f func(r *state.Role)) {
+	r := rl.Get(st)
 	f(&r)
-	rl.set(st, r)
+	rl.Set(st, r)
 }
 
 // otherRole returns the role other than rl that p holds, if any.
 func (rl role) otherRole(st *state.State, p state.Party) (role, bool) {
 	for _, o := range roles {
-		if h := o.get(st).Holder; o.name != rl.name && h != nil && h.Is(p) {
+		if h := o.Get(st).Holder; o.Name != rl.Name && h != nil && h.Is(p) {
 			return o, true
 		}
 	}
 	return role{}, false
 }
 
-// start makes me rl's holder in st: through a relay that names me, over a
+// Start makes me rl's holder in st: through a relay that names me, over a
 // recorded holder whose session is gone, or with takeOver. prevLive says
 // whether the recorded holder's session runs.
-func (rl role) start(st *state.State, me state.Party, prevLive, takeOver bool, now time.Time) (string, []state.Event, error) {
+func (rl role) Start(st *state.State, me state.Party, prevLive, takeOver bool, now time.Time) (string, []state.Event, error) {
 	if o, ok := rl.otherRole(st, me); ok {
-		return "", nil, refused("you are the %s: a session holds one role; `beekeeper %s stop` or relay it first", o.name, o.name)
+		return "", nil, refused("you are the %s: a session holds one role; `beekeeper %s stop` or relay it first", o.Name, o.Name)
 	}
-	r := rl.get(st)
+	r := rl.Get(st)
 	prev := r.Holder
 	how := ""
 	switch {
 	case prev == nil:
 		if r.Relay != nil && r.Relay.From == (state.Party{}) && takesRelay(r.Relay.To, me) {
 			me.HostSession = cmp.Or(me.HostSession, r.Relay.To.HostSession)
-			if rl.runOf(me.Name) == 0 && rl.runOf(r.Relay.To.Name) > 0 {
+			if rl.RunOf(me.Name) == 0 && rl.RunOf(r.Relay.To.Name) > 0 {
 				me.Name = r.Relay.To.Name
 			}
 			r.Relay = nil
@@ -74,7 +74,7 @@ func (rl role) start(st *state.State, me state.Party, prevLive, takeOver bool, n
 		// A restart of the same holder keeps an open relay, its desktop id
 		// and its numbered run title when the resumed CLI derived another.
 		me.HostSession = cmp.Or(me.HostSession, prev.HostSession)
-		if rl.runOf(me.Name) == 0 && rl.runOf(prev.Name) > 0 {
+		if rl.RunOf(me.Name) == 0 && rl.RunOf(prev.Name) > 0 {
 			me.Name = prev.Name
 		}
 	case r.Relay.Open(now) && r.Relay.From.Is(prev.Party) && takesRelay(r.Relay.To, me):
@@ -82,7 +82,7 @@ func (rl role) start(st *state.State, me state.Party, prevLive, takeOver bool, n
 		// id: the relay's keeps the role addressable until my desktop CLI
 		// runs.
 		me.HostSession = cmp.Or(me.HostSession, r.Relay.To.HostSession)
-		if rl.runOf(me.Name) == 0 && rl.runOf(r.Relay.To.Name) > 0 {
+		if rl.RunOf(me.Name) == 0 && rl.RunOf(r.Relay.To.Name) > 0 {
 			me.Name = r.Relay.To.Name
 		}
 		r.Relay.Taken = now.UTC()
@@ -102,75 +102,75 @@ func (rl role) start(st *state.State, me state.Party, prevLive, takeOver bool, n
 			named = fmt.Sprintf("; its relay to you expired at %s", clock(now, rel.Expires))
 		}
 		return "", nil, refused("%q %s since %s and still runs%s: its `beekeeper %s relay` starts the successor, or take over with --take-over",
-			prev.Name, rl.verb, clock(now, prev.Since), named, rl.name)
+			prev.Name, rl.Verb, clock(now, prev.Since), named, rl.Name)
 	default:
 		r.Relay = nil
 		how = fmt.Sprintf(" (taking over from %q)", prev.Name)
 	}
-	if s, ok := st.BypassStartOf(me); ok && s.Role == rl.name {
+	if s, ok := st.BypassStartOf(me); ok && s.Role == rl.Name {
 		me.HostSession = cmp.Or(me.HostSession, s.HostSession)
-		if rl.runOf(me.Name) == 0 && rl.runOf(s.Name) > 0 {
+		if rl.RunOf(me.Name) == 0 && rl.RunOf(s.Name) > 0 {
 			me.Name = s.Name
 		}
 	}
 	// Holding the role again ends my relief; a relief nobody asked about
 	// for reliefTTL is dropped.
-	r.Relieved = slices.DeleteFunc(dropRelief(r.Relieved, me), func(rf state.Relief) bool { return now.Sub(rf.Taken) > reliefTTL })
-	restart, last := prev != nil && prev.Is(me), rl.lastRun(r)
+	r.Relieved = slices.DeleteFunc(dropRelief(r.Relieved, me), func(rf state.Relief) bool { return now.Sub(rf.Taken) > ReliefTTL })
+	restart, last := prev != nil && prev.Is(me), rl.LastRun(r)
 	r.Holder = &state.Supervisor{Party: me, Since: now.UTC()}
 	if r.CLI != nil && r.CLI.Supervisor.Is(me) {
 		r.CLI.Supervisor.Session = cmp.Or(me.Session, r.CLI.Supervisor.Session)
 		r.CLI.Supervisor.HostSession = cmp.Or(me.HostSession, r.CLI.Supervisor.HostSession)
-		if rl.runOf(me.Name) > 0 {
+		if rl.RunOf(me.Name) > 0 {
 			r.CLI.Supervisor.Name = me.Name
 		}
 	}
 	// The start that took the role keeps its session the person's to close
 	// once relieved or taken over (keepsRole).
 	if i := st.StartIndex(me); i >= 0 {
-		st.Starts[i].Role = rl.name
+		st.Starts[i].Role = rl.Name
 	}
 	// A run relayed to me, or named in my title, is mine; any other start
 	// of the role is the next run.
-	switch n := rl.runOf(me.Name); {
+	switch n := rl.RunOf(me.Name); {
 	case n > 0:
 		r.Run = max(r.Run, n)
 	case !restart || r.Run == 0:
 		r.Run = last + 1
 	}
-	rl.set(st, r)
+	rl.Set(st, r)
 	as := ""
-	if run := rl.runName(r.Run); run != me.Name {
+	if run := rl.RunName(r.Run); run != me.Name {
 		as = " as " + run
 	}
-	msg := fmt.Sprintf("%q %s now%s%s", me.Name, rl.verb, as, how)
-	return msg, []state.Event{event(me, rl.name+".start", "%s", msg)}, nil
+	msg := fmt.Sprintf("%q %s now%s%s", me.Name, rl.Verb, as, how)
+	return msg, []state.Event{event(me, rl.Name+".start", "%s", msg)}, nil
 }
 
-// relay records rl's holder me naming its successor to; the relay stays
+// Relay records rl's holder me naming its successor to; the relay stays
 // open for ttl.
-func (rl role) relay(st *state.State, me, to state.Party, now time.Time, ttl time.Duration) (string, []state.Event, error) {
-	r := rl.get(st)
-	if err := rl.mustHold(r, me); err != nil {
+func (rl role) Relay(st *state.State, me, to state.Party, now time.Time, ttl time.Duration) (string, []state.Event, error) {
+	r := rl.Get(st)
+	if err := rl.MustHold(r, me); err != nil {
 		return "", nil, err
 	}
 	if to.Is(me) {
-		return "", nil, usageErr("you %s already: name the session that takes over", rl.inf)
+		return "", nil, usageErr("you %s already: name the session that takes over", rl.Inf)
 	}
 	if o, ok := rl.otherRole(st, to); ok {
-		return "", nil, refused("%q is the %s: a session holds one role", to.Name, o.name)
+		return "", nil, refused("%q is the %s: a session holds one role", to.Name, o.Name)
 	}
 	replacing := ""
 	if r.Relay.Open(now) && !r.Relay.To.Is(to) {
 		replacing = fmt.Sprintf(", replacing the relay to %q", r.Relay.To.Name)
 	}
 	r.Relay = &state.Relay{From: me, To: to, At: now.UTC(), Expires: now.Add(ttl).UTC()}
-	r.Run = max(rl.lastRun(r), rl.runOf(to.Name))
-	rl.set(st, r)
+	r.Run = max(rl.LastRun(r), rl.RunOf(to.Name))
+	rl.Set(st, r)
 	until := clock(now, r.Relay.Expires)
 	msg := fmt.Sprintf("relayed to %q until %s%s: its `beekeeper %s start` takes the role; you %s until then (`beekeeper %s status` exits %d once you are relieved)",
-		to.Name, until, replacing, rl.name, rl.inf, rl.name, ExitRelieved)
-	return msg, []state.Event{event(me, rl.name+".relay", "to %s until %s%s", to.Name, until, replacing)}, nil
+		to.Name, until, replacing, rl.Name, rl.Inf, rl.Name, ExitRelieved)
+	return msg, []state.Event{event(me, rl.Name+".relay", "to %s until %s%s", to.Name, until, replacing)}, nil
 }
 
 // keptSession says where the relieved run p's conversation stays and how
@@ -187,34 +187,34 @@ func keptSession(st *state.State, p state.Party) string {
 	return fmt.Sprintf("its session %s stays until the person closes it (claude attach %s continues it, claude stop %s ends it)", p.Session, short, short)
 }
 
-// cancelRelay withdraws rl's open relay.
-func (rl role) cancelRelay(st *state.State, me state.Party, now time.Time) (string, []state.Event, error) {
-	r := rl.get(st)
-	if err := rl.mustHold(r, me); err != nil {
+// CancelRelay withdraws rl's open relay.
+func (rl role) CancelRelay(st *state.State, me state.Party, now time.Time) (string, []state.Event, error) {
+	r := rl.Get(st)
+	if err := rl.MustHold(r, me); err != nil {
 		return "", nil, err
 	}
 	if !r.Relay.Open(now) {
-		return "no relay is open: you " + rl.inf, nil, nil
+		return "no relay is open: you " + rl.Inf, nil, nil
 	}
 	to := r.Relay.To.Name
 	r.Relay, r.RelayDue = nil, nil
-	rl.set(st, r)
-	return fmt.Sprintf("relay to %q cancelled: you still %s", to, rl.inf),
-		[]state.Event{event(me, rl.name+".relay-cancel", "to %s", to)}, nil
+	rl.Set(st, r)
+	return fmt.Sprintf("relay to %q cancelled: you still %s", to, rl.Inf),
+		[]state.Event{event(me, rl.Name+".relay-cancel", "to %s", to)}, nil
 }
 
-func (rl role) mustHold(r state.Role, me state.Party) error {
+func (rl role) MustHold(r state.Role, me state.Party) error {
 	switch {
 	case r.Holder == nil:
-		return refused("no %s is recorded: `beekeeper %s start` makes you one", rl.name, rl.name)
+		return refused("no %s is recorded: `beekeeper %s start` makes you one", rl.Name, rl.Name)
 	case !r.Holder.Is(me):
-		return refused("%q %s, not you: only the %s relays its role", r.Holder.Name, rl.verb, rl.name)
+		return refused("%q %s, not you: only the %s relays its role", r.Holder.Name, rl.Verb, rl.Name)
 	}
 	return nil
 }
 
-// reliefTTL is how long a relieved holder's status keeps exiting 4.
-const reliefTTL = 7 * 24 * time.Hour
+// ReliefTTL is how long a relieved holder's status keeps exiting 4.
+const ReliefTTL = 7 * 24 * time.Hour
 
 func dropRelief(rs []state.Relief, p state.Party) []state.Relief {
 	return slices.DeleteFunc(rs, func(r state.Relief) bool { return r.Party.Is(p) })
@@ -223,28 +223,28 @@ func dropRelief(rs []state.Relief, p state.Party) []state.Relief {
 // supervision is a role's recorded holder read against the running
 // sessions and the grace a CLI restart has.
 type supervision struct {
-	sup  *state.Supervisor
-	live bool
+	Sup  *state.Supervisor
+	Live bool
 	// gone is when beekeeper first saw the CLI gone (now when no record
 	// says so yet), zero while it runs; until is the end of the grace a
 	// restart has, zero while it runs and once the grace has passed.
-	gone, until time.Time
+	Gone, Until time.Time
 }
 
-// restarting reports whether the holder's CLI is gone within the grace.
-func (v supervision) restarting() bool { return !v.until.IsZero() }
+// Restarting reports whether the holder's CLI is gone within the grace.
+func (v supervision) Restarting() bool { return !v.Until.IsZero() }
 
-// down reports whether the recorded holder's CLI stayed gone past the
+// Down reports whether the recorded holder's CLI stayed gone past the
 // grace: its successor is due.
-func (v supervision) down() bool { return v.sup != nil && !v.live && !v.restarting() }
+func (v supervision) Down() bool { return v.Sup != nil && !v.Live && !v.Restarting() }
 
-// observeCLI records what the running sessions say of rl's holder's CLI in
+// ObserveCLI records what the running sessions say of rl's holder's CLI in
 // this term: the PID it runs as, and since when it is gone. The same
 // session back with a new PID is a restart, logged once. It reports whether
 // st changed.
-func (rl role) observeCLI(st *state.State, sessions []*claude.Session, now time.Time) (changed bool, evs []state.Event) {
+func (rl role) ObserveCLI(st *state.State, sessions []*claude.Session, now time.Time) (changed bool, evs []state.Event) {
 	var oldID, newID, hostID string
-	rl.update(st, func(r *state.Role) {
+	rl.Update(st, func(r *state.Role) {
 		sup := r.Holder
 		if sup == nil {
 			changed = r.CLI != nil
@@ -258,7 +258,7 @@ func (rl role) observeCLI(st *state.State, sessions []*claude.Session, now time.
 		}
 		if old := sup.Name; renameHolder(sup, sessions) {
 			c.Supervisor.Name, changed = sup.Name, true
-			evs = append(evs, event(sup.Party, rl.name+".rename", "%q is now %q", old, sup.Name))
+			evs = append(evs, event(sup.Party, rl.Name+".rename", "%q is now %q", old, sup.Name))
 		}
 		s, live := claude.Live(sessions, sup.Party)
 		if live && s.ID != "" && s.ID != sup.Session && (s.ResumedID == sup.Session || (s.JobID != "" && len(sup.Session) >= 8 && strings.HasPrefix(sup.Session, s.JobID))) {
@@ -271,7 +271,7 @@ func (rl role) observeCLI(st *state.State, sessions []*claude.Session, now time.
 				if !c.Gone.IsZero() {
 					away = "gone for " + dur(now.Sub(c.Gone))
 				}
-				evs = append(evs, event(sup.Party, rl.name+".restart", "CLI %d back as %d (%s)", c.PID, s.PID, away))
+				evs = append(evs, event(sup.Party, rl.Name+".restart", "CLI %d back as %d (%s)", c.PID, s.PID, away))
 			}
 			c.PID, c.Gone = s.PID, time.Time{}
 			changed = true
@@ -287,20 +287,20 @@ func (rl role) observeCLI(st *state.State, sessions []*claude.Session, now time.
 	return changed, evs
 }
 
-// fireRelay reports rl's relay taken or expired, once.
-func (rl role) fireRelay(st *state.State, now time.Time) (lines []string, evs []state.Event) {
-	rl.update(st, func(ro *state.Role) {
+// FireRelay reports rl's relay taken or expired, once.
+func (rl role) FireRelay(st *state.State, now time.Time) (lines []string, evs []state.Event) {
+	rl.Update(st, func(ro *state.Role) {
 		r := ro.Relay
 		if r == nil || !r.Reported.IsZero() {
 			return
 		}
 		switch {
 		case !r.Taken.IsZero():
-			lines = append(lines, fmt.Sprintf("%sRELAY TAKEN: %q %s since %s, relieving %q; %s", rl.tag, r.To.Name, rl.verb, clock(now, r.Taken), r.From.Name, keptSession(st, r.From)))
+			lines = append(lines, fmt.Sprintf("%sRELAY TAKEN: %q %s since %s, relieving %q; %s", rl.Tag, r.To.Name, rl.Verb, clock(now, r.Taken), r.From.Name, keptSession(st, r.From)))
 		case !now.Before(r.Expires):
 			lines = append(lines, fmt.Sprintf("%sRELAY EXPIRED: %q did not take the role from %q by %s (beekeeper %s relay starts another)",
-				rl.tag, r.To.Name, r.From.Name, clock(now, r.Expires), rl.name))
-			evs = append(evs, event(watchParty, rl.name+".relay-expired", "to %s at %s", r.To.Name, clock(now, r.Expires)))
+				rl.Tag, r.To.Name, r.From.Name, clock(now, r.Expires), rl.Name))
+			evs = append(evs, event(WatchParty, rl.Name+".relay-expired", "to %s at %s", r.To.Name, clock(now, r.Expires)))
 			ro.RelayDue = nil
 		default:
 			return
@@ -310,7 +310,7 @@ func (rl role) fireRelay(st *state.State, now time.Time) (lines []string, evs []
 	return lines, evs
 }
 
-const relayDueRepeat = 5 * time.Minute
+const RelayDueRepeat = 5 * time.Minute
 
 // relayDues is what one watch process said of the relay dues: when it last said
 // each, by relayDueKey. A process that did not say a standing relay due
@@ -327,12 +327,12 @@ func relayDueKey(sup *state.Supervisor, relayAt config.Tokens) string {
 	return fmt.Sprintf("%s@%s@%d", who, sup.Since.UTC().Format(time.RFC3339Nano), relayAt)
 }
 
-// said reports whether the relay due to r's holder's term at relayAt is
+// Said reports whether the relay due to r's holder's term at relayAt is
 // said: the state records it at relayAt, and this process said it before
 // the poll at now, less than relayDueRepeat ago. Within one poll it is
 // not said yet, so the poll's write
 // under the lock says what its read found.
-func (d relayDues) said(r state.Role, relayAt config.Tokens, now time.Time) bool {
+func (d relayDues) Said(r state.Role, relayAt config.Tokens, now time.Time) bool {
 	if !r.RelayDue.At(r.Holder, int64(relayAt)) {
 		return false
 	}
@@ -340,7 +340,7 @@ func (d relayDues) said(r state.Role, relayAt config.Tokens, now time.Time) bool
 		return true
 	}
 	at, ok := d[relayDueKey(r.Holder, relayAt)]
-	return ok && at.Before(now) && now.Sub(at) < relayDueRepeat
+	return ok && at.Before(now) && now.Sub(at) < RelayDueRepeat
 }
 
 // say records that this process said the relay due to sup's term at
@@ -356,33 +356,33 @@ func (d relayDues) say(sup *state.Supervisor, relayAt config.Tokens, now time.Ti
 // quietness is the watch's reading of a holder's context for a relay:
 // checked once it reached relayAt, or half of it after an idle hour.
 type quietness struct {
-	checked bool
-	context int64
-	idle    bool
-	relayAt config.Tokens
+	Checked bool
+	Context int64
+	Idle    bool
+	RelayAt config.Tokens
 }
 
-// fireRelayDue reports rl's relay due once its holder's context reached
+// FireRelayDue reports rl's relay due once its holder's context reached
 // q.relayAt, or a new line arrives after an idle hour above half of it:
 // once per term and relayAt in the state, and every relayDueRepeat in a
 // continuous watch until a relay opens. The
 // record keeps when it was first reported at that relayAt.
-func (rl role) fireRelayDue(st *state.State, q quietness, said relayDues, now time.Time) (lines []string, evs []state.Event) {
-	rl.update(st, func(r *state.Role) {
+func (rl role) FireRelayDue(st *state.State, q quietness, said relayDues, now time.Time) (lines []string, evs []state.Event) {
+	rl.Update(st, func(r *state.Role) {
 		sup := r.Holder
-		if !q.checked || sup == nil || r.Relay.Open(now) || said.said(*r, q.relayAt, now) {
+		if !q.Checked || sup == nil || r.Relay.Open(now) || said.Said(*r, q.RelayAt, now) {
 			return
 		}
-		if !r.RelayDue.At(sup, int64(q.relayAt)) {
-			r.RelayDue = &state.RelayDue{Supervisor: sup.Party, Since: sup.Since, Reported: now.UTC(), Context: q.context, RelayAt: int64(q.relayAt)}
+		if !r.RelayDue.At(sup, int64(q.RelayAt)) {
+			r.RelayDue = &state.RelayDue{Supervisor: sup.Party, Since: sup.Since, Reported: now.UTC(), Context: q.Context, RelayAt: int64(q.RelayAt)}
 		}
-		said.say(sup, q.relayAt, now)
+		said.say(sup, q.RelayAt, now)
 		reason := ""
-		if q.idle {
+		if q.Idle {
 			reason = " after an idle hour (cache expired)"
 		}
-		lines = append(lines, fmt.Sprintf("%sRELAY DUE: %q is at %s tokens of context%s: %s", rl.tag, sup.Name, tokensText(q.context), reason, rl.handover))
-		evs = append(evs, event(watchParty, rl.name+".relay-due", "%s at %s tokens", sup.Name, tokensText(q.context)))
+		lines = append(lines, fmt.Sprintf("%sRELAY DUE: %q is at %s tokens of context%s: %s", rl.Tag, sup.Name, tokensText(q.Context), reason, rl.Handover))
+		evs = append(evs, event(WatchParty, rl.Name+".relay-due", "%s at %s tokens", sup.Name, tokensText(q.Context)))
 	})
 	return lines, evs
 }

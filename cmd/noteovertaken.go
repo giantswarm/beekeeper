@@ -70,8 +70,8 @@ func sessionLinked(st *state.State) bool {
 // run, owns its notes, and a relay hands them on.
 func roleRun(st *state.State, p state.Party) bool {
 	for _, rl := range roles {
-		r := rl.get(st)
-		if rl.runOf(p.Name) > 0 || r.Holder != nil && r.Holder.Is(p) ||
+		r := rl.Get(st)
+		if rl.RunOf(p.Name) > 0 || r.Holder != nil && r.Holder.Is(p) ||
 			slices.ContainsFunc(r.Relieved, func(rf state.Relief) bool { return rf.Party.Is(p) }) {
 			return true
 		}
@@ -89,7 +89,7 @@ func findOrphaned(st *state.State, archived map[string]bool) []overtake {
 	for _, n := range st.Notes {
 		by := n.By
 		if overtakable(n, asking) && len(n.Refs) == 0 && (archived[by.HostSession] || archived[by.Session]) && !roleRun(st, by) {
-			out = append(out, overtake{id: n.ID, reason: fmt.Sprintf("its filing session %q is archived", by.Name)})
+			out = append(out, overtake{Id: n.ID, Reason: fmt.Sprintf("its filing session %q is archived", by.Name)})
 		}
 	}
 	return out

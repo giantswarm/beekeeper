@@ -173,7 +173,7 @@ func TestDueDecisionsCloseWithTheirDefault(t *testing.T) {
 		{ID: 5, Kind: noteDecision, For: notePerson, Due: past, Default: "the older decision's default"},
 		{ID: 6, For: notePerson, Kind: noteDecision, Due: past, Default: "waits; nothing is closed"},
 	}}
-	lines, evs, closed := closeDefaulted(st, notePerson, watchParty, now)
+	lines, evs, closed := closeDefaulted(st, notePerson, WatchParty, now)
 	if want := []string{"NOTE DEFAULTED #1: " + dfltOK, "NOTE DEFAULTED #5: the older decision's default", "NOTE DEFAULTED #6: waits; nothing is closed"}; !slices.Equal(lines, want) {
 		t.Fatalf("lines %q, want %q", lines, want)
 	}
@@ -194,18 +194,18 @@ func TestPassiveDefaultsCloseOnceAndStayAnswerable(t *testing.T) {
 		t.Run(dflt, func(t *testing.T) {
 			n := state.Note{ID: 1, Kind: noteDecision, For: notePerson, Default: dflt, Due: relayNow.Add(-time.Minute)}
 			st := &state.State{Notes: []state.Note{n}}
-			lines, events, closed := closeDefaulted(st, notePerson, watchParty, relayNow)
+			lines, events, closed := closeDefaulted(st, notePerson, WatchParty, relayNow)
 			if len(lines) != 1 || len(events) != 1 || events[0].Verb != noteDefaulted || len(closed) != 1 || len(st.Notes) != 0 {
 				t.Fatalf("default not applied: %q %+v %+v %+v", lines, events, closed, st)
 			}
 			if got, defaulted := answerable(st, n.ID, relayNow); got == nil || !defaulted || got.Default != dflt {
 				t.Fatal("default is not retained for a late answer")
 			}
-			lines, events, closed = closeDefaulted(st, notePerson, watchParty, relayNow)
+			lines, events, closed = closeDefaulted(st, notePerson, WatchParty, relayNow)
 			if len(lines)+len(events)+len(closed) != 0 || len(st.Defaulted) != 1 {
 				t.Fatal("default applied twice")
 			}
-			closeDefaulted(st, notePerson, watchParty, relayNow.Add(defaultedKeep))
+			closeDefaulted(st, notePerson, WatchParty, relayNow.Add(defaultedKeep))
 			if len(st.Defaulted) != 0 {
 				t.Fatal("expired default remains answerable")
 			}
@@ -368,7 +368,7 @@ func TestCloseDefaultedDropsEveryExpiredDefault(t *testing.T) {
 		Notes:     []state.Note{{ID: 4, For: notePerson, Kind: noteDecision, Due: now.Add(-time.Minute), Default: dfltOK}},
 		Defaulted: []state.Note{{ID: 1, Due: old}, {ID: 2, Due: old}, {ID: 3, Due: now.Add(-time.Hour)}},
 	}
-	closeDefaulted(st, notePerson, watchParty, now)
+	closeDefaulted(st, notePerson, WatchParty, now)
 	var kept []int
 	for _, n := range st.Defaulted {
 		kept = append(kept, n.ID)

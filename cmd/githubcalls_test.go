@@ -108,8 +108,8 @@ func TestBudgetAndWatchNameFinishedGitHubCaller(t *testing.T) {
 		t.Fatal(out.String())
 	}
 	out.Reset()
-	w := &watcher{a: a, last: map[string]time.Time{}}
-	w.budget(context.Background(), a.now)
+	w := &Watcher{Host: a, Last: map[string]time.Time{}}
+	w.Budget(context.Background(), a.now)
 	if !strings.Contains(out.String(), "window: finished-session: gh project item-list") {
 		t.Fatal(out.String())
 	}

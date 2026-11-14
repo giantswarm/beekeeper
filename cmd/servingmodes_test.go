@@ -667,7 +667,7 @@ echo "switched to $1"
 	// switches it again.
 	for range 4 {
 		w := s.app(&bytes.Buffer{}).newWatcher(false, false)
-		if err := w.a.reconcileServeModes(context.Background()); err != nil {
+		if err := w.Host.reconcileServeModes(context.Background()); err != nil {
 			t.Fatalf("reconcile: %v", err)
 		}
 		s.fresh()
@@ -784,7 +784,7 @@ func TestServingModesStatusAndWatch(t *testing.T) {
 
 	// The watch reads the mode and says nothing while it is settled.
 	w := s.app(&bytes.Buffer{}).newWatcher(false, false)
-	if err := w.a.reconcileServeModes(context.Background()); err != nil {
+	if err := w.Host.reconcileServeModes(context.Background()); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 	if conds := openConditions(w); conds != "" {
@@ -813,13 +813,13 @@ func TestServingModesStatusAndWatch(t *testing.T) {
 }
 
 // openConditions returns the watch's open condition lines and clears them.
-func openConditions(w *watcher) string {
-	w.mu.Lock()
-	defer w.mu.Unlock()
+func openConditions(w *Watcher) string {
+	w.Mu.Lock()
+	defer w.Mu.Unlock()
 	var lines []string
-	for k, c := range w.active {
+	for k, c := range w.Active {
 		lines = append(lines, k+": "+c.Label)
-		delete(w.active, k)
+		delete(w.Active, k)
 	}
 	return strings.Join(lines, "\n")
 }

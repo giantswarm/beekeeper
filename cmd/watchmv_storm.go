@@ -25,12 +25,12 @@ const stormNames = 3
 // machine with thirty sessions forks a hundred processes a second at rest.
 const forkUsualOver = 10 * time.Minute
 
-// fresh are the processes of cur that prev had not seen (a new PID, or a
+// Fresh are the processes of cur that prev had not seen (a new PID, or a
 // reused one), less the forks that never ran a program of their own: a child
 // with its parent's command line and no CPU time. Go programs (kubectl, helm,
 // tsh) start one such child to probe pidfd support, which exits at once; it
 // is its parent, not a second kubectl.
-func fresh(prev, cur *proc.Table) []*proc.Process {
+func Fresh(prev, cur *proc.Table) []*proc.Process {
 	if prev == nil || cur == nil {
 		return nil
 	}
@@ -76,10 +76,10 @@ func sharesLine(ss []share, quote bool) string {
 	return strings.Join(parts, ", ")
 }
 
-// stormLine is the PROCESS STORM line: the fork rate and the usual one, and
+// StormLine is the PROCESS STORM line: the fork rate and the usual one, and
 // the commands and sessions of the processes started since the last sample
 // that still ran at this one, by share.
-func stormLine(rate, usual float64, started []*proc.Process, t *proc.Table, owners map[int]string) string {
+func StormLine(rate, usual float64, started []*proc.Process, t *proc.Table, owners map[int]string) string {
 	line := fmt.Sprintf("PROCESS STORM: %.0f forks/s (usual %.0f/s)", rate, usual)
 	if len(started) == 0 {
 		return line + ", none of them still running at the sample"
@@ -101,7 +101,7 @@ func stormLine(rate, usual float64, started []*proc.Process, t *proc.Table, owne
 // stack is one command line running more than watch.stackMax times over,
 // each copy for over stackAge, from the same place in the process tree.
 type stack struct {
-	key     string
+	Key     string
 	Cmd     string
 	Count   int
 	Oldest  time.Duration
@@ -110,9 +110,9 @@ type stack struct {
 	pids    []int
 }
 
-// line is the STACKED line; its head names the command, so its ENDED line
+// Line is the STACKED line; its head names the command, so its ENDED line
 // says which pile-up ended.
-func (s stack) line() string {
+func (s stack) Line() string {
 	l := fmt.Sprintf("STACKED %d × %s: oldest %s", s.Count, s.Cmd, s.Oldest.Round(time.Second))
 	if s.Parent != "" {
 		l += ", parent " + s.Parent
@@ -123,23 +123,23 @@ func (s stack) line() string {
 	return l
 }
 
-// stacks finds the command lines that run more than max times over. Copies
+// Stacks finds the command lines that run more than max times over. Copies
 // count together when their command lines and their ancestors' up to an
 // anchor are the same: the nearest session CLI or interactive shell, or the
 // third ancestor. So one MCP server under each of thirty CLIs is no stack,
 // while seven `beekeeper free` under seven copies of one script are. An
 // interactive shell is never a copy, and of a stack whose copies each lead
 // a stack below it only the one below is said.
-func stacks(t *proc.Table, now time.Time, max int, owners map[int]string) []stack {
+func Stacks(t *proc.Table, now time.Time, max int, owners map[int]string) []stack {
 	by := map[string]*stack{}
 	for _, p := range t.ByPID {
-		if len(p.Args) == 0 || interactiveShell(p) || p.Elapsed(now) <= stackAge {
+		if len(p.Args) == 0 || InteractiveShell(p) || p.Elapsed(now) <= stackAge {
 			continue
 		}
 		key := stackKey(t, p, owners)
 		s := by[key]
 		if s == nil {
-			s = &stack{key: key, Cmd: display(p.Args)}
+			s = &stack{Key: key, Cmd: display(p.Args)}
 			by[key] = s
 		}
 		s.Count++
@@ -177,7 +177,7 @@ func stacks(t *proc.Table, now time.Time, max int, owners map[int]string) []stac
 func stackKey(t *proc.Table, p *proc.Process, owners map[int]string) string {
 	parts := []string{p.Cmdline()}
 	for i, a := range t.Ancestors(p.PID) {
-		if i >= 2 || owners[a.PID] != "" || a.Comm == "claude" || interactiveShell(a) {
+		if i >= 2 || owners[a.PID] != "" || a.Comm == "claude" || InteractiveShell(a) {
 			parts = append(parts, fmt.Sprint(a.PID))
 			break
 		}
@@ -189,9 +189,9 @@ func stackKey(t *proc.Table, p *proc.Process, owners map[int]string) string {
 
 var shells = map[string]bool{"sh": true, "bash": true, "zsh": true, "dash": true, "fish": true}
 
-// interactiveShell reports whether p is a shell with no script or command
+// InteractiveShell reports whether p is a shell with no script or command
 // to run: a terminal's or a tool's shell, never a copy of a command.
-func interactiveShell(p *proc.Process) bool {
+func InteractiveShell(p *proc.Process) bool {
 	if len(p.Args) == 0 || !shells[strings.TrimPrefix(filepath.Base(p.Args[0]), "-")] {
 		return false
 	}
@@ -203,10 +203,10 @@ func interactiveShell(p *proc.Process) bool {
 	return true
 }
 
-// toolLoadLine is the LOAD line when more than max processes of the CLIs
+// ToolLoadLine is the LOAD line when more than max processes of the CLIs
 // named in tools run in t, with their commands and the sessions that run
 // them by share; "" while they stay at or under max.
-func toolLoadLine(t *proc.Table, tools []string, max int, owners map[int]string) string {
+func ToolLoadLine(t *proc.Table, tools []string, max int, owners map[int]string) string {
 	comms, sessions := map[string]int{}, map[string]int{}
 	n := 0
 	for _, p := range t.ByPID {

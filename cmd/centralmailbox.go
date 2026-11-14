@@ -44,32 +44,32 @@ type mailEnvelope struct {
 // do the later ones to that agent, in their order; one to another machine's
 // agent is left to that machine. An expiry notice is said and acked. It
 // reports whether a message waits for delivery or acknowledgement.
-func watchDrainMailbox(w *watcher, ctx context.Context) bool {
-	host := w.a.cfg.Identity.Host
-	me := state.Party{Name: w.a.cfg.Identity.Person, Host: host}
+func watchDrainMailbox(w *Watcher, ctx context.Context) bool {
+	host := w.Host.cfg.Identity.Host
+	me := state.Party{Name: w.Host.cfg.Identity.Person, Host: host}
 	var got struct {
 		Messages []mailbox.Delivery `json:"messages"`
 	}
-	if _, err := w.a.callCentralRaw(ctx, me, "receive_messages", map[string]any{}, &got); err != nil {
-		w.check(mailboxKey+" receive", true, "MAILBOX UNREADABLE %s: %s", w.a.cfg.Central.Context, unreadableReason(err))
+	if _, err := w.Host.callCentralRaw(ctx, me, "receive_messages", map[string]any{}, &got); err != nil {
+		w.Check(mailboxKey+" receive", true, "MAILBOX UNREADABLE %s: %s", w.Host.cfg.Central.Context, unreadableReason(err))
 		return true
 	}
-	w.clear(mailboxKey + " receive")
-	quiet := *w.a
+	w.Clear(mailboxKey + " receive")
+	quiet := *w.Host
 	quiet.out = io.Discard
-	deliver := w.deliver
+	deliver := w.Deliver
 	if deliver == nil {
 		deliver = func(ctx context.Context, q, msg string) error { return quiet.wakeAgent(ctx, mailboxParty, q, msg, "") }
 	}
 	// An unreadable state delivers each message to the agent it names.
-	st, _ := w.a.store.Read()
+	st, _ := w.Host.store.Read()
 	var acks []int64
 	held := map[string]bool{}
 	for _, d := range got.Messages {
 		var env mailEnvelope
 		_ = json.Unmarshal(d.Envelope, &env)
 		if d.Kind == mailbox.KindExpired {
-			w.emitNow(mailboxKey, "MAILBOX: the message %s to %s expired unacked at %s", env.MessageID, env.To, env.Deadline.Local().Format(time.DateTime))
+			w.EmitNow(mailboxKey, "MAILBOX: the message %s to %s expired unacked at %s", env.MessageID, env.To, env.Deadline.Local().Format(time.DateTime))
 			acks = append(acks, d.Seq)
 			continue
 		}
@@ -85,43 +85,43 @@ func watchDrainMailbox(w *watcher, ctx context.Context) bool {
 			// park's own settlement. Ack the notification, not a model
 			// turn; the default remains in the central note and feed.
 			acks = append(acks, d.Seq)
-			w.emitNow(mailboxKey, "MAILBOX DEFAULT KEPT IN FEED for %s: parked on its current wake condition", name)
+			w.EmitNow(mailboxKey, "MAILBOX DEFAULT KEPT IN FEED for %s: parked on its current wake condition", name)
 			continue
 		}
 		var err error
 		if to == "" {
-			err = fmt.Errorf("no session holds the %s's role", rl.name)
+			err = fmt.Errorf("no session holds the %s's role", rl.Name)
 		} else {
 			err = deliver(ctx, to, body)
 		}
 		if err != nil && inRole {
 			// As a note's answer on the machine: the role's next holder
 			// is told at its start.
-			if kerr := w.a.keepRoleLine(rl, body); kerr == nil {
-				w.clear(key)
+			if kerr := w.Host.keepRoleLine(rl, body); kerr == nil {
+				w.Clear(key)
 				acks = append(acks, d.Seq)
-				_ = w.a.store.Log(event(mailboxParty, "mailbox.kept", "%s: %s from %s%s, for the %s's next start: %v", name, d.MessageID, d.Sender, via(d.Envelope), rl.name, err))
-				w.emitNow(mailboxKey, "MAILBOX %s to %s waits for the %s's next start (%v): %s", d.MessageID, name, rl.name, err, firstLine(env.Message.text()))
+				_ = w.Host.store.Log(event(mailboxParty, "mailbox.kept", "%s: %s from %s%s, for the %s's next start: %v", name, d.MessageID, d.Sender, via(d.Envelope), rl.Name, err))
+				w.EmitNow(mailboxKey, "MAILBOX %s to %s waits for the %s's next start (%v): %s", d.MessageID, name, rl.Name, err, firstLine(env.Message.text()))
 				continue
 			}
 		}
 		if err != nil {
 			held[name] = true
-			w.check(key, true, "MAILBOX %s waits for %s, delivered once it takes it: %s", d.MessageID, name, unreadableReason(err))
+			w.Check(key, true, "MAILBOX %s waits for %s, delivered once it takes it: %s", d.MessageID, name, unreadableReason(err))
 			continue
 		}
-		w.clear(key)
+		w.Clear(key)
 		acks = append(acks, d.Seq)
 		if holder != name {
-			holder = fmt.Sprintf("%s, the %s now, for %s", holder, rl.name, name)
+			holder = fmt.Sprintf("%s, the %s now, for %s", holder, rl.Name, name)
 		}
-		_ = w.a.store.Log(event(mailboxParty, "mailbox.delivered", "%s: %s from %s%s", holder, d.MessageID, d.Sender, via(d.Envelope)))
-		w.emitNow(mailboxKey, "MAILBOX to %s: %s from %s%s: %s", holder, d.MessageID, d.Sender, via(d.Envelope), firstLine(env.Message.text()))
+		_ = w.Host.store.Log(event(mailboxParty, "mailbox.delivered", "%s: %s from %s%s", holder, d.MessageID, d.Sender, via(d.Envelope)))
+		w.EmitNow(mailboxKey, "MAILBOX to %s: %s from %s%s: %s", holder, d.MessageID, d.Sender, via(d.Envelope), firstLine(env.Message.text()))
 	}
 	if len(acks) > 0 {
 		// A watch that stops meanwhile still acks what it delivered.
-		if _, err := w.a.callCentralRaw(context.WithoutCancel(ctx), me, "ack_messages", map[string]any{paramIDs: acks}, nil); err != nil {
-			w.emitNow(mailboxKey, "MAILBOX: %d delivered not acked, delivered again: %s", len(acks), unreadableReason(err))
+		if _, err := w.Host.callCentralRaw(context.WithoutCancel(ctx), me, "ack_messages", map[string]any{paramIDs: acks}, nil); err != nil {
+			w.EmitNow(mailboxKey, "MAILBOX: %d delivered not acked, delivered again: %s", len(acks), unreadableReason(err))
 			return true
 		}
 	}
@@ -142,7 +142,7 @@ func mailAddressee(st *state.State, name string) (to, holder string, rl role, in
 	if !ok {
 		return name, name, role{}, false
 	}
-	h := rl.get(st).Holder
+	h := rl.Get(st).Holder
 	if h == nil {
 		return "", "", rl, true
 	}

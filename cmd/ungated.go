@@ -159,12 +159,12 @@ func ungatedLine(t *proc.Table, p *proc.Process, session string) string {
 
 // watchUngated says each devctl merge or promotion that runs outside the gate,
 // one UNGATED MERGE line when it is found and one ENDED line when it ends.
-func watchUngated(w *watcher, sessions []*claude.Session, t *proc.Table) {
+func watchUngated(w *Watcher, sessions []*claude.Session, t *proc.Table) {
 	found := map[string]bool{}
 	for _, m := range ungatedMerges(sessions, t) {
 		key := fmt.Sprintf("%s%d", ungatedKey, m.PID)
 		found[key] = true
-		w.emit(key, "UNGATED MERGE %s", m.Line)
+		w.Emit(key, "UNGATED MERGE %s", m.Line)
 	}
-	w.clearMissing(ungatedKey, found)
+	w.ClearMissing(ungatedKey, found)
 }

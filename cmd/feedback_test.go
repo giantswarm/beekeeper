@@ -56,27 +56,27 @@ const feedbackThread = `{"messages":"=== THREAD PARENT MESSAGE ===\nFrom: Ada (U
 
 // feedbackWatch is a reporting standby watch whose feedback watch reads
 // slack through a test muster; sent collects the deliveries.
-func feedbackWatch(t *testing.T) (*watcher, *slackStandIn, *[]string, *bytes.Buffer) {
+func feedbackWatch(t *testing.T) (*Watcher, *slackStandIn, *[]string, *bytes.Buffer) {
 	t.Helper()
 	dir := t.TempDir()
 	w, _, out := reportingWatch(t, dir)
 	slack := &slackStandIn{threads: map[string]string{reportTS: feedbackThread}}
 	m := centraltest.New(t, slack.url(t), "slack")
 	bin, _ := centraltest.Binary(t, m.URL, "token")
-	w.a.cfg.Feedback.Context, w.a.cfg.Feedback.Server = gazelle, viaSlack
-	w.a.cfg.Feedback.Every.Duration, w.a.cfg.Feedback.Window.Duration = 5*time.Minute, 24*time.Hour
-	w.a.cfg.Central.Muster, w.a.cfg.Central.Timeout.Duration = bin, 10*time.Second
+	w.Host.cfg.Feedback.Context, w.Host.cfg.Feedback.Server = gazelle, viaSlack
+	w.Host.cfg.Feedback.Every.Duration, w.Host.cfg.Feedback.Window.Duration = 5*time.Minute, 24*time.Hour
+	w.Host.cfg.Central.Muster, w.Host.cfg.Central.Timeout.Duration = bin, 10*time.Second
 	var sent []string
-	w.deliver = func(_ context.Context, q, msg string) error {
+	w.Deliver = func(_ context.Context, q, msg string) error {
 		sent = append(sent, q+" <- "+msg)
 		return nil
 	}
-	err := w.a.store.Update(func(st *state.State) ([]state.Event, error) {
+	err := w.Host.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Guide = &state.Role{Holder: &state.Supervisor{Party: state.Party{Name: firstRun, Session: "sup"}}}
 		st.Agents = []state.Agent{{Party: state.Party{Name: "Board pull 9", Session: "bp9"}}}
 		st.ReportThreads = []state.ReportThread{
-			{Report: "Status report 15:00", Channel: "C1", TS: reportTS, Posted: w.a.now.Add(-time.Hour)},
-			{Report: "Status report yesterday", Channel: "C1", TS: "50.000001", Posted: w.a.now.Add(-25 * time.Hour)},
+			{Report: "Status report 15:00", Channel: "C1", TS: reportTS, Posted: w.Host.now.Add(-time.Hour)},
+			{Report: "Status report yesterday", Channel: "C1", TS: "50.000001", Posted: w.Host.now.Add(-25 * time.Hour)},
 		}
 		return nil, nil
 	})
@@ -89,7 +89,7 @@ func feedbackWatch(t *testing.T) (*watcher, *slackStandIn, *[]string, *bytes.Buf
 func TestFeedbackDeliversTheAuthorsReplies(t *testing.T) {
 	w, slack, sent, out := feedbackWatch(t)
 	ctx := context.Background()
-	w.readFeedback(ctx, w.a)
+	w.ReadFeedback(ctx, w.Host)
 	want := []string{
 		"Board pull 9 <- Feedback from Ada in Slack, a reply to the status report Status report 15:00: look at the CI first",
 		"sup <- Feedback from Ada in Slack, a reply to the status report Status report 15:00: slow down please",
@@ -100,7 +100,7 @@ func TestFeedbackDeliversTheAuthorsReplies(t *testing.T) {
 	if r := strings.Join(slack.reactions, " "); r != "C1/100.000002:eyes C1/100.000004:eyes" {
 		t.Errorf("reactions %s", r)
 	}
-	st, _ := w.a.store.Read()
+	st, _ := w.Host.store.Read()
 	if len(st.ReportThreads) != 1 || st.ReportThreads[0].Seen != "100.000004" {
 		t.Errorf("threads %+v: want the day-old one dropped, the reply seen", st.ReportThreads)
 	}
@@ -111,7 +111,7 @@ func TestFeedbackDeliversTheAuthorsReplies(t *testing.T) {
 	if verbs(t, w, "feedback.delivered") != 2 {
 		t.Error("want two feedback.delivered events")
 	}
-	w.readFeedback(ctx, w.a)
+	w.ReadFeedback(ctx, w.Host)
 	if len(*sent) != 2 {
 		t.Errorf("read again, sent %v", *sent)
 	}
@@ -119,15 +119,15 @@ func TestFeedbackDeliversTheAuthorsReplies(t *testing.T) {
 
 func TestFeedbackKeepsAReplyNotDelivered(t *testing.T) {
 	w, _, sent, out := feedbackWatch(t)
-	deliver := w.deliver
-	w.deliver = func(context.Context, string, string) error { return errors.New("no CLI") }
-	w.readFeedback(context.Background(), w.a)
-	st, _ := w.a.store.Read()
+	deliver := w.Deliver
+	w.Deliver = func(context.Context, string, string) error { return errors.New("no CLI") }
+	w.ReadFeedback(context.Background(), w.Host)
+	st, _ := w.Host.store.Read()
 	if st.ReportThreads[0].Seen != "" || !strings.Contains(out.String(), "FEEDBACK on Status report 15:00 not delivered to Board pull 9, read again next time: no CLI") {
 		t.Errorf("threads %+v; out:\n%s", st.ReportThreads, out)
 	}
-	w.deliver = deliver
-	w.readFeedback(context.Background(), w.a)
+	w.Deliver = deliver
+	w.ReadFeedback(context.Background(), w.Host)
 	if len(*sent) != 2 {
 		t.Errorf("sent %v once delivery works", *sent)
 	}
@@ -136,13 +136,13 @@ func TestFeedbackKeepsAReplyNotDelivered(t *testing.T) {
 func TestFeedbackUnreadableIsSaidOnce(t *testing.T) {
 	w, slack, _, out := feedbackWatch(t)
 	slack.fail = "execution_failed: missing_scope"
-	w.readFeedback(context.Background(), w.a)
-	w.readFeedback(context.Background(), w.a)
+	w.ReadFeedback(context.Background(), w.Host)
+	w.ReadFeedback(context.Background(), w.Host)
 	if n := strings.Count(out.String(), "FEEDBACK UNREADABLE gazelle: x_slack_read_thread: execution_failed: missing_scope"); n != 1 {
 		t.Errorf("said %d times; out:\n%s", n, out)
 	}
 	slack.fail = ""
-	w.readFeedback(context.Background(), w.a)
+	w.ReadFeedback(context.Background(), w.Host)
 	if !strings.Contains(out.String(), "ENDED") {
 		t.Errorf("out:\n%s", out)
 	}
@@ -151,11 +151,11 @@ func TestFeedbackUnreadableIsSaidOnce(t *testing.T) {
 func TestReporterPostRecordsItsThread(t *testing.T) {
 	dir := t.TempDir()
 	w, _, _ := reportingWatch(t, dir)
-	w.a.cfg.Feedback.Context = gazelle
+	w.Host.cfg.Feedback.Context = gazelle
 	ctx := context.Background()
-	w.tendReporter(ctx, nil)
-	st, _ := w.a.store.Read()
-	proj := filepath.Join(w.a.cfg.Claude.ProjectsDir, "p")
+	w.TendReporter(ctx, nil)
+	st, _ := w.Host.store.Read()
+	proj := filepath.Join(w.Host.cfg.Claude.ProjectsDir, "p")
 	if err := os.MkdirAll(proj, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -165,9 +165,9 @@ func TestReporterPostRecordsItsThread(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(proj, st.Report.Session+".jsonl"), []byte(post), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	w.a.now = reportNow.Add(3 * time.Minute)
-	w.tendReporter(ctx, nil)
-	st, _ = w.a.store.Read()
+	w.Host.now = reportNow.Add(3 * time.Minute)
+	w.TendReporter(ctx, nil)
+	st, _ = w.Host.store.Read()
 	if len(st.ReportThreads) != 1 || st.ReportThreads[0].Channel != "D1" || st.ReportThreads[0].TS != reportTS || st.ReportThreads[0].Report != st.Report.Name {
 		t.Errorf("threads %+v", st.ReportThreads)
 	}

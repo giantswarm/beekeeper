@@ -25,14 +25,14 @@ func TestRequestRestarts(t *testing.T) {
 	procs := map[int]string{
 		3:  "beekeeper watch --standby --notify",
 		5:  "beekeeper agents reopen --turn beekeeper-start-x.service 1234",
-		7:  watchOwner,
+		7:  WatchOwner,
 		9:  "beekeeper watch --once",
 		11: "beekeeper agents reopen --detach 1234",
 		13: "beekeeper alerts watch",
 		15: "beekeeper guide watch",
 		17: "beekeeper gate -- devctl pr merge o/r 1",
-		19: watchOwner, // another binary
-		21: watchOwner, // not replaced
+		19: WatchOwner, // another binary
+		21: WatchOwner, // not replaced
 		25: "beekeeper --config /c.yaml watch --standby",
 		27: "beekeeper --config /c.yaml alerts watch",
 	}
@@ -40,7 +40,7 @@ func TestRequestRestarts(t *testing.T) {
 	for pid, cmd := range procs {
 		tab.ByPID[pid] = &proc.Process{PID: pid, Comm: project.Name, Args: strings.Fields(cmd)}
 	}
-	tab.ByPID[23] = &proc.Process{PID: 23, Comm: "zsh", Args: strings.Fields(watchOwner)}
+	tab.ByPID[23] = &proc.Process{PID: 23, Comm: "zsh", Args: strings.Fields(WatchOwner)}
 	binary := func(pid int) (string, bool) {
 		switch pid {
 		case 19:
@@ -76,8 +76,8 @@ func TestRequestRestarts(t *testing.T) {
 	if got := out.String(); got != want {
 		t.Errorf("restarts said:\n%s\nwant:\n%s", got, want)
 	}
-	r := &restartWatch{file: filepath.Join(dir, restartFile), since: now.Add(-time.Hour), binary: func() (string, bool) { return restartExe, true }}
-	req := r.due()
+	r := &restartWatch{File: filepath.Join(dir, restartFile), Since: now.Add(-time.Hour), Binary: func() (string, bool) { return restartExe, true }}
+	req := r.Due()
 	if req == nil || !req.At.Equal(now) || req.Binary != restartExe {
 		t.Fatalf("the request read back as %+v", req)
 	}
@@ -126,7 +126,7 @@ func TestRestartDue(t *testing.T) {
 		t.Fatal(err)
 	}
 	path, replaced := restartExe, true
-	r := &restartWatch{file: filepath.Join(dir, restartFile), binary: func() (string, bool) { return path, replaced }}
+	r := &restartWatch{File: filepath.Join(dir, restartFile), Binary: func() (string, bool) { return path, replaced }}
 	for _, c := range []struct {
 		name     string
 		since    time.Time
@@ -140,14 +140,14 @@ func TestRestartDue(t *testing.T) {
 		{"runs the installed binary", at.Add(-time.Minute), restartExe, false, false},
 		{"runs another path", at.Add(-time.Minute), "/tmp/wt/beekeeper", true, false},
 	} {
-		r.since, path, replaced = c.since, c.path, c.replaced
-		if got := r.due() != nil; got != c.due {
+		r.Since, path, replaced = c.since, c.path, c.replaced
+		if got := r.Due() != nil; got != c.due {
 			t.Errorf("%s: due %v, want %v", c.name, got, c.due)
 		}
 	}
-	r.file = filepath.Join(dir, "missing.json")
-	r.since, path, replaced = at.Add(-time.Minute), restartExe, true
-	if r.due() != nil {
+	r.File = filepath.Join(dir, "missing.json")
+	r.Since, path, replaced = at.Add(-time.Minute), restartExe, true
+	if r.Due() != nil {
 		t.Error("no request file is due")
 	}
 }
@@ -158,16 +158,16 @@ func TestWatchRestartsAfterBackgroundRuns(t *testing.T) {
 	w, _ := loopWatcher(t, "1h", "", nil)
 	at := time.Now().Add(-time.Second)
 	tab := &proc.Table{ByPID: map[int]*proc.Process{3: {PID: 3, Comm: project.Name, Args: []string{project.Name, watchName}}}}
-	if _, err := requestRestarts(&bytes.Buffer{}, w.a.cfg.StateDir, restartExe, tab, func(int) (string, bool) { return restartExe, true }, at, false); err != nil {
+	if _, err := requestRestarts(&bytes.Buffer{}, w.Host.cfg.StateDir, restartExe, tab, func(int) (string, bool) { return restartExe, true }, at, false); err != nil {
 		t.Fatal(err)
 	}
-	w.restart = &restartWatch{file: filepath.Join(w.a.cfg.StateDir, restartFile), since: at.Add(-time.Hour),
-		binary: func() (string, bool) { return restartExe, true }}
+	w.Restart = &restartWatch{File: filepath.Join(w.Host.cfg.StateDir, restartFile), Since: at.Add(-time.Hour),
+		Binary: func() (string, bool) { return restartExe, true }}
 	saving := make(chan struct{})
-	w.bg.Go(func() { <-saving })
+	w.Bg.Go(func() { <-saving })
 
 	done := make(chan error, 1)
-	go func() { done <- w.run(context.Background(), false) }()
+	go func() { done <- w.Run(context.Background(), false) }()
 	select {
 	case err := <-done:
 		t.Fatalf("the run ended with a save under way: %v", err)
@@ -182,8 +182,8 @@ func TestWatchRestartsAfterBackgroundRuns(t *testing.T) {
 	case <-time.After(time.Minute):
 		t.Fatal("the run did not end for the restart")
 	}
-	if w.restartFor == nil || w.restartFor.Binary != restartExe {
-		t.Errorf("restarts for %+v", w.restartFor)
+	if w.RestartFor == nil || w.RestartFor.Binary != restartExe {
+		t.Errorf("restarts for %+v", w.RestartFor)
 	}
 }
 
@@ -192,19 +192,19 @@ func TestWatchRestartsAfterBackgroundRuns(t *testing.T) {
 func TestWatchWithoutRequestRunsOn(t *testing.T) {
 	w, _ := loopWatcher(t, "1h", "", nil)
 	clk := newFakeClock(t)
-	w.clock = clk
-	w.restart = &restartWatch{file: filepath.Join(w.a.cfg.StateDir, restartFile), since: clk.Now(),
-		binary: func() (string, bool) { return restartExe, true }}
+	w.Clock = clk
+	w.Restart = &restartWatch{File: filepath.Join(w.Host.cfg.StateDir, restartFile), Since: clk.Now(),
+		Binary: func() (string, bool) { return restartExe, true }}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- w.run(ctx, false) }()
+	go func() { done <- w.Run(ctx, false) }()
 	// Every loop armed its timer: the poll before ran and asked for the
 	// request. A run that ended arms none after the next step, and settle
 	// fails.
 	clk.settle(loopTimers)
 	clk.advance(time.Hour) // guide recovery also ticks between the hourly polls
 	clk.settle(loopTimers)
-	if n := w.polls.Load(); n != 2 {
+	if n := w.Polls.Load(); n != 2 {
 		t.Fatalf("%d polls after one interval, want 2", n)
 	}
 	select {
@@ -221,19 +221,19 @@ func TestWatchWithoutRequestRunsOn(t *testing.T) {
 func TestWatchCancellationWaitsForBackgroundRuns(t *testing.T) {
 	w, _ := loopWatcher(t, "1h", "", nil)
 	clk := newFakeClock(t)
-	w.clock = clk
+	w.Clock = clk
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	release, stopping := make(chan struct{}), make(chan struct{})
 	finish := sync.OnceFunc(func() { close(release) })
 	defer finish()
-	w.bg.Go(func() {
+	w.Bg.Go(func() {
 		<-ctx.Done()
 		close(stopping)
 		<-release
 	})
 	done := make(chan error, 1)
-	go func() { done <- w.run(ctx, false) }()
+	go func() { done <- w.Run(ctx, false) }()
 	clk.settle(loopTimers)
 	cancel()
 	<-stopping
@@ -403,13 +403,13 @@ func TestWatchCancellationSkipsBackgroundStartAndPendingSteps(t *testing.T) {
 	w, _ := loopWatcher(t, "1h", "", nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	w.a.ctx = ctx
+	w.Host.ctx = ctx
 	ranBg := false
-	w.inFlight(ctx, 0, &w.sweeping, func(context.Context) { ranBg = true })
-	w.bg.Wait()
+	w.InFlight(ctx, 0, &w.Sweeping, func(context.Context) { ranBg = true })
+	w.Bg.Wait()
 	if ranBg {
 		t.Fatal("canceled watcher started a background run")
 	}
-	w.exposures()
-	w.pending(ctx, nil)
+	w.Exposures()
+	w.Pending(ctx, nil)
 }

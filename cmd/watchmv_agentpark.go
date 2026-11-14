@@ -20,15 +20,15 @@ const resumableEvent = "agents.resumable"
 // settledPark is a park whose note closed or whose issue or pull request
 // merged or closed, and what settled it.
 type settledPark struct {
-	party      state.Party
-	on, answer string
+	Party      state.Party
+	On, Answer string
 }
 
-// settledParks reads which parks of st settled: a hold it parked on is
+// SettledParks reads which parks of st settled: a hold it parked on is
 // lifted or ended, a note it parked on is no longer open (the log, read only then, has its answer), an issue or pull
 // request is merged or closed (GitHub, read only for parks on one and while
 // the budget is over its floor).
-func (w *watcher) settledParks(ctx context.Context, st *state.State) []settledPark {
+func (w *Watcher) SettledParks(ctx context.Context, st *state.State) []settledPark {
 	open := map[int]bool{}
 	for _, n := range st.Notes {
 		open[n.ID] = true
@@ -46,13 +46,13 @@ func (w *watcher) settledParks(ctx context.Context, st *state.State) []settledPa
 			continue
 		}
 		if res, ok := parkLease(p.On); ok {
-			if answer, ok := w.a.leaseSettled(st, ag, res); ok {
+			if answer, ok := w.Host.leaseSettled(st, ag, res); ok {
 				out = append(out, settledPark{ag.Party, p.On, answer})
 			}
 			continue
 		}
 		if target, ok := parkHold(p.On); ok {
-			if !holdStands(st, target, w.a.now) {
+			if !holdStands(st, target, w.Host.now) {
 				out = append(out, settledPark{ag.Party, p.On, fmt.Sprintf("nothing holds %s any more: run the refused command again", target)})
 			}
 			continue
@@ -62,12 +62,12 @@ func (w *watcher) settledParks(ctx context.Context, st *state.State) []settledPa
 				parked, closed = append(parked, ag), append(closed, id)
 			}
 		} else if ctx, _, ok := parkCentralNote(p.On); ok {
-			if w.a.centralNotesOn() && strings.EqualFold(ctx, w.a.cfg.Central.Context) {
+			if w.Host.centralNotesOn() && strings.EqualFold(ctx, w.Host.cfg.Central.Context) {
 				centralParked = append(centralParked, ag)
 			}
 		} else if r, ok := parseRef(p.On); ok {
 			parked = append(parked, ag)
-			if p.RefKind != github.RefPullRequest && !p.RefChecked.IsZero() && w.a.now.Sub(p.RefChecked) < parkRefRetry {
+			if p.RefKind != github.RefPullRequest && !p.RefChecked.IsZero() && w.Host.now.Sub(p.RefChecked) < parkRefRetry {
 				continue
 			}
 			if !slices.Contains(refs, r) {
@@ -80,7 +80,7 @@ func (w *watcher) settledParks(ctx context.Context, st *state.State) []settledPa
 		return out
 	}
 	var states map[github.PR]github.RefState
-	if len(refs) > 0 && !loop.BoardBudgetLow(st.Budget, w.a.cfg.GitHub.Floor, w.a.now) {
+	if len(refs) > 0 && !loop.BoardBudgetLow(st.Budget, w.Host.cfg.GitHub.Floor, w.Host.now) {
 		// Back off issues and unresolved references even when GitHub fails. A failed batch leaves
 		// its agents parked; the others settle.
 		var s map[github.PR]github.RefState
@@ -95,33 +95,33 @@ func (w *watcher) settledParks(ctx context.Context, st *state.State) []settledPa
 				}
 			}
 			if len(attempts) > 0 {
-				w.a.cacheParkRefs(parked, attempts)
+				w.Host.cacheParkRefs(parked, attempts)
 			}
 			var err error
 			s, err = refStates(ctx, refs)
 			return err
 		}
 		var err error
-		if w.loopOwned {
-			err = w.a.loopGitHub(ctx, "park-refs", read)
+		if w.LoopOwned {
+			err = w.Host.loopGitHub(ctx, "park-refs", read)
 		} else {
 			err = read()
 		}
 		if err != nil {
 			if !errors.Is(err, loop.ErrLoopLater) {
-				w.fail("park-refs", "cannot read the parked agents' issues and pull requests: %v", err)
+				w.Fail("park-refs", "cannot read the parked agents' issues and pull requests: %v", err)
 			}
 		} else {
-			w.clear("park-refs")
+			w.Clear("park-refs")
 		}
 		if len(s) > 0 {
 			states = s
-			w.a.cacheParkRefs(parked, s)
+			w.Host.cacheParkRefs(parked, s)
 		}
 	}
 	var closes map[int]string
 	if len(closed) > 0 {
-		evs, err := w.a.store.Events(0, func(e state.Event) bool { return noteClosing(e.Verb) })
+		evs, err := w.Host.store.Events(0, func(e state.Event) bool { return noteClosing(e.Verb) })
 		if err != nil {
 			return out // the next poll reads the notes again
 		}
@@ -176,15 +176,15 @@ func noteCloses(evs []state.Event, ids []int, central string) map[int]string {
 // note, settled: its note is no longer among the central instance's open
 // notes (note_list); what closed it is the feed's (read_feed), read only
 // then. An unreachable central instance leaves them parked, said once.
-func (w *watcher) settledCentralParks(ctx context.Context, parked []state.Agent) []settledPark {
+func (w *Watcher) settledCentralParks(ctx context.Context, parked []state.Agent) []settledPark {
 	if len(parked) == 0 {
 		return nil
 	}
 	const key = "park-central"
-	me := state.Party{Name: w.a.cfg.Identity.Person, Host: w.a.cfg.Identity.Host}
-	notes, err := w.a.centralNotes(ctx, me)
+	me := state.Party{Name: w.Host.cfg.Identity.Person, Host: w.Host.cfg.Identity.Host}
+	notes, err := w.Host.centralNotes(ctx, me)
 	if err != nil {
-		w.fail(key, "cannot read the central instance's notes (%s) the parked agents wait on: %v", w.a.cfg.Central.Context, err)
+		w.Fail(key, "cannot read the central instance's notes (%s) the parked agents wait on: %v", w.Host.cfg.Central.Context, err)
 		return nil
 	}
 	open := map[int]bool{}
@@ -198,15 +198,15 @@ func (w *watcher) settledCentralParks(ctx context.Context, parked []state.Agent)
 		}
 	}
 	if len(closed) == 0 {
-		w.clear(key)
+		w.Clear(key)
 		return nil
 	}
 	var f feed.Feed
-	if _, err := w.a.callCentralRaw(ctx, me, nameReadFeed, map[string]any{}, &f); err != nil {
-		w.fail(key, "cannot read the central feed (%s) for what closed the notes the parked agents wait on: %v", w.a.cfg.Central.Context, err)
+	if _, err := w.Host.callCentralRaw(ctx, me, nameReadFeed, map[string]any{}, &f); err != nil {
+		w.Fail(key, "cannot read the central feed (%s) for what closed the notes the parked agents wait on: %v", w.Host.cfg.Central.Context, err)
 		return nil
 	}
-	w.clear(key)
+	w.Clear(key)
 	var evs []state.Event
 	for _, ev := range f.Events {
 		detail, ok := strings.CutPrefix(ev.Line, feed.Line(ev.Kind, ev.Actor, ""))
@@ -214,7 +214,7 @@ func (w *watcher) settledCentralParks(ctx context.Context, parked []state.Agent)
 			evs = append(evs, state.Event{At: ev.Time, Verb: ev.Kind, Detail: detail, By: state.Party{Name: ev.Actor.Name, Person: ev.Actor.Person, Host: ev.Actor.Host}})
 		}
 	}
-	closes := noteCloses(evs, closed, w.a.cfg.Central.Context)
+	closes := noteCloses(evs, closed, w.Host.cfg.Central.Context)
 	var out []settledPark
 	for _, ag := range parked {
 		if _, id, _ := parkCentralNote(ag.Park.On); !open[id] {
@@ -224,24 +224,24 @@ func (w *watcher) settledCentralParks(ctx context.Context, parked []state.Agent)
 	return out
 }
 
-// markResumable marks the parks of st among settled resumable and returns
+// MarkResumable marks the parks of st among settled resumable and returns
 // their watch lines and events: one AGENT RESUMABLE line per park, since
 // the mark is in the state. A park ended or moved meanwhile is left alone.
-func markResumable(st *state.State, settled []settledPark, auto bool, now time.Time) ([]string, []state.Event) {
+func MarkResumable(st *state.State, settled []settledPark, auto bool, now time.Time) ([]string, []state.Event) {
 	var lines []string
 	var evs []state.Event
 	mark := func(name string, p *state.Park, s settledPark, routed bool) {
 		// The wake promises a full claim window, even if the grant was
 		// nearly expired when this poll observed it.
-		if res, ok := parkLease(s.on); ok && strings.Contains(s.answer, "is free and yours:") {
+		if res, ok := parkLease(s.On); ok && strings.Contains(s.Answer, "is free and yours:") {
 			for i := range st.Grants {
-				if g := &st.Grants[i]; g.Resource == res && g.To.Is(s.party) {
+				if g := &st.Grants[i]; g.Resource == res && g.To.Is(s.Party) {
 					g.Reserved = now.UTC()
 					break
 				}
 			}
 		}
-		p.Resumable, p.Answer = now.UTC(), s.answer
+		p.Resumable, p.Answer = now.UTC(), s.Answer
 		next := fmt.Sprintf("beekeeper agents resume %q", name)
 		switch {
 		case !routed:
@@ -250,10 +250,10 @@ func markResumable(st *state.State, settled []settledPark, auto bool, now time.T
 			next = "the watch resumes it with these words"
 		}
 		lines = append(lines, fmt.Sprintf("AGENT RESUMABLE %q: %s; %s", name, truncate(parkedText(p, now), 400), next))
-		evs = append(evs, event(watchParty, resumableEvent, "%s: %s", name, parkedText(p, now)))
+		evs = append(evs, event(WatchParty, resumableEvent, "%s: %s", name, parkedText(p, now)))
 	}
 	unsettled := func(party state.Party, p *state.Park, s settledPark) bool {
-		return party.Is(s.party) && p != nil && p.On == s.on && p.Resumable.IsZero()
+		return party.Is(s.Party) && p != nil && p.On == s.On && p.Resumable.IsZero()
 	}
 	for _, s := range settled {
 		for k := range st.Agents {
@@ -270,7 +270,7 @@ func markResumable(st *state.State, settled []settledPark, auto bool, now time.T
 	return lines, evs
 }
 
-// autoResume runs in the command, which holds what it needs (watchAutoResume).
-func (w *watcher) autoResume(ctx context.Context, st *state.State) {
+// AutoResume runs in the command, which holds what it needs (watchAutoResume).
+func (w *Watcher) AutoResume(ctx context.Context, st *state.State) {
 	watchAutoResume(w, ctx, st)
 }

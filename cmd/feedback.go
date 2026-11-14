@@ -10,17 +10,17 @@ import (
 
 // watchTendFeedback reads the report threads once per feedback.every, in the
 // standby watch only, beside the poll: a slow muster never holds it up.
-func watchTendFeedback(w *watcher, ctx context.Context) {
-	fc := w.a.cfg.Feedback
-	if !w.standby || !fc.Enabled() || w.a.now.Before(w.feedbackNext) || !w.feedbackBusy.CompareAndSwap(false, true) {
+func watchTendFeedback(w *Watcher, ctx context.Context) {
+	fc := w.Host.cfg.Feedback
+	if !w.Standby || !fc.Enabled() || w.Host.now.Before(w.FeedbackNext) || !w.FeedbackBusy.CompareAndSwap(false, true) {
 		return
 	}
-	w.feedbackNext = w.a.now.Add(fc.Every.Duration)
-	quiet := *w.a
+	w.FeedbackNext = w.Host.now.Add(fc.Every.Duration)
+	quiet := *w.Host
 	quiet.out = io.Discard
 	go func() {
-		defer w.feedbackBusy.Store(false)
-		w.readFeedback(ctx, &quiet)
+		defer w.FeedbackBusy.Store(false)
+		w.ReadFeedback(ctx, &quiet)
 	}()
 }
 

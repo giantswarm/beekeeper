@@ -92,7 +92,7 @@ func offRosterParty(st *state.State, q string) (state.Party, bool) {
 		return state.Party{}, false
 	}
 	for _, rl := range roles {
-		if h := rl.get(st).Holder; h != nil && (strings.EqualFold(h.Name, q) || h.Session == q || h.HostSession == q) {
+		if h := rl.Get(st).Holder; h != nil && (strings.EqualFold(h.Name, q) || h.Session == q || h.HostSession == q) {
 			return h.Party, true
 		}
 	}

@@ -12,10 +12,10 @@ import (
 	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
-// tmpfsLargest is read only and runs only above the tmpfs warning threshold.
+// TmpfsLargest is read only and runs only above the tmpfs warning threshold.
 // References associate files with commands and their owning worker sessions;
 // files left behind by exited or unreadable processes have unknown owners.
-func tmpfsLargest(root string, table *proc.Table, owners map[int]string, refs func(int) ([]string, error)) string {
+func TmpfsLargest(root string, table *proc.Table, owners map[int]string, refs func(int) ([]string, error)) string {
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		return "largest entries unavailable"

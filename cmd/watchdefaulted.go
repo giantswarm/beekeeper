@@ -11,15 +11,15 @@ import (
 
 // watchTellDefaulted batches a pass by its current recipients. Each note still
 // follows the usual mailbox, role fallback and delivery-status handling.
-func watchTellDefaulted(w *watcher, ctx context.Context, notes []state.Note) {
-	st, err := w.a.store.Read()
+func watchTellDefaulted(w *Watcher, ctx context.Context, notes []state.Note) {
+	st, err := w.Host.store.Read()
 	if err != nil {
-		w.fail("state-read", "cannot read the state: %v", err)
+		w.Fail("state-read", "cannot read the state: %v", err)
 		return
 	}
 	// Normalize roster names and session IDs to the same recipient.
 	recipient := func(q string) string {
-		if ag, _, err := w.a.wakeParty(st, q); err == nil {
+		if ag, _, err := w.Host.wakeParty(st, q); err == nil {
 			return cmp.Or(wakeID(ag.Party), ag.Name)
 		}
 		return q
@@ -28,7 +28,7 @@ func watchTellDefaulted(w *watcher, ctx context.Context, notes []state.Note) {
 	for _, n := range notes {
 		p := n.By
 		if rl, ok := filedRole(st, p); ok {
-			if h := rl.get(st).Holder; h != nil {
+			if h := rl.Get(st).Holder; h != nil {
 				p = h.Party
 			} else {
 				continue
@@ -53,6 +53,6 @@ func watchTellDefaulted(w *watcher, ctx context.Context, notes []state.Note) {
 		return err
 	}
 	for _, n := range notes {
-		w.a.tellFilerWithWake(ctx, watchParty, &n, defaultedLine(&n), wake)
+		w.Host.tellFilerWithWake(ctx, WatchParty, &n, defaultedLine(&n), wake)
 	}
 }

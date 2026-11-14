@@ -12,9 +12,9 @@ import (
 // relieved is, and a worker is not.
 func TestPastRun(t *testing.T) {
 	now := time.Date(2026, 10, 6, 0, 2, 0, 0, time.UTC)
-	holder := state.Party{Session: "h", Name: guideRole.runName(10)}
-	next := state.Party{Session: "n", Name: guideRole.runName(11)}
-	old := state.Party{Session: "o", Name: guideRole.runName(9)}
+	holder := state.Party{Session: "h", Name: guideRole.RunName(10)}
+	next := state.Party{Session: "n", Name: guideRole.RunName(11)}
+	old := state.Party{Session: "o", Name: guideRole.RunName(9)}
 	worker := state.Party{Session: "w", Name: "Board pull 192"}
 	st := &state.State{Guide: &state.Role{
 		Holder:   &state.Supervisor{Party: holder, Since: now.Add(-time.Hour)},

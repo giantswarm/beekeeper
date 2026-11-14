@@ -14,33 +14,33 @@ type freeMark struct {
 	Freed string    `json:"freed,omitempty"`
 }
 
-// readFreeMark reads when the automatic free ran last and keeps it for the
+// ReadFreeMark reads when the automatic free ran last and keeps it for the
 // TMPFS line.
-func (w *watcher) readFreeMark() freeMark {
+func (w *Watcher) ReadFreeMark() freeMark {
 	var m freeMark
-	if found, _ := w.a.store.ReadFile(freeFile, &m); found {
-		w.lastFree.Store(&m)
+	if found, _ := w.Host.store.ReadFile(freeFile, &m); found {
+		w.LastFree.Store(&m)
 	}
 	return m
 }
 
 // autoFree runs in the command, which holds what it needs (watchAutoFree).
-func (w *watcher) autoFree(now time.Time) {
+func (w *Watcher) autoFree(now time.Time) {
 	watchAutoFree(w, now)
 }
 
-// freeDue runs in the command, which holds what it needs (watchFreeDue).
-func (w *watcher) freeDue(read func() (free.Machine, error), now time.Time, every time.Duration) {
+// FreeDue runs in the command, which holds what it needs (watchFreeDue).
+func (w *Watcher) FreeDue(read func() (free.Machine, error), now time.Time, every time.Duration) {
 	watchFreeDue(w, read, now, every)
 }
 
-// lastFreeNote says, for the TMPFS line, when the automatic free ran last
+// LastFreeNote says, for the TMPFS line, when the automatic free ran last
 // and what it freed.
-func (w *watcher) lastFreeNote() string {
-	if w.a.cfg.Doctor.FreeEvery.Duration <= 0 {
+func (w *Watcher) LastFreeNote() string {
+	if w.Host.cfg.Doctor.FreeEvery.Duration <= 0 {
 		return "the automatic free is off (doctor.freeEvery)"
 	}
-	m := w.lastFree.Load()
+	m := w.LastFree.Load()
 	switch {
 	case m == nil || m.At.IsZero():
 		return "the automatic free has not run yet"

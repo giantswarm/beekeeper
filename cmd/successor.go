@@ -60,28 +60,28 @@ func (a *app) startRun(ctx context.Context, rl role, from, by state.Party, dir s
 		if s, ok := st.BypassStartOf(from); holder && ok {
 			startDir, startModel = s.Dir, s.Model
 		}
-		r := rl.get(st)
-		n := max(rl.lastRun(r), a.titledRun(rl, r.Holder)) + 1
-		to = state.Party{Session: id, HostSession: "local_" + id, Name: rl.runName(n)}
+		r := rl.Get(st)
+		n := max(rl.LastRun(r), a.titledRun(rl, r.Holder)) + 1
+		to = state.Party{Session: id, HostSession: "local_" + id, Name: rl.RunName(n)}
 		if background {
-			to = state.Party{Name: rl.runName(n)}
+			to = state.Party{Name: rl.RunName(n)}
 		}
 		if err := titleTaken(sessions, to.Name, to); err != nil {
 			return nil, err
 		}
-		if r.Run > 0 && r.Holder != nil && rl.runName(r.Run) != from.Name {
-			fromLabel = fmt.Sprintf("%s (%s)", from.Name, rl.runName(r.Run))
+		if r.Run > 0 && r.Holder != nil && rl.RunName(r.Run) != from.Name {
+			fromLabel = fmt.Sprintf("%s (%s)", from.Name, rl.RunName(r.Run))
 		}
 		if !holder {
-			r.Relay = &state.Relay{To: to, At: a.now.UTC(), Expires: a.now.Add(rl.cfg(a.cfg).RelayTTL.Duration).UTC()}
+			r.Relay = &state.Relay{To: to, At: a.now.UTC(), Expires: a.now.Add(rl.Cfg(a.cfg).RelayTTL.Duration).UTC()}
 			r.Run = n
-			rl.set(st, r)
-			msg = fmt.Sprintf("no %s is recorded: %q's `beekeeper %s start` takes the role", rl.name, to.Name, rl.name)
-			return []state.Event{event(by, rl.name+".run", "starting %s: no %s is recorded", to.Name, rl.name)}, nil
+			rl.Set(st, r)
+			msg = fmt.Sprintf("no %s is recorded: %q's `beekeeper %s start` takes the role", rl.Name, to.Name, rl.Name)
+			return []state.Event{event(by, rl.Name+".run", "starting %s: no %s is recorded", to.Name, rl.Name)}, nil
 		}
 		var evs []state.Event
 		var err error
-		msg, evs, err = rl.relay(st, from, to, a.now, rl.cfg(a.cfg).RelayTTL.Duration)
+		msg, evs, err = rl.Relay(st, from, to, a.now, rl.Cfg(a.cfg).RelayTTL.Duration)
 		for i := range evs {
 			evs[i].By = by
 		}
@@ -94,28 +94,28 @@ func (a *app) startRun(ctx context.Context, rl role, from, by state.Party, dir s
 	if holder {
 		rec, _ = claude.ReadRecord(a.cfg, desktopID(from))
 	}
-	model := strings.TrimSpace(rl.cfg(a.cfg).Model)
+	model := strings.TrimSpace(rl.Cfg(a.cfg).Model)
 	if rec != nil {
 		model = cmp.Or(model, rec.Model)
 	}
-	if dir == "" && rl.cfg(a.cfg).Dir == "" {
+	if dir == "" && rl.Cfg(a.cfg).Dir == "" {
 		dir = a.cfg.Agents.Dir
 	}
 	if dir == "" {
-		dir = successorDir(rl.cfg(a.cfg), rec, startDir)
+		dir = successorDir(rl.Cfg(a.cfg), rec, startDir)
 	}
 	if background {
-		sa, err := a.startAgent(ctx, agentStart{by: &by, name: to.Name, role: rl.name, brief: rl.backgroundSuccessorBrief(rl.cfg(a.cfg), to.Name, fromLabel),
-			task: fmt.Sprintf("%s as %s", rl.duty, to.Name), dir: dir, model: cmp.Or(model, startModel), mode: config.ModeBackground})
+		sa, err := a.startAgent(ctx, agentStart{by: &by, name: to.Name, role: rl.Name, brief: rl.BackgroundSuccessorBrief(rl.Cfg(a.cfg), to.Name, fromLabel),
+			task: fmt.Sprintf("%s as %s", rl.Duty, to.Name), dir: dir, model: cmp.Or(model, startModel), mode: config.ModeBackground})
 		if err != nil {
 			a.withdrawRelay(rl, to, by)
 			return state.Party{}, "", fmt.Errorf("starting %q: %w (its relay is withdrawn)", to.Name, err)
 		}
 		named := state.Party{Session: sa.id, Name: to.Name}
 		_ = a.store.Update(func(st *state.State) ([]state.Event, error) {
-			if r := rl.get(st); r.Relay != nil && r.Relay.To.Is(to) {
+			if r := rl.Get(st); r.Relay != nil && r.Relay.To.Is(to) {
 				r.Relay.To = named
-				rl.set(st, r)
+				rl.Set(st, r)
 			}
 			return nil, nil
 		})
@@ -125,8 +125,8 @@ func (a *app) startRun(ctx context.Context, rl role, from, by state.Party, dir s
 	// a desktop turn's does: its role turn soon runs headless and may not
 	// end before the next relay, and the person sees the role's holder only
 	// in the desktop's sidebar.
-	_, err = a.startAgent(ctx, agentStart{id: id, by: &by, name: to.Name, role: rl.name, brief: rl.successorBrief(rl.cfg(a.cfg), to.Name, fromLabel),
-		task: fmt.Sprintf("%s as %s", rl.duty, to.Name), dir: dir, model: model, desktop: true, headless: true})
+	_, err = a.startAgent(ctx, agentStart{id: id, by: &by, name: to.Name, role: rl.Name, brief: rl.SuccessorBrief(rl.Cfg(a.cfg), to.Name, fromLabel),
+		task: fmt.Sprintf("%s as %s", rl.Duty, to.Name), dir: dir, model: model, desktop: true, headless: true})
 	if err != nil {
 		a.withdrawRelay(rl, to, by)
 		return state.Party{}, "", fmt.Errorf("starting %q: %w (its relay is withdrawn)", to.Name, err)
@@ -159,13 +159,13 @@ func successorDir(cfg config.Role, rec *claude.Record, start string) string {
 // withdrawRelay drops rl's relay to to while it is not taken.
 func (a *app) withdrawRelay(rl role, to, by state.Party) {
 	_ = a.store.Update(func(st *state.State) ([]state.Event, error) {
-		r := rl.get(st)
+		r := rl.Get(st)
 		if r.Relay == nil || !r.Relay.To.Is(to) || !r.Relay.Taken.IsZero() {
 			return nil, nil
 		}
 		r.Relay = nil
-		rl.set(st, r)
-		return []state.Event{event(by, rl.name+".relay-cancel", "to %s: its session did not start", to.Name)}, nil
+		rl.Set(st, r)
+		return []state.Event{event(by, rl.Name+".relay-cancel", "to %s: its session did not start", to.Name)}, nil
 	})
 }
 
@@ -176,7 +176,7 @@ func (a *app) titledRun(rl role, h *state.Supervisor) int {
 		return 0
 	}
 	if r, ok := claude.ReadRecord(a.cfg, desktopID(h.Party)); ok {
-		return rl.runOf(r.Title)
+		return rl.RunOf(r.Title)
 	}
 	return 0
 }

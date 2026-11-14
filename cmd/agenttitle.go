@@ -475,8 +475,8 @@ func keepsRole(st *state.State, p state.Party) bool {
 		return true
 	}
 	for _, rl := range roles {
-		if strings.HasPrefix(p.Name, rl.title+" run ") ||
-			slices.ContainsFunc(rl.get(st).Relieved, func(r state.Relief) bool { return r.Party.Is(p) }) {
+		if strings.HasPrefix(p.Name, rl.Title+" run ") ||
+			slices.ContainsFunc(rl.Get(st).Relieved, func(r state.Relief) bool { return r.Party.Is(p) }) {
 			return true
 		}
 	}
@@ -490,7 +490,7 @@ func relieved(st *state.State, p state.Party) bool {
 		return false
 	}
 	return slices.ContainsFunc(roles, func(rl role) bool {
-		r := relievedIn(rl.get(st), p)
+		r := relievedIn(rl.Get(st), p)
 		return r != nil && !r.Taken.IsZero()
 	})
 }
@@ -500,7 +500,7 @@ func relieved(st *state.State, p state.Party) bool {
 // ended with the relay: nothing resumes or reopens it.
 func pastRun(st *state.State, p state.Party, now time.Time) bool {
 	for _, rl := range roles {
-		if rel := rl.get(st).Relay; rel.Open(now) && rel.To.Is(p) {
+		if rel := rl.Get(st).Relay; rel.Open(now) && rel.To.Is(p) {
 			return false
 		}
 	}
@@ -854,7 +854,7 @@ func (a *app) recordDeclines(asked []stewardAnswer) {
 			}
 			st.Declines = slices.DeleteFunc(st.Declines, func(d state.Decline) bool { return d.Host == s.host })
 			st.Declines = append(st.Declines, state.Decline{Host: s.host, At: a.now.UTC(), Why: firstLine(s.answer.Text)})
-			evs = append(evs, event(watchParty, "agents.archive", "steward %s declined to archive: %s; asked for none for %s", s.host, firstLine(s.answer.Text), dur(stewardDeclineFor)))
+			evs = append(evs, event(WatchParty, "agents.archive", "steward %s declined to archive: %s; asked for none for %s", s.host, firstLine(s.answer.Text), dur(stewardDeclineFor)))
 		}
 		return evs, nil
 	})

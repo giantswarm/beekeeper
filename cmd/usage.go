@@ -1188,23 +1188,23 @@ func (a *app) singleProviderUsageHighBlock(ctx context.Context, prov, bucket str
 // watchExecUsageNow gives each provider its own observation time, then validates at
 // completion. A refresh can spend minutes on earlier providers; its scheduling
 // time must not make a newly written Codex event appear to be in the future.
-func watchExecUsageNow(w *watcher, ctx context.Context, file string, u config.Usage) (capacity.UsageReading, error) {
-	started := w.clk().Now()
-	obs := w.usageNow()
-	reader := w.a.snapshotAtNow()
+func watchExecUsageNow(w *Watcher, ctx context.Context, file string, u config.Usage) (capacity.UsageReading, error) {
+	started := w.Clk().Now()
+	obs := w.UsageNow()
+	reader := w.Host.snapshotAtNow()
 	reader.now = obs
 	return reader.resolveReadingAt(ctx, file, u, func() time.Time {
-		if w.clock != nil || w.polls.Load() > 0 || w.a.now.IsZero() {
-			return w.clk().Now()
+		if w.Clock != nil || w.Polls.Load() > 0 || w.Host.now.IsZero() {
+			return w.Clk().Now()
 		}
-		return obs.Add(max(0, w.clk().Now().Sub(started)))
+		return obs.Add(max(0, w.Clk().Now().Sub(started)))
 	})
 }
 
-func watchTellBusyWorkersUsageHigh(w *watcher, ctx context.Context, st *state.State, sessions []*claude.Session, u *capacity.UsageView, ledgerFile string, match func(state.Agent) bool) {
+func watchTellBusyWorkersUsageHigh(w *Watcher, ctx context.Context, st *state.State, sessions []*claude.Session, u *capacity.UsageView, ledgerFile string, match func(state.Agent) bool) {
 	var l usageHighLedger
-	if w.a.store != nil {
-		_, _ = w.a.store.ReadFile(ledgerFile, &l)
+	if w.Host.store != nil {
+		_, _ = w.Host.store.ReadFile(ledgerFile, &l)
 	}
 	var reset time.Time
 	if u.FiveHour != nil {
@@ -1215,7 +1215,7 @@ func watchTellBusyWorkersUsageHigh(w *watcher, ctx context.Context, st *state.St
 	changed := false
 	if newEpisode {
 		l = usageHighLedger{
-			Episode:  w.a.now.UTC().Format(time.RFC3339),
+			Episode:  w.Host.now.UTC().Format(time.RFC3339),
 			ResetsAt: reset,
 			Told:     map[string]string{},
 		}
@@ -1228,8 +1228,8 @@ func watchTellBusyWorkersUsageHigh(w *watcher, ctx context.Context, st *state.St
 		l.Told = map[string]string{}
 	}
 	msg := fmt.Sprintf("USAGE HIGH (%s): finish your current step, commit or save any work in flight, and park with `beekeeper agents park \"5-hour usage window reset\"` (or `--on` your open PR or note) so the 5-hour window can reset.",
-		u.HighFigure(w.a.now))
-	for _, ag := range liveBusyWorkers(st, sessions, w.a.now) {
+		u.HighFigure(w.Host.now))
+	for _, ag := range liveBusyWorkers(st, sessions, w.Host.now) {
 		if match != nil && !match(ag) {
 			continue
 		}
@@ -1237,19 +1237,19 @@ func watchTellBusyWorkersUsageHigh(w *watcher, ctx context.Context, st *state.St
 		if l.Told[key] != "" {
 			continue
 		}
-		quiet := *w.a
+		quiet := *w.Host
 		quiet.out = io.Discard
-		if err := wakeOwner(&quiet, ctx, watchParty, ag.Name, msg, ""); err != nil {
-			w.emit("usage-wake-"+key, "USAGE HIGH WAKE FAILED %q: %v", ag.Name, err)
+		if err := wakeOwner(&quiet, ctx, WatchParty, ag.Name, msg, ""); err != nil {
+			w.Emit("usage-wake-"+key, "USAGE HIGH WAKE FAILED %q: %v", ag.Name, err)
 			continue
 		}
-		w.clear("usage-wake-" + key)
-		l.Told[key] = w.a.now.UTC().Format(time.RFC3339)
+		w.Clear("usage-wake-" + key)
+		l.Told[key] = w.Host.now.UTC().Format(time.RFC3339)
 		changed = true
-		_ = w.a.store.Log(event(watchParty, verbUsageHigh, "%s: told to finish its step and park (%s)", ag.Name, u.HighFigure(w.a.now)))
+		_ = w.Host.store.Log(event(WatchParty, verbUsageHigh, "%s: told to finish its step and park (%s)", ag.Name, u.HighFigure(w.Host.now)))
 	}
-	if changed && w.a.store != nil {
-		_ = w.a.store.WriteFile(ledgerFile, l)
+	if changed && w.Host.store != nil {
+		_ = w.Host.store.WriteFile(ledgerFile, l)
 	}
 }
 

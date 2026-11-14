@@ -8,10 +8,10 @@ import (
 // Uses existing watch helpers so this regression also runs on the base.
 func TestWatchLinesBecomeDurableEvents(t *testing.T) {
 	w, _ := onceWatch(t, nil)
-	w.check("disk", true, "LOW DISK: test writers")
-	w.check("disk", true, "LOW DISK: test writers")
-	w.clear("disk")
-	evs, err := w.a.store.Events(0, nil)
+	w.Check("disk", true, "LOW DISK: test writers")
+	w.Check("disk", true, "LOW DISK: test writers")
+	w.Clear("disk")
+	evs, err := w.Host.store.Events(0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

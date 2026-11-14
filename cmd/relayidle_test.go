@@ -35,18 +35,18 @@ func TestIdleRelayDue(t *testing.T) {
 			}
 			sessions := []*claude.Session{s}
 			q := idleRoleReading(st.GuideRole(), sessions, relayNow, tc.threshold, nil)
-			lines, _ := guideRole.fireRelayDue(st, q, nil, relayNow)
+			lines, _ := guideRole.FireRelayDue(st, q, nil, relayNow)
 			if (len(lines) > 0) != tc.want {
 				t.Fatalf("lines %q, want due %v", lines, tc.want)
 			}
 			if tc.want && !strings.Contains(lines[0], "after an idle hour") {
 				t.Fatal(lines)
 			}
-			if q := idleRoleReading(st.GuideRole(), sessions, relayNow.Add(time.Minute), tc.threshold, nil); tc.want && q.checked {
+			if q := idleRoleReading(st.GuideRole(), sessions, relayNow.Add(time.Minute), tc.threshold, nil); tc.want && q.Checked {
 				t.Fatal("repeated idle due")
 			}
 			s.LastActive = time.Time{}
-			if q := idleRoleReading(state.Role{Holder: st.Guide.Holder}, sessions, relayNow, tc.threshold, nil); q.checked {
+			if q := idleRoleReading(state.Role{Holder: st.Guide.Holder}, sessions, relayNow, tc.threshold, nil); q.Checked {
 				t.Fatal("unknown activity counted as idle")
 			}
 		})
@@ -200,11 +200,11 @@ func TestGuideFeedRelayDueCrossesMidTurnAndRepeats(t *testing.T) {
 	appendRequest(401_000)
 	poll(true)
 	first := a.now
-	a.now = first.Add(relayDueRepeat - time.Second)
+	a.now = first.Add(RelayDueRepeat - time.Second)
 	poll(false)
-	a.now = first.Add(relayDueRepeat)
+	a.now = first.Add(RelayDueRepeat)
 	poll(true)
-	a.now = a.now.Add(relayDueRepeat)
+	a.now = a.now.Add(RelayDueRepeat)
 	poll(true)
 	st, err := a.store.Read()
 	if err != nil {
@@ -219,6 +219,6 @@ func TestGuideFeedRelayDueCrossesMidTurnAndRepeats(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	a.now = a.now.Add(relayDueRepeat)
+	a.now = a.now.Add(RelayDueRepeat)
 	poll(false)
 }

@@ -101,47 +101,47 @@ func TestClaudeLoginUnknownAndExternal(t *testing.T) {
 func TestWatchClaudeLoginCredentialStep(t *testing.T) {
 	path := loginFixture(t)
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
-	w.a.now = time.Now().UTC().Truncate(time.Millisecond)
-	w.a.cfg.Guide.Person = "guide-person"
-	writeLogin(t, path, w.a.now.Add(2*time.Hour), true)
-	w.claudeLogin()
+	w.Host.now = time.Now().UTC().Truncate(time.Millisecond)
+	w.Host.cfg.Guide.Person = "guide-person"
+	writeLogin(t, path, w.Host.now.Add(2*time.Hour), true)
+	w.ClaudeLogin()
 	if !strings.Contains(out.String(), "logged in; access token expires") {
 		t.Fatalf("healthy login absent: %s", out)
 	}
-	writeLogin(t, path, w.a.now.Add(30*time.Minute), false)
-	w.claudeLogin()
-	w.claudeLogin()
-	st, err := w.a.store.Read()
+	writeLogin(t, path, w.Host.now.Add(30*time.Minute), false)
+	w.ClaudeLogin()
+	w.ClaudeLogin()
+	st, err := w.Host.store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(st.Notes) != 1 || st.Notes[0].Kind != noteLogin || st.Notes[0].For != w.a.cfg.Guide.Person || !strings.Contains(st.Notes[0].Text, "browser lease") {
+	if len(st.Notes) != 1 || st.Notes[0].Kind != noteLogin || st.Notes[0].For != w.Host.cfg.Guide.Person || !strings.Contains(st.Notes[0].Text, "browser lease") {
 		t.Fatalf("credential step: %+v", st.Notes)
 	}
 	if strings.Count(out.String(), "CLAUDE CLI LOGIN: expiring") != 1 {
 		t.Fatalf("duplicate warning: %s", out)
 	}
 	// A second watch reuses the same outstanding login note.
-	w2, _, _ := notifyingWatch(t, w.a.cfg.StateDir, false)
-	w2.a.now, w2.a.cfg.Guide.Person = w.a.now, w.a.cfg.Guide.Person
-	w2.claudeLogin()
-	st, _ = w.a.store.Read()
+	w2, _, _ := notifyingWatch(t, w.Host.cfg.StateDir, false)
+	w2.Host.now, w2.Host.cfg.Guide.Person = w.Host.now, w.Host.cfg.Guide.Person
+	w2.ClaudeLogin()
+	st, _ = w.Host.store.Read()
 	if len(st.Notes) != 1 {
 		t.Fatalf("restart duplicated note: %+v", st.Notes)
 	}
-	if err := w.a.claudeLoginCmd().RunE(nil, nil); err == nil {
+	if err := w.Host.claudeLoginCmd().RunE(nil, nil); err == nil {
 		t.Fatal("expiring probe succeeded")
 	}
 	if !strings.Contains(st.Notes[0].Until, "CLAUDE_CONFIG_DIR=") {
 		t.Fatal("probe lost account directory")
 	}
-	writeLogin(t, path, w.a.now.Add(3*time.Hour), true)
-	w.claudeLogin()
+	writeLogin(t, path, w.Host.now.Add(3*time.Hour), true)
+	w.ClaudeLogin()
 	if !strings.Contains(out.String(), "ENDED") {
 		t.Fatalf("warning never ended: %s", out)
 	}
 	// The same status command used by the note's probe succeeds after renewal.
-	if err := w.a.claudeLoginCmd().RunE(nil, nil); err != nil {
+	if err := w.Host.claudeLoginCmd().RunE(nil, nil); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -149,20 +149,20 @@ func TestWatchClaudeLoginCredentialStep(t *testing.T) {
 func TestExpiredClaudeLoginStopsLaunches(t *testing.T) {
 	path := loginFixture(t)
 	w, _, _ := notifyingWatch(t, t.TempDir(), false)
-	w.a.now = time.Now()
-	writeLogin(t, path, w.a.now.Add(-time.Hour), false)
+	w.Host.now = time.Now()
+	writeLogin(t, path, w.Host.now.Add(-time.Hour), false)
 	assert := func(err error) {
 		t.Helper()
 		if err == nil || !strings.Contains(err.Error(), "headless Claude turn refused") {
 			t.Fatalf("expected login refusal, got %v", err)
 		}
 	}
-	_, err := w.a.startAgent(context.Background(), agentStart{})
+	_, err := w.Host.startAgent(context.Background(), agentStart{})
 	assert(err)
-	assert(w.a.resumeTurn(context.Background(), state.Party{}, wakeTarget{}, "task"))
-	assert(w.a.resumeBackground(context.Background(), wakeTarget{}, "task"))
-	assert(w.a.browse(context.Background(), "task", "", "", time.Minute, "", nil, nil))
-	assert(w.launchReport("unused", "unused", "unused", "task"))
+	assert(w.Host.resumeTurn(context.Background(), state.Party{}, wakeTarget{}, "task"))
+	assert(w.Host.resumeBackground(context.Background(), wakeTarget{}, "task"))
+	assert(w.Host.browse(context.Background(), "task", "", "", time.Minute, "", nil, nil))
+	assert(w.LaunchReport("unused", "unused", "unused", "task"))
 }
 
 func TestClaudeLoginUTCExpiryInCET(t *testing.T) {
@@ -183,13 +183,13 @@ func TestClaudeLoginUTCExpiryInCET(t *testing.T) {
 func TestRefreshableClaudeLoginDoesNotFilePersonNote(t *testing.T) {
 	path := loginFixture(t)
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
-	w.a.now = time.Now().UTC().Truncate(time.Millisecond)
-	w.a.cfg.Guide.Person = "guide-person"
+	w.Host.now = time.Now().UTC().Truncate(time.Millisecond)
+	w.Host.cfg.Guide.Person = "guide-person"
 	for _, offset := range []time.Duration{30 * time.Minute, -time.Minute} {
-		writeLogin(t, path, w.a.now.Add(offset), true)
-		w.claudeLogin()
-		w.claudeLogin()
-		st, err := w.a.store.Read()
+		writeLogin(t, path, w.Host.now.Add(offset), true)
+		w.ClaudeLogin()
+		w.ClaudeLogin()
+		st, err := w.Host.store.Read()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -197,7 +197,7 @@ func TestRefreshableClaudeLoginDoesNotFilePersonNote(t *testing.T) {
 			t.Fatalf("routine CLI refresh filed person note: %+v", st.Notes)
 		}
 		// Existing login notes use this command as their completion probe.
-		if err := w.a.claudeLoginCmd().RunE(nil, nil); err != nil {
+		if err := w.Host.claudeLoginCmd().RunE(nil, nil); err != nil {
 			t.Fatalf("refreshable login must clear manual step: %v", err)
 		}
 	}

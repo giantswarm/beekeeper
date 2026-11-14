@@ -290,50 +290,50 @@ func kindSpendKey(kind string, day time.Time) string {
 // watchKindSpending says SPEND <kind> once a day for each kind past its
 // dailySpend: the day's spend so far in the machine's zone. The mark
 // outlives a restarted watch.
-func watchKindSpending(w *watcher, now time.Time) {
-	if !slices.ContainsFunc(w.a.cfg.Agents.Kinds, func(k config.AgentKind) bool { return k.DailySpend > 0 }) {
+func watchKindSpending(w *Watcher, now time.Time) {
+	if !slices.ContainsFunc(w.Host.cfg.Agents.Kinds, func(k config.AgentKind) bool { return k.DailySpend > 0 }) {
 		return
 	}
-	zone, err := reportZone("", w.a.zone)
+	zone, err := reportZone("", w.Host.zone)
 	if err != nil {
 		zone = time.Local
 	}
 	from, _ := kindDayWindow(now, zone)
-	st, err := w.a.store.Peek()
+	st, err := w.Host.store.Peek()
 	if err != nil {
 		return
 	}
-	ts, err := w.a.spendTranscripts(from, now)
-	if w.a.context().Err() != nil {
+	ts, err := w.Host.spendTranscripts(from, now)
+	if w.Host.context().Err() != nil {
 		return
 	}
 	if err != nil {
-		w.fail("kind-spend", "cannot sum the spend per task kind: %v", err)
+		w.Fail("kind-spend", "cannot sum the spend per task kind: %v", err)
 		return
 	}
-	w.clear("kind-spend")
+	w.Clear("kind-spend")
 	today := from.Format(time.DateOnly)
-	w.mu.Lock()
-	for k := range w.reported {
+	w.Mu.Lock()
+	for k := range w.Reported {
 		if strings.HasPrefix(k, kindSpendPrefix) && !strings.HasSuffix(k, " "+today) {
-			delete(w.reported, k)
-			w.dirty = true
+			delete(w.Reported, k)
+			w.Dirty = true
 		}
 	}
-	w.mu.Unlock()
-	for _, d := range kindSpend(w.a.cfg, st, ts, from, now).Kinds {
+	w.Mu.Unlock()
+	for _, d := range kindSpend(w.Host.cfg, st, ts, from, now).Kinds {
 		if d.DailySpend <= 0 || d.USD < d.DailySpend {
 			continue
 		}
 		key := kindSpendKey(d.Kind, from)
-		w.mu.Lock()
-		said := w.reported[key]
+		w.Mu.Lock()
+		said := w.Reported[key]
 		if !said {
-			w.reported[key], w.dirty = true, true
+			w.Reported[key], w.Dirty = true, true
 		}
-		w.mu.Unlock()
+		w.Mu.Unlock()
 		if !said {
-			w.emitNow("spend", "SPEND %s: $%.2f today in %d sessions of %d starts, over agents.kinds dailySpend $%.2f",
+			w.EmitNow("spend", "SPEND %s: $%.2f today in %d sessions of %d starts, over agents.kinds dailySpend $%.2f",
 				d.Kind, d.USD, d.Sessions, d.Starts, d.DailySpend)
 		}
 	}

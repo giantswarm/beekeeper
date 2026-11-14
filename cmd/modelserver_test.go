@@ -56,7 +56,7 @@ func TestModelBreaches(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			got := modelBreaches(tc.models, tc.holders, resources, 12)
+			got := ModelBreaches(tc.models, tc.holders, resources, 12)
 			if len(got) != len(tc.want) {
 				t.Fatalf("breaches %v, want %v", got, tc.want)
 			}
@@ -82,15 +82,15 @@ func TestLabOf(t *testing.T) {
 		"172.21.0.5 agentlab-registry":        "",
 		"127.0.0.1":                           "",
 	} {
-		if got := labOf(machine.HostModel{Client: client}, res); got != want {
+		if got := LabOf(machine.HostModel{Client: client}, res); got != want {
 			t.Errorf("labOf(%q) = %q, want %q", client, got, want)
 		}
 	}
 }
 
 func TestModelServerLine(t *testing.T) {
-	bs := []modelBreach{{Model: machine.HostModel{Name: bigModel, SizeMiB: 1, Client: "c"}, Reason: "r", Unload: true}, {Model: machine.HostModel{Name: "h", SizeMiB: 2}, Reason: "s"}}
-	got := modelServerLine(bs, map[string]error{bigModel: nil})
+	bs := []ModelBreach{{Model: machine.HostModel{Name: bigModel, SizeMiB: 1, Client: "c"}, Reason: "r", Unload: true}, {Model: machine.HostModel{Name: "h", SizeMiB: 2}, Reason: "s"}}
+	got := ModelServerLine(bs, map[string]error{bigModel: nil})
 	if want := "big 1 MiB loaded by c: r; unloaded | h 2 MiB loaded by an unknown client: s"; got != want {
 		t.Errorf("line %q, want %q", got, want)
 	}
@@ -138,7 +138,7 @@ func TestHostModels(t *testing.T) {
 	if err != nil || len(got) != 1 || got[0].Server != machine.Lemonade {
 		t.Errorf("ollama down: %+v, %v", got, err)
 	}
-	if serverURL(cfg(down.URL, lemonade.URL), got[0]) != lemonade.URL {
+	if ServerURL(cfg(down.URL, lemonade.URL), got[0]) != lemonade.URL {
 		t.Error("a Lemonade model is unloaded at ollama's URL")
 	}
 	if _, err := hostModels(context.Background(), cfg(down.URL, "")); err == nil {

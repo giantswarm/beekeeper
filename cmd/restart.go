@@ -140,13 +140,13 @@ func writeRestart(path string, raw []byte) error {
 // newRestartWatch is this process's restart watch over the state
 // directory's request.
 func newRestartWatch(stateDir string) *restartWatch {
-	r := &restartWatch{file: filepath.Join(stateDir, restartFile)}
+	r := &restartWatch{File: filepath.Join(stateDir, restartFile)}
 	if ns, err := strconv.ParseInt(os.Getenv(restartedEnv), 10, 64); err == nil {
-		r.since = time.Unix(0, ns)
+		r.Since = time.Unix(0, ns)
 	} else if s, err := proc.Started(os.Getpid()); err == nil {
-		r.since = s
+		r.Since = s
 	} else {
-		r.since = time.Now()
+		r.Since = time.Now()
 	}
 	return r
 }

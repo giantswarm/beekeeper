@@ -334,20 +334,20 @@ func TestWatchSaysKindSpendOnceADay(t *testing.T) {
 	out := &syncBuffer{}
 	a.out = out
 	w := a.newWatcher(false, false)
-	w.kindSpending(now)
-	w.kindSpending(now.Add(time.Minute))
+	w.KindSpending(now)
+	w.KindSpending(now.Add(time.Minute))
 	if n := strings.Count(out.String(), "SPEND filer: $3.00 today"); n != 1 {
 		t.Fatalf("SPEND said %d times:\n%s", n, out)
 	}
 	if strings.Contains(out.String(), "SPEND meta") {
 		t.Errorf("meta has no dailySpend:\n%s", out)
 	}
-	if !w.reported[kindSpendKey(kindFiler, now.Truncate(24*time.Hour))] {
-		t.Errorf("no mark for the day: %v", w.reported)
+	if !w.Reported[kindSpendKey(kindFiler, now.Truncate(24*time.Hour))] {
+		t.Errorf("no mark for the day: %v", w.Reported)
 	}
 	// The next day forgets the mark of the last.
-	w.kindSpending(now.Add(24 * time.Hour))
-	if w.reported[kindSpendKey(kindFiler, now.Truncate(24*time.Hour))] {
-		t.Errorf("yesterday's mark kept: %v", w.reported)
+	w.KindSpending(now.Add(24 * time.Hour))
+	if w.Reported[kindSpendKey(kindFiler, now.Truncate(24*time.Hour))] {
+		t.Errorf("yesterday's mark kept: %v", w.Reported)
 	}
 }

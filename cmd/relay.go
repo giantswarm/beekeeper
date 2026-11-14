@@ -17,10 +17,10 @@ import (
 
 var (
 	guideRole = role{
-		name: guideName, title: "Guide", inf: guideName, verb: "guides", ing: "guiding", tag: "GUIDE ", duty: "the guide's role", handover: "beekeeper guide handover --prompt",
-		gone: "the standby watch starts its successor, or `beekeeper guide start --new` does now; the successor's `beekeeper guide start` takes the role",
-		get:  (*state.State).GuideRole, set: (*state.State).SetGuideRole,
-		cfg: func(c *config.Config) config.Role { return c.Guide.Role },
+		Name: guideName, Title: "Guide", Inf: guideName, Verb: "guides", Ing: "guiding", Tag: "GUIDE ", Duty: "the guide's role", Handover: "beekeeper guide handover --prompt",
+		Gone: "the standby watch starts its successor, or `beekeeper guide start --new` does now; the successor's `beekeeper guide start` takes the role",
+		Get:  (*state.State).GuideRole, Set: (*state.State).SetGuideRole,
+		Cfg: func(c *config.Config) config.Role { return c.Guide.Role },
 	}
 	roles = []role{guideRole}
 )
@@ -41,19 +41,19 @@ func relievedIn(r state.Role, me state.Party) *state.Relief {
 
 // readHolder reads r's holder the same way.
 func readHolder(r state.Role, sessions []*claude.Session, now time.Time, grace time.Duration) supervision {
-	v := supervision{sup: r.Holder}
-	if v.sup == nil {
+	v := supervision{Sup: r.Holder}
+	if v.Sup == nil {
 		return v
 	}
-	if _, v.live = claude.Live(sessions, v.sup.Party); v.live {
+	if _, v.Live = claude.Live(sessions, v.Sup.Party); v.Live {
 		return v
 	}
-	v.gone = now
-	if c := r.CLI; c.Of(v.sup) && !c.Gone.IsZero() {
-		v.gone = c.Gone
+	v.Gone = now
+	if c := r.CLI; c.Of(v.Sup) && !c.Gone.IsZero() {
+		v.Gone = c.Gone
 	}
-	if until := v.gone.Add(grace); now.Before(until) {
-		v.until = until
+	if until := v.Gone.Add(grace); now.Before(until) {
+		v.Until = until
 	}
 	return v
 }
@@ -73,8 +73,8 @@ func renameHolder(sup *state.Supervisor, sessions []*claude.Session) bool {
 		return false
 	}
 	for _, title := range []string{"Guide", "Supervisor"} {
-		rl := role{title: title}
-		if rl.runOf(sup.Name) > 0 && rl.runOf(s.Name) == 0 {
+		rl := role{Title: title}
+		if rl.RunOf(sup.Name) > 0 && rl.RunOf(s.Name) == 0 {
 			return false
 		}
 	}
@@ -85,7 +85,7 @@ func renameHolder(sup *state.Supervisor, sessions []*claude.Session) bool {
 // roleContext is the same for r's holder.
 func roleContext(r state.Role, sessions []*claude.Session, now time.Time, relayAt config.Tokens, said relayDues) int64 {
 	sup := r.Holder
-	if sup == nil || r.Relay.Open(now) || said.said(r, relayAt, now) {
+	if sup == nil || r.Relay.Open(now) || said.Said(r, relayAt, now) {
 		return 0
 	}
 	if c := sessionContext(sessions, sup.Party); c >= int64(relayAt) {
@@ -111,8 +111,8 @@ func transcriptContext(s *claude.Session) int64 { return claude.Context(s.Transc
 // idleRoleReading recommends a fresh run before a new feed line rewarms an
 // hour-old context. An unknown activity time is no evidence of an idle hour.
 func idleRoleReading(r state.Role, sessions []*claude.Session, now time.Time, relayAt config.Tokens, said relayDues) quietness {
-	q := quietness{relayAt: relayAt}
-	if r.Holder == nil || r.Relay.Open(now) || said.said(r, relayAt, now) {
+	q := quietness{RelayAt: relayAt}
+	if r.Holder == nil || r.Relay.Open(now) || said.Said(r, relayAt, now) {
 		return q
 	}
 	s, live := claude.Live(sessions, r.Holder.Party)
@@ -126,8 +126,8 @@ func idleRoleReading(r state.Role, sessions []*claude.Session, now time.Time, re
 	if last.IsZero() || now.Sub(last) < time.Hour {
 		return q
 	}
-	q.context = transcriptContext(s)
-	q.checked = q.context > int64(relayAt)/2
-	q.idle = q.checked
+	q.Context = transcriptContext(s)
+	q.Checked = q.Context > int64(relayAt)/2
+	q.Idle = q.Checked
 	return q
 }

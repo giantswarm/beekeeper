@@ -21,11 +21,11 @@ const feedbackEmoji = "eyes"
 
 // recordReportThread keeps the Slack thread of the report r posted, which
 // the feedback watch reads; a post whose result names no thread is said.
-func (w *watcher) recordReportThread(r state.Report) {
-	if !w.a.cfg.Feedback.Enabled() {
+func (w *Watcher) recordReportThread(r state.Report) {
+	if !w.Host.cfg.Feedback.Enabled() {
 		return
 	}
-	path := transcriptOf(w.a.cfg, r.Session)
+	path := transcriptOf(w.Host.cfg, r.Session)
 	if path == "" {
 		return
 	}
@@ -35,30 +35,30 @@ func (w *watcher) recordReportThread(r state.Report) {
 	}
 	p, err := feedback.ParsePost(text)
 	if err != nil {
-		w.emitNow("feedback", "FEEDBACK %s: no thread to read: %v", r.Name, err)
+		w.EmitNow("feedback", "FEEDBACK %s: no thread to read: %v", r.Name, err)
 		return
 	}
-	_ = w.a.store.Update(func(st *state.State) ([]state.Event, error) {
+	_ = w.Host.store.Update(func(st *state.State) ([]state.Event, error) {
 		if slices.ContainsFunc(st.ReportThreads, func(t state.ReportThread) bool { return t.Channel == p.Channel && t.TS == p.TS }) {
 			return nil, nil
 		}
-		st.ReportThreads = append(st.ReportThreads, state.ReportThread{Report: r.Name, Channel: p.Channel, TS: p.TS, Posted: w.a.now.UTC()})
+		st.ReportThreads = append(st.ReportThreads, state.ReportThread{Report: r.Name, Channel: p.Channel, TS: p.TS, Posted: w.Host.now.UTC()})
 		return nil, nil
 	})
 }
 
 // tendFeedback runs in the command, which holds what it needs (watchTendFeedback).
-func (w *watcher) tendFeedback(ctx context.Context) {
+func (w *Watcher) tendFeedback(ctx context.Context) {
 	watchTendFeedback(w, ctx)
 }
 
-// readFeedback delivers the replies of each report's author in its thread
+// ReadFeedback delivers the replies of each report's author in its thread
 // that came since the last delivered one, oldest first: to the agent a
 // reply names, else to the guide. A delivered reply gets the
 // feedbackEmoji reaction; one not delivered is read again next time.
 // Threads older than feedback.window are dropped. It runs beside the poll on
 // a, the watch's app as of its start with its output discarded.
-func (w *watcher) readFeedback(ctx context.Context, a *app) {
+func (w *Watcher) ReadFeedback(ctx context.Context, a *app) {
 	fc := a.cfg.Feedback
 	st, err := a.store.Peek()
 	if err != nil {
@@ -95,7 +95,7 @@ func (w *watcher) readFeedback(ctx context.Context, a *app) {
 			markFeedback(a.store, th, seen)
 		}
 	}
-	w.check("feedback", unreadable != nil, "FEEDBACK UNREADABLE %s: %s", fc.Context, unreadableReason(unreadable))
+	w.Check("feedback", unreadable != nil, "FEEDBACK UNREADABLE %s: %s", fc.Context, unreadableReason(unreadable))
 	if slices.ContainsFunc(st.ReportThreads, func(t state.ReportThread) bool { return t.Posted.Before(since) }) {
 		_ = a.store.Update(func(st *state.State) ([]state.Event, error) {
 			st.ReportThreads = slices.DeleteFunc(st.ReportThreads, func(t state.ReportThread) bool { return t.Posted.Before(since) })
@@ -105,7 +105,7 @@ func (w *watcher) readFeedback(ctx context.Context, a *app) {
 }
 
 // deliverFeedback delivers reply r on thread th and reports whether it was.
-func (w *watcher) deliverFeedback(ctx context.Context, a *app, c *central.Client, th state.ReportThread, r feedback.Message) bool {
+func (w *Watcher) deliverFeedback(ctx context.Context, a *app, c *central.Client, th state.ReportThread, r feedback.Message) bool {
 	st, err := a.store.Peek()
 	if err != nil {
 		return false
@@ -119,19 +119,19 @@ func (w *watcher) deliverFeedback(ctx context.Context, a *app, c *central.Client
 	if to == "" {
 		g := st.GuideRole().Holder
 		if g == nil {
-			w.emitNow("feedback", "FEEDBACK on %s waits: it names no agent and no guide holds the role to deliver it to", th.Report)
+			w.EmitNow("feedback", "FEEDBACK on %s waits: it names no agent and no guide holds the role to deliver it to", th.Report)
 			return false
 		}
 		to, label = g.Session, guideRoleAlias
 	}
 	person := a.cfg.Reporter.Person
 	body := fmt.Sprintf("Feedback from %s in Slack, a reply to the status report %s: %s", person, th.Report, msg)
-	deliver := w.deliver
+	deliver := w.Deliver
 	if deliver == nil {
 		deliver = func(ctx context.Context, q, msg string) error { return a.wakeAgent(ctx, feedbackParty, q, msg, "") }
 	}
 	if err := deliver(ctx, to, body); err != nil {
-		w.emitNow("feedback", "FEEDBACK on %s not delivered to %s, read again next time: %v", th.Report, label, err)
+		w.EmitNow("feedback", "FEEDBACK on %s not delivered to %s, read again next time: %v", th.Report, label, err)
 		return false
 	}
 	_ = a.store.Log(event(feedbackParty, "feedback.delivered", "%s: a reply of %s to %s", label, person, th.Report))
@@ -139,7 +139,7 @@ func (w *watcher) deliverFeedback(ctx context.Context, a *app, c *central.Client
 	if _, err := c.Call(ctx, "add_reaction", map[string]any{"channel_id": th.Channel, "message_ts": r.TS, "emoji": feedbackEmoji}, nil); err != nil {
 		line += fmt.Sprintf(" (no :%s: reaction: %s)", feedbackEmoji, unreadableReason(err))
 	}
-	w.emitNow("feedback", "%s", line)
+	w.EmitNow("feedback", "%s", line)
 	return true
 }
 

@@ -228,7 +228,7 @@ func TestTranscriptsMultiHarnessAccessGrantAndAskUserQuestion(t *testing.T) {
 		t.Fatalf("worker saw %d transcripts, want 2 (same repo only): %+v", len(workerMetas), workerMetas)
 	}
 	for _, m := range workerMetas {
-		if m.Repo != sshTestRepository || m.Role == guideRole.name {
+		if m.Repo != sshTestRepository || m.Role == guideRole.Name {
 			t.Fatalf("worker saw unauthorized transcript: %+v", m)
 		}
 	}
@@ -409,7 +409,7 @@ func TestTranscriptsUnknownHarnessHasNoGuideAccess(t *testing.T) {
 	if caller.IsGuide || caller.Role != workerRole {
 		t.Fatalf("unregistered worker received guide access: %+v", caller)
 	}
-	if transcripts.Allowed(caller, transcripts.Meta{ID: transcriptTestGuideSession, Role: guideRole.name}, nil, a.now) {
+	if transcripts.Allowed(caller, transcripts.Meta{ID: transcriptTestGuideSession, Role: guideRole.Name}, nil, a.now) {
 		t.Fatal("unregistered worker can read guide transcript")
 	}
 	st.Guide = &state.Role{Holder: &state.Supervisor{Party: state.Party{Session: session}}}

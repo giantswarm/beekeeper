@@ -25,12 +25,12 @@ func TestReviewParksRetainEachPullRequest(t *testing.T) {
 	parkReviewHead = func(string) (string, string) { return head, parkVerificationUnavailable }
 	me := state.Party{Name: agentOne}
 	for _, ref := range []string{refOne, refTwo, refOne} {
-		if _, err := w.a.park(me, ref, deskReviewWait); err != nil {
+		if _, err := w.Host.park(me, ref, deskReviewWait); err != nil {
 			t.Fatal(err)
 		}
 		head = loopFixed
 	}
-	st, err := w.a.store.Read()
+	st, err := w.Host.store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,10 +45,10 @@ func TestReviewParksRetainEachPullRequest(t *testing.T) {
 	}
 	// A plain wait cannot erase either independently proven request.
 	parkReviewHead = func(string) (string, string) { return "", parkVerificationUnavailable }
-	if _, err := w.a.park(me, "#3", "answer"); err != nil {
+	if _, err := w.Host.park(me, "#3", "answer"); err != nil {
 		t.Fatal(err)
 	}
-	st, _ = w.a.store.Read()
+	st, _ = w.Host.store.Read()
 	if len(st.ReviewParks) != 2 {
 		t.Fatalf("plain wait erased review requests: %+v", st.ReviewParks)
 	}
@@ -131,13 +131,13 @@ func TestReviewParkPostMergeWorkStaysWithItsPullRequest(t *testing.T) {
 	t.Cleanup(func() { parkReviewHead = was })
 	parkReviewHead = func(string) (string, string) { return loopHead, parkVerificationUnavailable }
 	me := state.Party{Name: agentOne}
-	if _, err := w.a.park(me, refOne, deskReviewWait, "release first PR"); err != nil {
+	if _, err := w.Host.park(me, refOne, deskReviewWait, "release first PR"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := w.a.park(me, refTwo, deskReviewWait); err != nil {
+	if _, err := w.Host.park(me, refTwo, deskReviewWait); err != nil {
 		t.Fatal(err)
 	}
-	st, _ := w.a.store.Read()
+	st, _ := w.Host.store.Read()
 	first, _ := st.ReviewParkFor(refOne)
 	second, _ := st.ReviewParkFor(refTwo)
 	if first.PostMerge == nil || *first.PostMerge != "release first PR" || second.PostMerge == nil || *second.PostMerge != "" {

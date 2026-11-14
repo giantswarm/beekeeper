@@ -11,20 +11,20 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
-// dueAgent is a registered agent whose hand-over is due; parked when its
+// DueAgent is a registered agent whose hand-over is due; parked when its
 // CLI does not run. held is why it is held instead of due (its task's last
 // step, "" when due), until when; was says how long a hand-over due after
 // a hold was held.
-type dueAgent struct {
-	agent   state.Agent
-	context int64
-	parked  bool
-	held    string
-	until   time.Time
-	was     string
+type DueAgent struct {
+	Agent   state.Agent
+	Context int64
+	Parked  bool
+	Held    string
+	Until   time.Time
+	Was     string
 }
 
-// handoversDue are the registered agents whose context reached relayAt, at a
+// HandoversDue are the registered agents whose context reached relayAt, at a
 // quiet moment: no tool command of their own running and no gated merge of
 // their own in flight. An agent with a task whose CLI no longer runs (its
 // headless turn ended, waiting on a grant or a person) is due too, with its
@@ -37,10 +37,10 @@ type dueAgent struct {
 // for cfg.LastStepGrace from the step's evidence, unless its context reached
 // cfg.LastStepCeiling: its report is expected before a hand-over would
 // pay. contextOf gets a nil session for an agent whose CLI does not run.
-func handoversDue(st *state.State, sessions []*claude.Session, cfg config.Agents, now time.Time, said func(state.Party) bool,
+func HandoversDue(st *state.State, sessions []*claude.Session, cfg config.Agents, now time.Time, said func(state.Party) bool,
 	contextOf func(state.Agent, *claude.Session) int64, alive func(int) bool,
-) []dueAgent {
-	var out []dueAgent
+) []DueAgent {
+	var out []DueAgent
 	for _, ag := range st.Agents {
 		if said(ag.Party) || ag.Done || keepsRole(st, ag.Party) || mergeInFlight(st, ag.Party, alive) {
 			continue
@@ -56,16 +56,16 @@ func handoversDue(st *state.State, sessions []*claude.Session, cfg config.Agents
 		if c < int64(cfg.RelayAt) {
 			continue
 		}
-		d := dueAgent{agent: ag, context: c, parked: !live}
+		d := DueAgent{Agent: ag, Context: c, Parked: !live}
 		if why, since, ok := lastStepOf(st, ag.Party); ok {
 			until := since.Add(cfg.LastStepGrace.Duration)
 			switch {
 			case now.Before(until) && c < int64(cfg.LastStepCeiling):
-				d.held, d.until = why, until
+				d.Held, d.Until = why, until
 			case now.Before(until):
-				d.was = fmt.Sprintf("its last step (%s) holds no hand-over past %s", why, tokensText(int64(cfg.LastStepCeiling)))
+				d.Was = fmt.Sprintf("its last step (%s) holds no hand-over past %s", why, tokensText(int64(cfg.LastStepCeiling)))
 			default:
-				d.was = fmt.Sprintf("held %s for its last step (%s)", dur(cfg.LastStepGrace.Duration), why)
+				d.Was = fmt.Sprintf("held %s for its last step (%s)", dur(cfg.LastStepGrace.Duration), why)
 			}
 		}
 		out = append(out, d)
@@ -97,35 +97,35 @@ func lastStepOf(st *state.State, p state.Party) (why string, since time.Time, ok
 	return why, since, ok
 }
 
-// handoversDue says HANDOVER DUE once for each agent handoversDue finds,
+// HandoversDue says HANDOVER DUE once for each agent handoversDue finds,
 // and HANDOVER HELD once for an agent it holds in its last step; the
 // watch's mark keeps both said across the watch's restarts.
-func (w *watcher) handoversDue(st *state.State, sessions []*claude.Session) {
+func (w *Watcher) HandoversDue(st *state.State, sessions []*claude.Session) {
 	key := func(p state.Party) string { return "handover " + p.Session }
-	said := func(p state.Party) bool { return w.reported[key(p)] }
+	said := func(p state.Party) bool { return w.Reported[key(p)] }
 	contextOf := func(ag state.Agent, s *claude.Session) int64 {
 		if s == nil {
-			s = &claude.Session{Transcript: transcriptOf(w.a.cfg, ag.Session)}
+			s = &claude.Session{Transcript: transcriptOf(w.Host.cfg, ag.Session)}
 		}
 		return transcriptContext(s)
 	}
-	for _, d := range handoversDue(st, sessions, w.a.cfg.Agents, w.a.now, said, contextOf, proc.Alive) {
-		if d.held != "" {
-			if k := "handover-held " + d.agent.Session; !w.reported[k] {
-				w.reported[k], w.dirty = true, true
-				w.emitNow("handover", "HANDOVER HELD %q at %s: last step, report expected (%s); due at %s or at %s",
-					d.agent.Name, tokensText(d.context), d.held, d.until.Local().Format("15:04"), tokensText(int64(w.a.cfg.Agents.LastStepCeiling)))
+	for _, d := range HandoversDue(st, sessions, w.Host.cfg.Agents, w.Host.now, said, contextOf, proc.Alive) {
+		if d.Held != "" {
+			if k := "handover-held " + d.Agent.Session; !w.Reported[k] {
+				w.Reported[k], w.Dirty = true, true
+				w.EmitNow("handover", "HANDOVER HELD %q at %s: last step, report expected (%s); due at %s or at %s",
+					d.Agent.Name, tokensText(d.Context), d.Held, d.Until.Local().Format("15:04"), tokensText(int64(w.Host.cfg.Agents.LastStepCeiling)))
 			}
 			continue
 		}
-		w.reported[key(d.agent.Party)], w.dirty = true, true
+		w.Reported[key(d.Agent.Party)], w.Dirty = true, true
 		parked, was := "", ""
-		if d.parked {
+		if d.Parked {
 			parked = " (its CLI does not run: the hand-over resumes it headless for its note)"
 		}
-		if d.was != "" {
-			was = ", " + d.was
+		if d.Was != "" {
+			was = ", " + d.Was
 		}
-		w.emitNow("handover", "HANDOVER DUE %q at %s%s%s: beekeeper agents handover %q", d.agent.Name, tokensText(d.context), parked, was, d.agent.Name)
+		w.EmitNow("handover", "HANDOVER DUE %q at %s%s%s: beekeeper agents handover %q", d.Agent.Name, tokensText(d.Context), parked, was, d.Agent.Name)
 	}
 }

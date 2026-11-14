@@ -47,11 +47,11 @@ func TestWatchResolverDiscrimination(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w, out := onceWatch(t, nil)
-			w.resolverState.resolver = &tc.resolver
+			w.ResolverState.Resolver = &tc.resolver
 			// Independent readers arrive concurrently, as in a running watch.
 			var wg sync.WaitGroup
 			for _, line := range []string{"ALERTS fixture unreachable: timed out", "PAGERDUTY unreachable: timed out", "GitHub budget unknown: timed out"} {
-				wg.Go(func() { w.emitNow("fixture", "%s", line) })
+				wg.Go(func() { w.EmitNow("fixture", "%s", line) })
 			}
 			wg.Wait()
 			got := out.String()
@@ -63,8 +63,8 @@ func TestWatchResolverDiscrimination(t *testing.T) {
 			}
 			// A new interval probes again instead of retaining a stale diagnosis.
 			tc.resolver.stubOK = true
-			w.resolverState.checked = time.Now().Add(-time.Minute)
-			w.emitNow("fixture", "ALERTS fixture unreachable: service down")
+			w.ResolverState.Checked = time.Now().Add(-time.Minute)
+			w.EmitNow("fixture", "ALERTS fixture unreachable: service down")
 			if !strings.Contains(out.String(), "ALERTS fixture unreachable: service down") {
 				t.Fatal("healthy DNS still suppressed a target failure")
 			}
@@ -75,8 +75,8 @@ func TestWatchResolverDiscrimination(t *testing.T) {
 func TestWatchResolverHealthyStubKeepsTargetFailure(t *testing.T) {
 	w, out := onceWatch(t, nil)
 	f := &fakeWatchResolver{stubOK: true, upstreamOK: true}
-	w.resolverState.resolver = f
-	w.emitNow("alerts", "ALERTS fixture unreachable: service down")
+	w.ResolverState.Resolver = f
+	w.EmitNow("alerts", "ALERTS fixture unreachable: service down")
 	if !strings.Contains(out.String(), "ALERTS fixture unreachable: service down") || f.resets != 0 || f.upstreamReads != 0 {
 		t.Fatalf("output %q, resolver %+v", out.String(), f)
 	}
@@ -85,8 +85,8 @@ func TestWatchResolverHealthyStubKeepsTargetFailure(t *testing.T) {
 func TestWatchResolverLeavesUnrelatedEventsAlone(t *testing.T) {
 	w, out := onceWatch(t, nil)
 	f := &fakeWatchResolver{}
-	w.resolverState.resolver = f
-	w.emitNow("report", "WORKER REPORT: service unreachable, i/o timeout")
+	w.ResolverState.Resolver = f
+	w.EmitNow("report", "WORKER REPORT: service unreachable, i/o timeout")
 	if !strings.Contains(out.String(), "WORKER REPORT:") || f.stubReads != 0 {
 		t.Fatalf("unrelated event probed DNS: %q", out.String())
 	}

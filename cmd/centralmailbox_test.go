@@ -88,24 +88,24 @@ func slackReply(t *testing.T, seq int64, to, text string) mailbox.Delivery {
 // mailboxWatch is a standby watch on host desk whose central instance is
 // the stand-in mb behind a test muster; sent collects the deliveries, a
 // target in refuse does not take them.
-func mailboxWatch(t *testing.T, mb *mailboxStandIn, refuse ...string) (*watcher, *[]string, func() string) {
+func mailboxWatch(t *testing.T, mb *mailboxStandIn, refuse ...string) (*Watcher, *[]string, func() string) {
 	t.Helper()
 	w, sent, out, _ := mailboxWatchVia(t, mb, refuse...)
 	return w, sent, out
 }
 
 // mailboxWatchVia is mailboxWatch with its muster.
-func mailboxWatchVia(t *testing.T, mb *mailboxStandIn, refuse ...string) (*watcher, *[]string, func() string, *centraltest.Muster) {
+func mailboxWatchVia(t *testing.T, mb *mailboxStandIn, refuse ...string) (*Watcher, *[]string, func() string, *centraltest.Muster) {
 	t.Helper()
 	w, _, out := notifyingWatch(t, t.TempDir(), true)
-	w.notifier = nil
+	w.Notifier = nil
 	m := centraltest.New(t, mb.url(t), mailServer)
 	bin, _ := centraltest.Binary(t, m.URL, "token")
-	w.a.cfg.Central.Context, w.a.cfg.Central.Server = lab, mailServer
-	w.a.cfg.Central.Muster, w.a.cfg.Central.Timeout.Duration = bin, 10*time.Second
-	w.a.cfg.Identity.Person, w.a.cfg.Identity.Host = "Ada@example.com", mailHost
+	w.Host.cfg.Central.Context, w.Host.cfg.Central.Server = lab, mailServer
+	w.Host.cfg.Central.Muster, w.Host.cfg.Central.Timeout.Duration = bin, 10*time.Second
+	w.Host.cfg.Identity.Person, w.Host.cfg.Identity.Host = "Ada@example.com", mailHost
 	var sent []string
-	w.deliver = func(_ context.Context, q, msg string) error {
+	w.Deliver = func(_ context.Context, q, msg string) error {
 		if slices.Contains(refuse, q) {
 			return errors.New(q + " has no running CLI")
 		}
@@ -125,7 +125,7 @@ func TestMailboxDeliversToTheMachinesAgents(t *testing.T) {
 		slackReply(t, 4, "local:DESK/Guide", "and go on"),
 	}
 	w, sent, out := mailboxWatch(t, mb)
-	if w.drainMailbox(context.Background()) {
+	if w.DrainMailbox(context.Background()) {
 		t.Error("drain says a message waits")
 	}
 	want := []string{
@@ -144,7 +144,7 @@ func TestMailboxDeliversToTheMachinesAgents(t *testing.T) {
 		}
 	}
 	*sent = nil
-	if w.drainMailbox(context.Background()); len(*sent) != 0 {
+	if w.DrainMailbox(context.Background()); len(*sent) != 0 {
 		t.Errorf("delivered again: %v", *sent)
 	}
 }
@@ -157,7 +157,7 @@ func TestMailboxKeepsWhatItsAgentDoesNotTake(t *testing.T) {
 		slackReply(t, 3, "local:desk/Guide", "second"),
 	}
 	w, sent, out := mailboxWatch(t, mb, "Guide")
-	if !w.drainMailbox(context.Background()) {
+	if !w.DrainMailbox(context.Background()) {
 		t.Error("drain says nothing waits")
 	}
 	if len(*sent) != 1 || !strings.HasPrefix((*sent)[0], "Worker <- ") || !slices.Equal(mb.acked, []int64{2}) {
@@ -167,12 +167,12 @@ func TestMailboxKeepsWhatItsAgentDoesNotTake(t *testing.T) {
 		t.Errorf("%d waits lines, want one, the first message's:\n%s", n, out())
 	}
 	// Once the guide takes them, both arrive in their order.
-	w.deliver = func(_ context.Context, q, msg string) error {
+	w.Deliver = func(_ context.Context, q, msg string) error {
 		*sent = append(*sent, q+" <- "+firstLine(msg))
 		return nil
 	}
 	*sent = nil
-	if w.drainMailbox(context.Background()) {
+	if w.DrainMailbox(context.Background()) {
 		t.Error("drain says a message still waits")
 	}
 	if strings.Join(*sent, "|") != "Guide <- Message from ada@example.com via slack (slack-D1-1): first|Guide <- Message from ada@example.com via slack (slack-D1-3): second" {
@@ -187,7 +187,7 @@ func TestConverseSaysItAsTheCallingAgent(t *testing.T) {
 	mb := &mailboxStandIn{}
 	w, _, _ := mailboxWatch(t, mb)
 	var out strings.Builder
-	a := *w.a
+	a := *w.Host
 	a.out, a.as = &out, mailGuide
 	if err := a.converse("which one, 1 or 2?"); err != nil {
 		t.Fatal(err)
@@ -204,9 +204,9 @@ func TestConverseSaysItAsTheCallingAgent(t *testing.T) {
 func TestMailboxWatchDrainsOnEachUpdate(t *testing.T) {
 	mb := &mailboxStandIn{queue: []mailbox.Delivery{slackReply(t, 1, "local:desk/Guide", "first")}}
 	w, _, out, m := mailboxWatchVia(t, mb)
-	w.a.cfg.Watch.Interval.Duration = time.Hour
+	w.Host.cfg.Watch.Interval.Duration = time.Hour
 	delivered := make(chan string, 10)
-	w.deliver = func(_ context.Context, _, msg string) error {
+	w.Deliver = func(_ context.Context, _, msg string) error {
 		delivered <- firstLine(msg)
 		return nil
 	}
@@ -225,7 +225,7 @@ func TestMailboxWatchDrainsOnEachUpdate(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		w.watchMailbox(ctx)
+		w.WatchMailbox(ctx)
 	}()
 	// The subscription's acknowledgement drains what waited before it.
 	expect(": first")
@@ -249,13 +249,13 @@ func TestMailboxDrainRetriesFailedAcknowledgement(t *testing.T) {
 		ackFailures: 1,
 	}
 	w, sent, _ := mailboxWatch(t, mb)
-	if !w.drainMailbox(context.Background()) {
+	if !w.DrainMailbox(context.Background()) {
 		t.Error("drain says no work remains after acknowledgement failed")
 	}
 	if len(mb.acked) != 0 {
 		t.Errorf("failed acknowledgement removed the message: %v", mb.acked)
 	}
-	if w.drainMailbox(context.Background()) {
+	if w.DrainMailbox(context.Background()) {
 		t.Error("drain says work remains after acknowledgement succeeded")
 	}
 	if len(*sent) != 2 || !slices.Equal(mb.acked, []int64{1}) {
@@ -267,9 +267,9 @@ func TestMailboxDrainRetriesFailedAcknowledgement(t *testing.T) {
 func TestMailboxWatchRetriesFailedAcknowledgement(t *testing.T) {
 	mb := &mailboxStandIn{ackFailures: 1}
 	w, _, _, m := mailboxWatchVia(t, mb)
-	w.a.cfg.Watch.Interval.Duration = 20 * time.Millisecond
+	w.Host.cfg.Watch.Interval.Duration = 20 * time.Millisecond
 	delivered := make(chan string, 10)
-	w.deliver = func(_ context.Context, _, msg string) error {
+	w.Deliver = func(_ context.Context, _, msg string) error {
 		delivered <- msg
 		return nil
 	}
@@ -277,7 +277,7 @@ func TestMailboxWatchRetriesFailedAcknowledgement(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		w.watchMailbox(ctx)
+		w.WatchMailbox(ctx)
 	}()
 	t.Cleanup(func() {
 		cancel()
@@ -339,7 +339,7 @@ func TestMailboxWatchRetriesFailedAcknowledgement(t *testing.T) {
 	if len(delivered) != 0 {
 		t.Fatal("message delivered again after acknowledgement succeeded")
 	}
-	if w.drainMailbox(context.Background()) {
+	if w.DrainMailbox(context.Background()) {
 		t.Error("drain says work remains after acknowledgement succeeded")
 	}
 }
@@ -376,13 +376,13 @@ func TestMailboxNoteAnswerReachesTheRolesHolderNow(t *testing.T) {
 	)
 	mb := &mailboxStandIn{queue: []mailbox.Delivery{noteAnswerMail(13, "note-10-3dbd89ea0570", "local:"+mailHost+"/"+ended, answer)}}
 	w, sent, out := mailboxWatch(t, mb)
-	if err := w.a.store.Update(func(st *state.State) ([]state.Event, error) {
+	if err := w.Host.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Guide = &state.Role{Holder: &state.Supervisor{Party: state.Party{Session: "s269", Name: current}, Since: relayNow}}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if w.drainMailbox(context.Background()) {
+	if w.DrainMailbox(context.Background()) {
 		t.Error("drain says a message waits")
 	}
 	if want := "s269 <- Message from beekeeper serve (note-10-3dbd89ea0570): " + answer; len(*sent) != 1 || (*sent)[0] != want {
@@ -395,7 +395,7 @@ func TestMailboxNoteAnswerReachesTheRolesHolderNow(t *testing.T) {
 		t.Errorf("no %q in:\n%s", line, out())
 	}
 
-	if err := w.a.store.Update(func(st *state.State) ([]state.Event, error) {
+	if err := w.Host.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Guide = nil
 		return nil, nil
 	}); err != nil {
@@ -403,17 +403,17 @@ func TestMailboxNoteAnswerReachesTheRolesHolderNow(t *testing.T) {
 	}
 	*sent = nil
 	mb.queue = append(mb.queue, noteAnswerMail(14, "note-4-0123456789ab", "local:"+mailHost+"/"+ended, "NOTE ANSWERED #4 by ada@example.com: B"))
-	if w.drainMailbox(context.Background()) {
+	if w.DrainMailbox(context.Background()) {
 		t.Error("drain says a message waits: the role's next start takes it")
 	}
 	if len(*sent) != 0 || !slices.Equal(mb.acked, []int64{13, 14}) {
 		t.Errorf("sent %q, acked %v: want none sent, 14 acked", *sent, mb.acked)
 	}
-	st, err := w.a.store.Read()
+	st, err := w.Host.store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(st.RoleLines) != 1 || st.RoleLines[0].Role != guideRole.name || !strings.Contains(st.RoleLines[0].Line, "NOTE ANSWERED #4") {
+	if len(st.RoleLines) != 1 || st.RoleLines[0].Role != guideRole.Name || !strings.Contains(st.RoleLines[0].Line, "NOTE ANSWERED #4") {
 		t.Errorf("role lines %+v, want the answer kept for the guide's next start", st.RoleLines)
 	}
 }

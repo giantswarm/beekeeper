@@ -320,10 +320,10 @@ func keepAnsweredOpen(st *state.State, id int, now, deferAt time.Time, reason st
 	}
 	if !deferAt.IsZero() {
 		setNoteDeferral(&st.Notes[i], deferAt, reason)
-		r := guideRole.get(st)
+		r := guideRole.Get(st)
 		if r.Asking == id && r.AskingFrom == "" {
 			r.Asking, r.AskingFrom = 0, ""
-			guideRole.set(st, r)
+			guideRole.Set(st, r)
 		}
 	}
 	return true, defaulted
@@ -403,28 +403,28 @@ func (a *app) tellFilerWithWake(ctx context.Context, by state.Party, n *state.No
 		}
 		return ""
 	}
-	why := fmt.Sprintf("no session holds the %s's role", rl.name)
-	if h := rl.get(st).Holder; h != nil {
+	why := fmt.Sprintf("no session holds the %s's role", rl.Name)
+	if h := rl.Get(st).Holder; h != nil {
 		err := wake(a, ctx, by, cmp.Or(wakeID(h.Party), h.Name), line)
 		switch {
 		case err == nil && h.Is(n.By):
 			return ""
 		case err == nil:
-			return fmt.Sprintf("note #%d: %q, which filed it, no longer holds the %s's role: told the %s, %q", n.ID, n.By.Name, rl.name, rl.name, h.Name)
+			return fmt.Sprintf("note #%d: %q, which filed it, no longer holds the %s's role: told the %s, %q", n.ID, n.By.Name, rl.Name, rl.Name, h.Name)
 		}
-		why = fmt.Sprintf("the %s, %q, cannot be told (%v)", rl.name, h.Name, err)
+		why = fmt.Sprintf("the %s, %q, cannot be told (%v)", rl.Name, h.Name, err)
 	}
 	if err := a.keepRoleLine(rl, line); err != nil {
-		return fail(fmt.Errorf("keeping the line for the %s: %w", rl.name, err))
+		return fail(fmt.Errorf("keeping the line for the %s: %w", rl.Name, err))
 	}
 	delivery.Status, delivery.Detail = noteDeliveryWaiting, why
-	return fmt.Sprintf("note #%d: %s: the answer waits for its next start (beekeeper %s start)", n.ID, why, rl.name)
+	return fmt.Sprintf("note #%d: %s: the answer waits for its next start (beekeeper %s start)", n.ID, why, rl.Name)
 }
 
 // keepRoleLine keeps line for rl's next holder, said at its start.
 func (a *app) keepRoleLine(rl role, line string) error {
 	return a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.RoleLines = append(st.RoleLines, state.RoleLine{Role: rl.name, Line: line, At: a.now.UTC()})
+		st.RoleLines = append(st.RoleLines, state.RoleLine{Role: rl.Name, Line: line, At: a.now.UTC()})
 		return nil, nil
 	})
 }
@@ -434,7 +434,7 @@ func (a *app) keepRoleLine(rl role, line string) error {
 func (a *app) quietWake(ctx context.Context, by state.Party, q, line string) error {
 	quiet := *a
 	quiet.out = io.Discard
-	if by.Name == watchParty.Name {
+	if by.Name == WatchParty.Name {
 		st, err := a.store.Read()
 		if err != nil {
 			return err
@@ -452,8 +452,8 @@ func (a *app) quietWake(ctx context.Context, by state.Party, q, line string) err
 // of, or whose run its name names.
 func filedRole(st *state.State, p state.Party) (role, bool) {
 	for _, rl := range roles {
-		r := rl.get(st)
-		if (r.Holder != nil && r.Holder.Is(p)) || relievedIn(r, p) != nil || rl.runOf(p.Name) > 0 {
+		r := rl.Get(st)
+		if (r.Holder != nil && r.Holder.Is(p)) || relievedIn(r, p) != nil || rl.RunOf(p.Name) > 0 {
 			return rl, true
 		}
 	}
@@ -465,7 +465,7 @@ func filedRole(st *state.State, p state.Party) (role, bool) {
 func takeRoleLines(st *state.State, rl role) []string {
 	var lines []string
 	st.RoleLines = slices.DeleteFunc(st.RoleLines, func(l state.RoleLine) bool {
-		if l.Role != rl.name {
+		if l.Role != rl.Name {
 			return false
 		}
 		lines = append(lines, l.Line)

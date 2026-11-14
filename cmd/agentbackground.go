@@ -498,7 +498,7 @@ func rebindSessionState(st *state.State, oldID, newID, hostID string) bool {
 		rebindParty(&st.Agents[i].Party)
 	}
 	for _, rl := range roles {
-		rl.update(st, func(r *state.Role) {
+		rl.Update(st, func(r *state.Role) {
 			if r.Holder != nil {
 				rebindParty(&r.Holder.Party)
 			}
@@ -726,7 +726,7 @@ var freshSessions = (*app).sessions
 // its turn ended, so a parked session costs the machine no memory; its wake
 // (agents wake, agents resume, the watch's resume or a timer's) resumes it
 // from its transcript. A stop that fails is a line, tried again next poll.
-func watchStopParked(w *watcher, ctx context.Context, st *state.State, sessions []*claude.Session) {
+func watchStopParked(w *Watcher, ctx context.Context, st *state.State, sessions []*claude.Session) {
 	if !slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Park != nil }) {
 		return
 	}
@@ -734,20 +734,20 @@ func watchStopParked(w *watcher, ctx context.Context, st *state.State, sessions 
 	if err != nil {
 		return // no turn is known to have ended
 	}
-	for _, p := range parkedResident(st, sessions, t, w.a.now) {
+	for _, p := range parkedResident(st, sessions, t, w.Host.now) {
 		key := "park-stop-" + p.Session
 		short := p.Session[:min(8, len(p.Session))]
-		stopped, err := w.a.stopParkedSession(ctx, st, p)
+		stopped, err := w.Host.stopParkedSession(ctx, st, p)
 		if err != nil {
-			w.fail(key, "PARKED SESSION STAYS %q: its background session %s keeps its memory: %v", p.Name, short, err)
+			w.Fail(key, "PARKED SESSION STAYS %q: its background session %s keeps its memory: %v", p.Name, short, err)
 			continue
 		}
-		w.clear(key)
+		w.Clear(key)
 		if !stopped {
 			continue
 		}
-		_ = w.a.store.Record(event(watchParty, parkStoppedEvent, "%s: stopped its background session %s while it is parked; its wake resumes it", p.Name, p.Session))
-		w.emitNow("park-stop", "PARKED SESSION STOPPED %q: background session %s frees its memory while parked; its wake resumes it (claude attach %s)", p.Name, short, short)
+		_ = w.Host.store.Record(event(WatchParty, parkStoppedEvent, "%s: stopped its background session %s while it is parked; its wake resumes it", p.Name, p.Session))
+		w.EmitNow("park-stop", "PARKED SESSION STOPPED %q: background session %s frees its memory while parked; its wake resumes it (claude attach %s)", p.Name, short, short)
 	}
 	for _, ag := range st.Agents {
 		if ag.Park == nil || !ag.Park.Resumable.IsZero() && len(ag.Park.Continuation) == 0 || ag.Execution != nil || keepsRole(st, ag.Party) {
@@ -757,7 +757,7 @@ func watchStopParked(w *watcher, ctx context.Context, st *state.State, sessions 
 		if !ok {
 			continue
 		}
-		if _, busy := turnRunning(sessions, t, ag.Party, w.a.now); busy {
+		if _, busy := turnRunning(sessions, t, ag.Party, w.Host.now); busy {
 			continue
 		}
 		unit := h.Unit(id)
@@ -766,12 +766,12 @@ func watchStopParked(w *watcher, ctx context.Context, st *state.State, sessions 
 		}
 		key := "park-stop-" + unit
 		if err := plat.Launcher.Stop(ctx, unit); err != nil {
-			w.fail(key, "PARKED SESSION STAYS %q: its %s unit %s keeps its memory: %v", ag.Name, h.Name(), unit, err)
+			w.Fail(key, "PARKED SESSION STAYS %q: its %s unit %s keeps its memory: %v", ag.Name, h.Name(), unit, err)
 			continue
 		}
-		w.clear(key)
-		_ = w.a.store.Record(event(watchParty, parkStoppedEvent, "%s: stopped its %s unit %s while it is parked; its wake resumes it", ag.Name, h.Name(), unit))
-		w.emitNow("park-stop", "PARKED SESSION STOPPED %q: %s unit %s frees its memory while parked; its wake resumes it", ag.Name, h.Name(), unit)
+		w.Clear(key)
+		_ = w.Host.store.Record(event(WatchParty, parkStoppedEvent, "%s: stopped its %s unit %s while it is parked; its wake resumes it", ag.Name, h.Name(), unit))
+		w.EmitNow("park-stop", "PARKED SESSION STOPPED %q: %s unit %s frees its memory while parked; its wake resumes it", ag.Name, h.Name(), unit)
 	}
 }
 

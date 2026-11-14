@@ -507,7 +507,7 @@ func (a *app) logQuiet(lines ...string) {
 	}
 	evs := make([]state.Event, len(lines))
 	for i, l := range lines {
-		evs[i] = event(watchParty, quietVerb, "%s", l)
+		evs[i] = event(WatchParty, quietVerb, "%s", l)
 	}
 	_ = a.store.Log(evs...)
 }

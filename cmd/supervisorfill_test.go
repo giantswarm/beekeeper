@@ -350,7 +350,7 @@ func TestLoopFillBacksOffEmptyAndFailedBoardReads(t *testing.T) {
 			l.Once = true // These checks inspect completed pass effects.
 			pass := func() {
 				t.Helper()
-				fresh := event(watchParty, "watch.budget-state", "false")
+				fresh := event(WatchParty, "watch.budget-state", "false")
 				fresh.At = r.a.now
 				if err := r.a.store.Record(fresh); err != nil {
 					t.Fatal(err)
@@ -803,7 +803,7 @@ func (r *loopRig) loopPass(t *testing.T, l *loop.Loop) {
 	})
 	r.a.now = r.a.now.Add(30 * time.Second)
 	// The watch keeps publishing: its budget reading never goes stale.
-	w := event(watchParty, "watch.budget-state", "false")
+	w := event(WatchParty, "watch.budget-state", "false")
 	w.At = r.a.now
 	if err := r.a.store.Record(w); err != nil {
 		t.Fatal(err)
@@ -1018,7 +1018,7 @@ func TestLoopFillBacksOffOverAnEmptyBoard(t *testing.T) {
 		for end := r.a.now.Add(d); r.a.now.Before(end); r.a.now = r.a.now.Add(30 * time.Second) {
 			// Advance the watch with the test clock: this scenario exercises
 			// board backoff, not a hold caused by stale watch observations.
-			fresh := event(watchParty, "watch.budget-state", "false")
+			fresh := event(WatchParty, "watch.budget-state", "false")
 			fresh.At = r.a.now
 			if err := r.a.store.Record(fresh); err != nil {
 				t.Fatal(err)

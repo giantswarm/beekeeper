@@ -35,11 +35,11 @@ func hostUsed(st *state.State, selector string, id execution.HostID) bool {
 	return false
 }
 
-// syncExecutions reconciles each host on its own schedule and backs off
+// SyncExecutions reconciles each host on its own schedule and backs off
 // hosts whose reconciliation failed or hit its deadline. Rotating the first
 // host prevents an unreachable endpoint monopolizing reconciliation.
-func (w *watcher) syncExecutions(ctx context.Context, st *state.State) *state.State {
-	st = w.retireEndedExecutions(ctx, st)
+func (w *Watcher) SyncExecutions(ctx context.Context, st *state.State) *state.State {
+	st = w.RetireEndedExecutions(ctx, st)
 	selectors := []string{}
 	active := map[string]bool{}
 	needsSync := map[string]bool{}
@@ -47,7 +47,7 @@ func (w *watcher) syncExecutions(ctx context.Context, st *state.State) *state.St
 	for _, s := range st.Starts {
 		if r := s.Execution; r != nil {
 			startsByHost[r.Selector]++
-			if !r.HostJournalMissing && (executionNeedsSync(st, r) || executionTranscriptPending(r) || w.a.hasUnrecoveredPublication(r)) {
+			if !r.HostJournalMissing && (executionNeedsSync(st, r) || executionTranscriptPending(r) || w.Host.hasUnrecoveredPublication(r)) {
 				if !slices.Contains(selectors, r.Selector) {
 					selectors = append(selectors, r.Selector)
 				}
@@ -59,21 +59,21 @@ func (w *watcher) syncExecutions(ctx context.Context, st *state.State) *state.St
 	// A host may retain a journal after the last coordinator record goes.
 	// Inventory runs once for each used, pinned host when Starts contains no
 	// active executions on it.
-	if execution.ValidIdentity(w.a.cfg.Identity.Host) {
-		for selector := range w.a.cfg.Agents.Hosts {
+	if execution.ValidIdentity(w.Host.cfg.Identity.Host) {
+		for selector := range w.Host.cfg.Agents.Hosts {
 			if needsSync[selector] {
 				continue
 			}
-			h, err := w.a.executionHost(selector)
+			h, err := w.Host.executionHost(selector)
 			if err != nil || !hostUsed(st, selector, h.Identity) {
 				continue
 			}
-			if _, ok := w.a.executionClient(h).(execution.InventoryReader); !ok {
+			if _, ok := w.Host.executionClient(h).(execution.InventoryReader); !ok {
 				continue
 			}
-			w.mu.Lock()
+			w.Mu.Lock()
 			prev, synced := w.executionInventorySynced[selector]
-			w.mu.Unlock()
+			w.Mu.Unlock()
 			if synced && startsByHost[selector] >= prev {
 				continue
 			}
@@ -81,12 +81,12 @@ func (w *watcher) syncExecutions(ctx context.Context, st *state.State) *state.St
 			active[executionSyncEmitPrefix+selector] = true
 		}
 	}
-	w.clearMissing(executionSyncEmitPrefix, active)
+	w.ClearMissing(executionSyncEmitPrefix, active)
 	if len(selectors) == 0 {
 		return st
 	}
 	slices.Sort(selectors)
-	now := w.a.now
+	now := w.Host.now
 	if now.IsZero() {
 		now = time.Now()
 	}
@@ -98,9 +98,9 @@ func (w *watcher) syncExecutions(ctx context.Context, st *state.State) *state.St
 		}
 		selector := selectors[(start+i)%len(selectors)]
 		key := executionSyncHostPrefix + selector
-		w.mu.Lock()
-		if w.last == nil {
-			w.last = map[string]time.Time{}
+		w.Mu.Lock()
+		if w.Last == nil {
+			w.Last = map[string]time.Time{}
 		}
 		if w.executionSyncFailures == nil {
 			w.executionSyncFailures = map[string]int{}
@@ -108,34 +108,34 @@ func (w *watcher) syncExecutions(ctx context.Context, st *state.State) *state.St
 		if w.executionInventorySynced == nil {
 			w.executionInventorySynced = map[string]int{}
 		}
-		last := w.last[key]
+		last := w.Last[key]
 		wait := executionSyncBackoff(w.executionSyncFailures[selector])
 		if !last.IsZero() && now.Sub(last) < wait {
-			w.mu.Unlock()
+			w.Mu.Unlock()
 			continue
 		}
-		w.last[key] = now
-		w.mu.Unlock()
+		w.Last[key] = now
+		w.Mu.Unlock()
 		ran = true
-		if err := w.a.syncExecutionHost(ctx, selector); err != nil {
-			w.mu.Lock()
+		if err := w.Host.syncExecutionHost(ctx, selector); err != nil {
+			w.Mu.Lock()
 			w.executionSyncFailures[selector]++
-			w.mu.Unlock()
-			w.emit(executionSyncEmitPrefix+selector, "EXECUTION UNCONFIRMED: %s: %v", selector, err)
+			w.Mu.Unlock()
+			w.Emit(executionSyncEmitPrefix+selector, "EXECUTION UNCONFIRMED: %s: %v", selector, err)
 		} else {
-			w.mu.Lock()
+			w.Mu.Lock()
 			delete(w.executionSyncFailures, selector)
 			w.executionInventorySynced[selector] = startsByHost[selector]
-			w.mu.Unlock()
-			w.clear(executionSyncEmitPrefix + selector)
+			w.Mu.Unlock()
+			w.Clear(executionSyncEmitPrefix + selector)
 		}
 	}
 	if !ran {
 		return st
 	}
-	updated, err := w.a.store.Read()
+	updated, err := w.Host.store.Read()
 	if err != nil {
 		return st
 	}
-	return w.retireEndedExecutions(ctx, updated)
+	return w.RetireEndedExecutions(ctx, updated)
 }

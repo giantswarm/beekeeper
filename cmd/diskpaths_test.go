@@ -228,8 +228,8 @@ func TestDiskPathGrowthAndReports(t *testing.T) {
 	if !strings.Contains(lines, "disk paths by size:") || !strings.Contains(lines, "disk paths by growth: \"/cache/b\"") || !strings.Contains(lines, "growth unknown") {
 		t.Fatal(lines)
 	}
-	dw := diskWatch{paths: cur}
-	if line := dw.writersLine(time.Now(), 0, nil, nil); !strings.Contains(line, "fastest-growing path: \"/cache/b\"") {
+	dw := DiskWatch{Paths: cur}
+	if line := dw.WritersLine(time.Now(), 0, nil, nil); !strings.Contains(line, "fastest-growing path: \"/cache/b\"") {
 		t.Fatal(line)
 	}
 	changes := strings.Join(diffSnapshots(&snapshot{DiskPaths: prev}, &snapshot{DiskPaths: cur}), "\n")

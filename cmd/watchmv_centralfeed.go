@@ -17,13 +17,13 @@ import (
 
 // feedKey is the watch's condition of a feed subscription the central
 // instance refused or could not read.
-const feedKey = centralKey + " feed"
+const feedKey = CentralKey + " feed"
 
 // feedRetry is how long the feed watch waits before it subscribes again
 // after the subscription ended.
 const feedRetry = time.Minute
 
-// watchFeed prints the central instance's feed while ctx lasts: it
+// WatchFeed prints the central instance's feed while ctx lasts: it
 // subscribes to beekeeper://feed through muster as the person and reads
 // the feed (read_feed) once the subscription stands and on each update,
 // printing each event above the last one it printed. The first read of a
@@ -33,7 +33,7 @@ const feedRetry = time.Minute
 // unreachable central instance is the CENTRAL UNREACHABLE line, one the
 // instance refused CENTRAL FEED REFUSED; either is opened again after
 // feedRetry, and the events meanwhile are printed once it stands.
-func (w *watcher) watchFeed(ctx context.Context) {
+func (w *Watcher) WatchFeed(ctx context.Context) {
 	kick := make(chan struct{}, 1)
 	var resumed atomic.Bool
 	signal := func() {
@@ -58,9 +58,9 @@ func (w *watcher) watchFeed(ctx context.Context) {
 	}()
 	defer func() { <-done }()
 	for ctx.Err() == nil {
-		err := w.a.hub().Listen(ctx, []string{resourceFeed}, func() {
-			w.clear(centralKey)
-			w.clear(feedKey)
+		err := w.Host.hub().Listen(ctx, []string{resourceFeed}, func() {
+			w.Clear(CentralKey)
+			w.Clear(feedKey)
 			resumed.Store(true)
 			signal()
 		}, func(uri string) {
@@ -72,9 +72,9 @@ func (w *watcher) watchFeed(ctx context.Context) {
 			return
 		}
 		if u := (*central.Unreachable)(nil); errors.As(err, &u) {
-			w.emit(centralKey, "CENTRAL UNREACHABLE %s: %s", w.a.cfg.Central.Context, u.Reason)
+			w.Emit(CentralKey, "CENTRAL UNREACHABLE %s: %s", w.Host.cfg.Central.Context, u.Reason)
 		} else {
-			w.emit(feedKey, "CENTRAL FEED REFUSED %s: %v; subscribed again every %s", w.a.cfg.Central.Context, err, feedRetry)
+			w.Emit(feedKey, "CENTRAL FEED REFUSED %s: %v; subscribed again every %s", w.Host.cfg.Central.Context, err, feedRetry)
 		}
 		t := time.NewTimer(feedRetry)
 		select {
@@ -93,21 +93,21 @@ func (w *watcher) watchFeed(ctx context.Context) {
 // none of the past. With resume, a feed that no longer holds the last
 // event is the CENTRAL FEED GAP line before the events. It reports
 // whether the feed was read.
-func (w *watcher) readFeed(ctx context.Context, resume bool) bool {
-	w.mu.Lock()
-	last := w.feedID
-	w.mu.Unlock()
+func (w *Watcher) readFeed(ctx context.Context, resume bool) bool {
+	w.Mu.Lock()
+	last := w.FeedID
+	w.Mu.Unlock()
 	var f feed.Feed
-	me := state.Party{Name: w.a.cfg.Identity.Person, Host: w.a.cfg.Identity.Host}
-	if _, err := w.a.callCentralRaw(ctx, me, nameReadFeed, map[string]any{paramAfter: last}, &f); err != nil {
+	me := state.Party{Name: w.Host.cfg.Identity.Person, Host: w.Host.cfg.Identity.Host}
+	if _, err := w.Host.callCentralRaw(ctx, me, nameReadFeed, map[string]any{paramAfter: last}, &f); err != nil {
 		if u := (*central.Unreachable)(nil); errors.As(err, &u) {
-			w.emit(centralKey, "CENTRAL UNREACHABLE %s: %s", w.a.cfg.Central.Context, u.Reason)
+			w.Emit(CentralKey, "CENTRAL UNREACHABLE %s: %s", w.Host.cfg.Central.Context, u.Reason)
 			return false
 		}
-		w.emit(feedKey, "CENTRAL FEED UNREADABLE %s: %v", w.a.cfg.Central.Context, err)
+		w.Emit(feedKey, "CENTRAL FEED UNREADABLE %s: %v", w.Host.cfg.Central.Context, err)
 		return false
 	}
-	w.clear(feedKey)
+	w.Clear(feedKey)
 	if last == "" {
 		if len(f.Events) > 0 {
 			w.markFeed(f.Events[len(f.Events)-1].ID)
@@ -115,13 +115,13 @@ func (w *watcher) readFeed(ctx context.Context, resume bool) bool {
 		return true
 	}
 	if resume && f.Gap {
-		w.emitNow(feedKey, "CENTRAL FEED GAP %s: events after %s may be missing: the central instance no longer holds them", w.a.cfg.Central.Context, feedTime(last))
+		w.EmitNow(feedKey, "CENTRAL FEED GAP %s: events after %s may be missing: the central instance no longer holds them", w.Host.cfg.Central.Context, feedTime(last))
 	}
 	for _, ev := range f.Events {
 		if ev.ID <= last {
 			continue
 		}
-		w.emitNow(feedKey, "CENTRAL %s [%s on %s]", printable(ev.Line), printable(cmp.Or(ev.Actor.Person, "?")), printable(cmp.Or(ev.Actor.Host, "?")))
+		w.EmitNow(feedKey, "CENTRAL %s [%s on %s]", Printable(ev.Line), Printable(cmp.Or(ev.Actor.Person, "?")), Printable(cmp.Or(ev.Actor.Host, "?")))
 		last = ev.ID
 	}
 	w.markFeed(last)
@@ -138,9 +138,9 @@ func feedTime(id string) string {
 	return time.Unix(0, nanos).UTC().Format(time.RFC3339)
 }
 
-// printable is another machine's text as one line of the watch: a control
+// Printable is another machine's text as one line of the watch: a control
 // character or escape is a space, so it forges no line and moves no cursor.
-func printable(s string) string {
+func Printable(s string) string {
 	return oneLine(strings.Map(func(r rune) rune {
 		if !unicode.IsPrint(r) {
 			return ' '
@@ -151,13 +151,13 @@ func printable(s string) string {
 
 // markFeed keeps id as the last event the watch printed, in its mark at
 // once.
-func (w *watcher) markFeed(id string) {
-	w.mu.Lock()
-	changed := id != w.feedID
-	w.feedID = id
-	w.dirty = w.dirty || changed
-	w.mu.Unlock()
+func (w *Watcher) markFeed(id string) {
+	w.Mu.Lock()
+	changed := id != w.FeedID
+	w.FeedID = id
+	w.Dirty = w.Dirty || changed
+	w.Mu.Unlock()
 	if changed {
-		w.saveMark()
+		w.SaveMark()
 	}
 }

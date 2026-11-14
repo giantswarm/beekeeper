@@ -73,7 +73,7 @@ func endedTimerTarget(st *state.State, target string) bool {
 		return strings.EqualFold(p.Name, target) || p.Session == target || p.HostSession == target
 	}
 	for _, rl := range roles {
-		if h := rl.get(st).Holder; h != nil && matches(h.Party) {
+		if h := rl.Get(st).Holder; h != nil && matches(h.Party) {
 			return false
 		}
 	}

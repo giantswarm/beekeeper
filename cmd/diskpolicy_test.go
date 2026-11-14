@@ -225,16 +225,16 @@ func TestAutomaticDiskDisablesLegacyGoCacheSchedule(t *testing.T) {
 	saved := goCacheDir
 	t.Cleanup(func() { goCacheDir = saved })
 	goCacheDir = func() string { return m.cache }
-	w := &watcher{a: a, goCacheOn: true, last: map[string]time.Time{}}
-	w.goCache(a.now)
-	w.bg.Wait()
+	w := &Watcher{Host: a, GoCacheOn: true, Last: map[string]time.Time{}}
+	w.GoCache(a.now)
+	w.Bg.Wait()
 	var mark goCacheMark
 	if found, _ := a.store.ReadFile(goCacheFile, &mark); found {
 		t.Fatal("auto mode ran legacy cache schedule")
 	}
 	a.cfg.Disk.Prune = config.DiskPruneAsk
-	w.goCache(a.now)
-	w.bg.Wait()
+	w.GoCache(a.now)
+	w.Bg.Wait()
 	if found, _ := a.store.ReadFile(goCacheFile, &mark); !found {
 		t.Fatal("ask mode lost legacy cache schedule")
 	}

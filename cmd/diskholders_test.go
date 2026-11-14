@@ -147,11 +147,11 @@ func TestStateHoldersWatchSaysEligibleSpaceOnce(t *testing.T) {
 	t.Cleanup(func() { liveHolders = saved })
 	calls := 0
 	liveHolders = func(*app) (holderMachine, error) { calls++; return m, nil }
-	w := &watcher{a: a, holdersOn: true, last: map[string]time.Time{}}
-	w.stateHolders(a.now)
-	w.bg.Wait()
-	if calls != 1 || !w.isActive("stateholders") {
-		t.Fatalf("calls=%d active=%v", calls, w.isActive("stateholders"))
+	w := &Watcher{Host: a, HoldersOn: true, Last: map[string]time.Time{}}
+	w.StateHolders(a.now)
+	w.Bg.Wait()
+	if calls != 1 || !w.IsActive("stateholders") {
+		t.Fatalf("calls=%d active=%v", calls, w.IsActive("stateholders"))
 	}
 	var mark stateHoldersMark
 	if _, err := a.store.ReadFile(stateHoldersFile, &mark); err != nil || !mark.On || !strings.Contains(mark.Line, root) {
@@ -159,39 +159,39 @@ func TestStateHoldersWatchSaysEligibleSpaceOnce(t *testing.T) {
 	}
 	// Another watch within the interval says the shared listing, walking
 	// nothing.
-	other := &watcher{a: a, holdersOn: true, last: map[string]time.Time{}}
-	other.stateHolders(a.now.Add(time.Minute))
-	other.bg.Wait()
-	if calls != 1 || !other.isActive("stateholders") {
-		t.Fatalf("second watch: calls=%d active=%v", calls, other.isActive("stateholders"))
+	other := &Watcher{Host: a, HoldersOn: true, Last: map[string]time.Time{}}
+	other.StateHolders(a.now.Add(time.Minute))
+	other.Bg.Wait()
+	if calls != 1 || !other.IsActive("stateholders") {
+		t.Fatalf("second watch: calls=%d active=%v", calls, other.IsActive("stateholders"))
 	}
 	// Under the threshold, the condition ends.
 	a.cfg.Disk.Holders.WarnGiB = 1 << 20
-	w.stateHolders(a.now.Add(7 * time.Hour))
-	w.bg.Wait()
-	if calls != 2 || w.isActive("stateholders") {
-		t.Fatalf("under threshold: calls=%d active=%v", calls, w.isActive("stateholders"))
+	w.StateHolders(a.now.Add(7 * time.Hour))
+	w.Bg.Wait()
+	if calls != 2 || w.IsActive("stateholders") {
+		t.Fatalf("under threshold: calls=%d active=%v", calls, w.IsActive("stateholders"))
 	}
 	// Unable to read a process, it says the holders are unknown, and the
 	// shared listing keeps saying so.
 	m.refsErr = errors.New("readlink /proc/1/cwd: permission denied")
-	w.stateHolders(a.now.Add(14 * time.Hour))
-	w.bg.Wait()
-	if calls != 3 || !w.isActive("stateholders") {
-		t.Fatalf("unknown: calls=%d active=%v", calls, w.isActive("stateholders"))
+	w.StateHolders(a.now.Add(14 * time.Hour))
+	w.Bg.Wait()
+	if calls != 3 || !w.IsActive("stateholders") {
+		t.Fatalf("unknown: calls=%d active=%v", calls, w.IsActive("stateholders"))
 	}
 	if _, err := a.store.ReadFile(stateHoldersFile, &mark); err != nil || !mark.On || !strings.HasPrefix(mark.Line, "STATE HOLDERS unknown:") || !strings.Contains(mark.Line, "permission denied") {
 		t.Fatalf("unknown mark=%+v err=%v", mark, err)
 	}
-	third := &watcher{a: a, holdersOn: true, last: map[string]time.Time{}}
-	third.stateHolders(a.now.Add(14*time.Hour + time.Minute))
-	third.bg.Wait()
-	if calls != 3 || !third.isActive("stateholders") {
-		t.Fatalf("shared unknown: calls=%d active=%v", calls, third.isActive("stateholders"))
+	third := &Watcher{Host: a, HoldersOn: true, Last: map[string]time.Time{}}
+	third.StateHolders(a.now.Add(14*time.Hour + time.Minute))
+	third.Bg.Wait()
+	if calls != 3 || !third.IsActive("stateholders") {
+		t.Fatalf("shared unknown: calls=%d active=%v", calls, third.IsActive("stateholders"))
 	}
 	a.cfg.Disk.Holders.WarnGiB = -1
-	w.stateHolders(a.now.Add(21 * time.Hour))
-	w.bg.Wait()
+	w.StateHolders(a.now.Add(21 * time.Hour))
+	w.Bg.Wait()
 	if calls != 3 {
 		t.Fatal("a negative warnGiB still listed the holders")
 	}

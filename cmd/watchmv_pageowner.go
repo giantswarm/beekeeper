@@ -16,11 +16,11 @@ import (
 // pageKey starts the reported key of a PAGE UNOWNED line.
 const pageKey = "page "
 
-// ownedUntil tells of an alert's key when its last owner stopped owning it:
+// OwnedUntil tells of an alert's key when its last owner stopped owning it:
 // zero while a person or a running session owns it, the session's end else
 // (gone is now for an owner gone with no end recorded yet), false when it
 // never had an owner.
-func ownedUntil(owners []state.AlertOwner, sessions []*claude.Session, now time.Time) func(string) (time.Time, bool) {
+func OwnedUntil(owners []state.AlertOwner, sessions []*claude.Session, now time.Time) func(string) (time.Time, bool) {
 	return func(key string) (time.Time, bool) {
 		var until time.Time
 		found := false
@@ -62,29 +62,29 @@ func endedOwners(owners []state.AlertOwner, firing []alerts.Firing, sessions []*
 	return out, changed
 }
 
-// unownedPages says PAGE UNOWNED for each firing page of the alert baseline,
+// UnownedPages says PAGE UNOWNED for each firing page of the alert baseline,
 // alerts.team's when it is set, that has had no owner for alerts.ownerGrace, once per grace period while it
 // stays unowned, and notifies (page-unowned). A watch that keeps a mark
 // records the ends of the owners whose session is gone; --once writes
 // nothing and counts such an owner's page from now.
-func (w *watcher) unownedPages(ctx context.Context, sessions []*claude.Session) {
-	al := w.a.cfg.Alerts
-	base, err := alerts.NewStore(w.a.cfg.StateDir).Load()
+func (w *Watcher) UnownedPages(ctx context.Context, sessions []*claude.Session) {
+	al := w.Host.cfg.Alerts
+	base, err := alerts.NewStore(w.Host.cfg.StateDir).Load()
 	if err != nil {
 		return
 	}
 	pages := slices.DeleteFunc(base.Firing(al.PageSeverity), func(f alerts.Firing) bool { return al.Team != "" && f.Team != al.Team })
 	var due []alerts.Unowned
 	if len(pages) > 0 {
-		st, err := w.a.store.Peek()
+		st, err := w.Host.store.Peek()
 		if err != nil {
 			return
 		}
 		owners := st.AlertOwners
-		if w.chores && len(owners) > 0 {
-			if next, changed := endedOwners(owners, base.Firing(""), sessions, w.a.now); changed {
-				err := w.a.store.Update(func(st *state.State) ([]state.Event, error) {
-					st.AlertOwners, _ = endedOwners(st.AlertOwners, base.Firing(""), sessions, w.a.now)
+		if w.Chores && len(owners) > 0 {
+			if next, changed := endedOwners(owners, base.Firing(""), sessions, w.Host.now); changed {
+				err := w.Host.store.Update(func(st *state.State) ([]state.Event, error) {
+					st.AlertOwners, _ = endedOwners(st.AlertOwners, base.Firing(""), sessions, w.Host.now)
 					return nil, nil
 				})
 				if err == nil {
@@ -92,24 +92,24 @@ func (w *watcher) unownedPages(ctx context.Context, sessions []*claude.Session) 
 				}
 			}
 		}
-		due = alerts.UnownedPages(pages, al.OwnerGrace.Duration, ownedUntil(owners, sessions, w.a.now), w.a.now)
+		due = alerts.UnownedPages(pages, al.OwnerGrace.Duration, OwnedUntil(owners, sessions, w.Host.now), w.Host.now)
 	}
 	current := map[string]bool{}
 	for _, u := range due {
 		k := pageKey + u.Mark
 		current[k] = true
-		if w.reported[k] {
+		if w.Reported[k] {
 			continue
 		}
-		w.reported[k], w.dirty = true, true
+		w.Reported[k], w.Dirty = true, true
 		l := u.Line()
-		w.emitNow("alerts", "%s", l)
-		w.notify(ctx, notify.PageUnowned, u.Mark, fmt.Sprintf("beekeeper: page unowned on %s for %s", u.Installation, dur(u.For.Round(time.Minute))), l)
+		w.EmitNow("alerts", "%s", l)
+		w.Notify(ctx, notify.PageUnowned, u.Mark, fmt.Sprintf("beekeeper: page unowned on %s for %s", u.Installation, dur(u.For.Round(time.Minute))), l)
 	}
-	for k := range w.reported {
+	for k := range w.Reported {
 		if strings.HasPrefix(k, pageKey) && !current[k] {
-			delete(w.reported, k)
-			w.dirty = true
+			delete(w.Reported, k)
+			w.Dirty = true
 		}
 	}
 }

@@ -65,14 +65,14 @@ const sameTitleKey = "same-title "
 
 // watchSameTitles says one SAME TITLE line per title more than one live session
 // carries, and its ENDED line once one session is left with it.
-func watchSameTitles(w *watcher, sessions []*claude.Session) {
+func watchSameTitles(w *Watcher, sessions []*claude.Session) {
 	found := map[string]bool{}
 	for _, d := range sameTitles(sessions) {
 		key := sameTitleKey + titleKey(d.title)
 		found[key] = true
-		w.emit(key, "SAME TITLE: %s", d)
+		w.Emit(key, "SAME TITLE: %s", d)
 	}
-	w.clearMissing(sameTitleKey, found)
+	w.ClearMissing(sameTitleKey, found)
 }
 
 // titleTaken refuses to give title to me while another live session

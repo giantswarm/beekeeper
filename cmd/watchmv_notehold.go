@@ -1,3 +1,3 @@
 package cmd
 
-const closedDefaulted = "closed by its default"
+const ClosedDefaulted = "closed by its default"

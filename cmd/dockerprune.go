@@ -328,7 +328,7 @@ func (a *app) pruneDockerForPressure(dryRun, pressure bool, holds func() string)
 	// the trims ran over a cap and freed nothing, as the record of why
 	// (the keep reasons name what no removal may take).
 	if r.acted() || r.attempted {
-		_ = a.store.Log(event(watchParty, dockerVerb, "%s", r.logLine()))
+		_ = a.store.Log(event(WatchParty, dockerVerb, "%s", r.logLine()))
 	}
 	return r
 }
@@ -392,46 +392,46 @@ type dockerMark = goCacheMark
 // it has waited doctor.dockerEvery the watch says DOCKER until it ran. A
 // failed read or prune, or one that leaves the images over their cap, is
 // DOCKER too.
-func watchDocker(w *watcher, now time.Time) {
-	if !w.dockerOn || dockerCLI == nil || (w.a.cfg.Doctor.DockerImagesMax() == 0 && w.a.cfg.Doctor.DockerBuildCacheMax() == 0) ||
-		!w.dockerPruning.CompareAndSwap(false, true) {
+func watchDocker(w *Watcher, now time.Time) {
+	if !w.DockerOn || dockerCLI == nil || (w.Host.cfg.Doctor.DockerImagesMax() == 0 && w.Host.cfg.Doctor.DockerBuildCacheMax() == 0) ||
+		!w.DockerPruning.CompareAndSwap(false, true) {
 		return
 	}
-	if now.Before(w.dockerNext) {
-		w.dockerPruning.Store(false)
+	if now.Before(w.DockerNext) {
+		w.DockerPruning.Store(false)
 		return
 	}
-	w.bg.Add(1)
+	w.Bg.Add(1)
 	go func() {
-		defer w.bg.Done()
-		defer w.dockerPruning.Store(false)
-		every := w.a.cfg.Doctor.DockerEvery.Duration
+		defer w.Bg.Done()
+		defer w.DockerPruning.Store(false)
+		every := w.Host.cfg.Doctor.DockerEvery.Duration
 		var m dockerMark
-		_, _ = w.a.store.ReadFile(dockerFile, &m)
+		_, _ = w.Host.store.ReadFile(dockerFile, &m)
 		if m.Waiting.IsZero() && now.Sub(m.Checked) < every {
-			w.dockerNext = m.Checked.Add(every)
+			w.DockerNext = m.Checked.Add(every)
 			return
 		}
-		r := w.a.pruneDocker(false, w.a.dockerHolds)
-		if w.a.context().Err() != nil {
+		r := w.Host.pruneDocker(false, w.Host.dockerHolds)
+		if w.Host.context().Err() != nil {
 			return
 		}
 		switch {
 		case r.locked:
-			w.dockerNext = now.Add(goCacheRetry)
+			w.DockerNext = now.Add(goCacheRetry)
 			return
 		case r.held != "":
 			if m.Waiting.IsZero() {
 				m.Waiting = now
 			}
-			w.dockerNext = now.Add(goCacheRetry)
+			w.DockerNext = now.Add(goCacheRetry)
 		default:
 			m.Waiting = time.Time{}
-			w.dockerNext = now.Add(every)
+			w.DockerNext = now.Add(every)
 		}
 		m.Checked = now
-		_ = w.a.store.WriteFile(dockerFile, m)
+		_ = w.Host.store.WriteFile(dockerFile, m)
 		waited := !m.Waiting.IsZero() && now.Sub(m.Waiting) >= every
-		w.check("docker", r.err != nil || r.blocked() || waited, "DOCKER: %s", r)
+		w.Check("docker", r.err != nil || r.blocked() || waited, "DOCKER: %s", r)
 	}()
 }

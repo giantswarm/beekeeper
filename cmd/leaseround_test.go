@@ -40,13 +40,13 @@ func TestWatchLeaseRound(t *testing.T) {
 	}
 	var out strings.Builder
 	a.out = &out
-	w := &watcher{a: a, reported: map[string]bool{}, last: map[string]time.Time{}}
-	w.staleLeases(context.Background(), nil)
+	w := &Watcher{Host: a, Reported: map[string]bool{}, Last: map[string]time.Time{}}
+	w.StaleLeases(context.Background(), nil)
 	if out.Len() != 0 {
 		t.Fatalf("not past round: %q", out.String())
 	}
 	a.now = a.now.Add(18 * time.Minute)
-	w.staleLeases(context.Background(), nil)
+	w.StaleLeases(context.Background(), nil)
 	for _, want := range []string{"LEASE HELD PAST ROUND:", graveler, claimOther.Name, "overrun 18m past its 1h00m round"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("watch output %q lacks %q", out.String(), want)
@@ -54,7 +54,7 @@ func TestWatchLeaseRound(t *testing.T) {
 	}
 	out.Reset()
 	a.now = a.now.Add(time.Minute)
-	w.staleLeases(context.Background(), nil)
+	w.StaleLeases(context.Background(), nil)
 	if out.Len() != 0 {
 		t.Errorf("watch repeats the same overdue lease: %q", out.String())
 	}
@@ -62,7 +62,7 @@ func TestWatchLeaseRound(t *testing.T) {
 	if err := lease.Dir(a.cfg.LeaseDir).Hand(h); err != nil {
 		t.Fatal(err)
 	}
-	w.staleLeases(context.Background(), nil)
+	w.StaleLeases(context.Background(), nil)
 	if !strings.Contains(out.String(), "LEASE HELD PAST ROUND:") {
 		t.Errorf("new claim not reported: %q", out.String())
 	}
@@ -70,12 +70,12 @@ func TestWatchLeaseRound(t *testing.T) {
 		t.Fatal(err)
 	}
 	out.Reset()
-	w.staleLeases(context.Background(), nil)
+	w.StaleLeases(context.Background(), nil)
 	if !strings.Contains(out.String(), "ENDED") {
 		t.Errorf("released lease still active: %q", out.String())
 	}
-	if len(w.active) != 0 {
-		t.Errorf("released lease left active conditions: %+v", w.active)
+	if len(w.Active) != 0 {
+		t.Errorf("released lease left active conditions: %+v", w.Active)
 	}
 }
 

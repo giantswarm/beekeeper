@@ -254,7 +254,7 @@ func TestDoctorKeepsSessionUntilItsQueuedReportApplies(t *testing.T) {
 		t.Fatal("precondition: the session is not gone")
 	}
 
-	rep, err := a.doctor(t.Context(), doctorRun{by: watchParty, dryRun: true})
+	rep, err := a.doctor(t.Context(), doctorRun{by: WatchParty, dryRun: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,7 +263,7 @@ func TestDoctorKeepsSessionUntilItsQueuedReportApplies(t *testing.T) {
 	}) {
 		t.Fatalf("dry run does not name the waiting report: %q", rep.chores)
 	}
-	if _, err := a.doctor(t.Context(), doctorRun{by: watchParty}); err != nil {
+	if _, err := a.doctor(t.Context(), doctorRun{by: WatchParty}); err != nil {
 		t.Fatal(err)
 	}
 	// The loop's own roster tidy removes through the same path.
@@ -286,7 +286,7 @@ func TestDoctorKeepsSessionUntilItsQueuedReportApplies(t *testing.T) {
 	if r, ok := st.ReportReceipts[id]; !ok || r.Error != "" || len(st.Agents) != 1 || !st.Agents[0].Done {
 		t.Fatalf("report not applied: receipt %+v, roster %+v", st.ReportReceipts, st.Agents)
 	}
-	rep, err = a.doctor(t.Context(), doctorRun{by: watchParty})
+	rep, err = a.doctor(t.Context(), doctorRun{by: WatchParty})
 	if err != nil {
 		t.Fatal(err)
 	}

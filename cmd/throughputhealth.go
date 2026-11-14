@@ -235,7 +235,7 @@ func (a *app) checkThroughput(now time.Time, held bool, progress ...func()) (str
 		}
 		line = detail
 		saved, _ := json.Marshal(throughputHealth{At: now, Status: status, Incident: incident})
-		events := []state.Event{event(watchParty, throughputHealthVerb, "%s", saved)}
+		events := []state.Event{event(WatchParty, throughputHealthVerb, "%s", saved)}
 		if report {
 			key := "throughput " + now.UTC().Format(time.RFC3339Nano)
 			report := fmt.Sprintf("%s reported at %s%s%s", loop.LoopParty.Name, now.UTC().Format(time.RFC3339), loop.FileReportSeparator, detail)

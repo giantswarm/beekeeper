@@ -45,16 +45,16 @@ func TestWatchSaysASlotHeldLong(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	w := &watcher{a: &app{cfg: cfg, out: &out}, last: map[string]time.Time{}}
+	w := &Watcher{Host: &app{cfg: cfg, out: &out}, Last: map[string]time.Time{}}
 
-	w.a.now = time.Date(2026, 10, 9, 20, 50, 0, 0, time.UTC)
-	w.slotHolds()
+	w.Host.now = time.Date(2026, 10, 9, 20, 50, 0, 0, time.UTC)
+	w.SlotHolds()
 	if out.Len() != 0 {
 		t.Errorf("a slot held 23m, under the bound, was said:\n%s", out.String())
 	}
-	w.a.now = time.Date(2026, 10, 9, 23, 20, 0, 0, time.UTC)
-	w.slotHolds()
-	w.slotHolds()
+	w.Host.now = time.Date(2026, 10, 9, 23, 20, 0, 0, time.UTC)
+	w.SlotHolds()
+	w.SlotHolds()
 	want := "SLOT HELD LONG: slot 1 past memcap.holdBound (30m), held by Agent four (pid 4711) since 20:27Z (2h53m0s): python3 benchmark_preset.py"
 	if n := strings.Count(out.String(), want); n != 1 {
 		t.Errorf("want %q once, said %d times:\n%s", want, n, out.String())
@@ -63,7 +63,7 @@ func TestWatchSaysASlotHeldLong(t *testing.T) {
 		t.Errorf("the line does not name the slotless classes:\n%s", out.String())
 	}
 	_ = l.Unlock()
-	w.slotHolds()
+	w.SlotHolds()
 	if !strings.Contains(out.String(), "ENDED SLOT HELD LONG") {
 		t.Errorf("a freed slot does not end the condition:\n%s", out.String())
 	}

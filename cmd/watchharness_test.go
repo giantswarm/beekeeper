@@ -58,7 +58,7 @@ func TestWatchTracksEveryHarnessRunner(t *testing.T) {
 			dir := t.TempDir()
 			w, _, out := notifyingWatch(t, dir, false)
 			party := fake.session.Party()
-			if err := w.a.store.Update(func(st *state.State) ([]state.Event, error) {
+			if err := w.Host.store.Update(func(st *state.State) ([]state.Event, error) {
 				st.Agents = []state.Agent{{Party: party, Task: "finish task", Harness: name}}
 				st.Records = []state.Record{{Session: party, Issue: "https://github.com/example/project/issues/1"}}
 				return nil, nil
@@ -66,7 +66,7 @@ func TestWatchTracksEveryHarnessRunner(t *testing.T) {
 				t.Fatal(err)
 			}
 			table := &proc.Table{ByPID: map[int]*proc.Process{}}
-			poll := func() { w.pollSessions(context.Background(), relayNow, table) }
+			poll := func() { w.PollSessions(context.Background(), relayNow, table) }
 			poll()
 			poll()
 			if got := out.String(); strings.Count(got, "KERNEL OOM:") != 1 || strings.Count(got, "SYSTEMD-OOMD:") != 1 {
@@ -74,7 +74,7 @@ func TestWatchTracksEveryHarnessRunner(t *testing.T) {
 			}
 			// A replacement watch must rediscover the same still-running worker.
 			restarted, _, restartOut := notifyingWatch(t, dir, false)
-			restarted.pollSessions(context.Background(), relayNow, table)
+			restarted.PollSessions(context.Background(), relayNow, table)
 			if got := restartOut.String(); strings.Contains(got, stopped) || strings.Contains(got, ended) {
 				t.Fatalf("replacement watch reported a live runner stopped:\n%s", got)
 			}

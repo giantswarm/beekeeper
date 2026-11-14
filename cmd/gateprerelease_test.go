@@ -147,8 +147,8 @@ func TestLanesSayWhatASettlingMergeWaitsFor(t *testing.T) {
 			if !c.failed {
 				return
 			}
-			w := &watcher{a: a, last: map[string]time.Time{}}
-			w.settled(context.Background(), a.now)
+			w := &Watcher{Host: a, Last: map[string]time.Time{}}
+			w.Settled(context.Background(), a.now)
 			if st, _ := a.store.Read(); len(st.Merges) != 0 {
 				t.Errorf("the watch keeps a failed release settling: %+v", st.Merges)
 			}

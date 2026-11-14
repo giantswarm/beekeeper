@@ -68,7 +68,7 @@ func (a *app) splitNotes(notes []state.Note) noteSplit {
 // 3: …") rather than for a person.
 func forGuide(n *state.Note) bool {
 	who, _ := noteFor(n)
-	return strings.HasPrefix(strings.ToLower(who), strings.ToLower(guideRole.title))
+	return strings.HasPrefix(strings.ToLower(who), strings.ToLower(guideRole.Title))
 }
 
 // guidedText is the one line that stands for the guide's notes.

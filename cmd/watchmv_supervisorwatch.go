@@ -13,12 +13,12 @@ import (
 	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
-func (w *watcher) loopRunning() bool {
-	if w.loopOwned {
+func (w *Watcher) LoopRunning() bool {
+	if w.LoopOwned {
 		return true
 	}
 	var pid int
-	found, err := w.a.store.ReadFile(loop.LoopPIDFile, &pid)
+	found, err := w.Host.store.ReadFile(loop.LoopPIDFile, &pid)
 	return err == nil && found && pid > 0 && proc.Alive(pid)
 }
 
@@ -29,8 +29,8 @@ type watchLevel struct {
 	Value json.RawMessage
 }
 
-func (w *watcher) publishLevel(kind string, value any) {
-	if w.a.store == nil {
+func (w *Watcher) publishLevel(kind string, value any) {
+	if w.Host.store == nil {
 		return
 	}
 	raw, err := json.Marshal(value)
@@ -39,12 +39,12 @@ func (w *watcher) publishLevel(kind string, value any) {
 	}
 	name := "watch-" + kind + ".json"
 	var old watchLevel
-	found, err := w.a.store.ReadFile(name, &old)
+	found, err := w.Host.store.ReadFile(name, &old)
 	if err != nil {
 		return
 	}
 	next := watchLevel{At: clk.Now(), Value: raw}
-	if err := w.a.store.WriteFile(name, next); err != nil {
+	if err := w.Host.store.WriteFile(name, next); err != nil {
 		return
 	}
 	changed := !bytes.Equal(old.Value, raw)
@@ -55,34 +55,34 @@ func (w *watcher) publishLevel(kind string, value any) {
 		}
 	}
 	if !found || changed {
-		_ = w.a.store.Record(event(watchParty, "watch."+kind, "%s", raw))
+		_ = w.Host.store.Record(event(WatchParty, "watch."+kind, "%s", raw))
 	}
 }
 
-func (w *watcher) publishAlerts(firing []alerts.Firing) {
-	rules := w.a.alertRules()
-	rules.InPlay = w.a.inPlay(clk.Now())
+func (w *Watcher) PublishAlerts(firing []alerts.Firing) {
+	rules := w.Host.alertRules()
+	rules.InPlay = w.Host.inPlay(clk.Now())
 	firing = slices.DeleteFunc(slices.Clone(firing), func(f alerts.Firing) bool { return !rules.Wakes(f.Installation, f.Alert) })
 	w.publishLevel("alert-state", firing)
 }
 
-func (w *watcher) publishBudget(held bool) { w.publishLevel("budget-state", held) }
+func (w *Watcher) PublishBudget(held bool) { w.publishLevel("budget-state", held) }
 
-func (w *watcher) publishMachine() {
-	w.mu.Lock()
+func (w *Watcher) PublishMachine() {
+	w.Mu.Lock()
 	active := map[string]string{}
 	// diskfill is absent on purpose: DISK FILLING is a forecast from the
 	// write rate, and a forecast never holds starts; only the disk-state
 	// reading's Low (free space under watch.diskMinMiB) does.
 	for _, key := range []string{loop.LoopDiskKind, "diskfull", "load", "cpupsi", "avail", "psi", "swap", "oomd"} {
-		if c, ok := w.active[key]; ok {
+		if c, ok := w.Active[key]; ok {
 			active[key] = c.Label
 		}
 	}
-	w.mu.Unlock()
+	w.Mu.Unlock()
 	w.publishLevel("machine-state", active)
 }
 
-func (w *watcher) publishDisk(reading capacity.WatchDiskReading) {
+func (w *Watcher) PublishDisk(reading capacity.WatchDiskReading) {
 	w.publishLevel("disk-state", reading)
 }

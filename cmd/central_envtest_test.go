@@ -77,13 +77,13 @@ func (p *person) run(args ...string) (string, int) {
 }
 
 // watcher is the person's watch, its lines into out.
-func (p *person) watcher(out *bytes.Buffer) *watcher {
+func (p *person) watcher(out *bytes.Buffer) *Watcher {
 	p.t.Helper()
 	a := &app{cfgPath: p.cfg, out: out}
 	if err := a.load(); err != nil {
 		p.t.Fatal(err)
 	}
-	return &watcher{a: a, last: map[string]time.Time{}}
+	return &Watcher{Host: a, Last: map[string]time.Time{}}
 }
 
 // Two people's machines share an installation through the central instance:
@@ -152,7 +152,7 @@ func TestCentralEnvtest(t *testing.T) {
 	w := ana.watcher(&lines)
 	setAgents(state.Agent{Party: state.Party{Name: agentOne}, Task: "giantswarm/beekeeper#157", Registered: time.Now()},
 		state.Agent{Party: state.Party{Name: agentTwo}, Registered: time.Now()})
-	w.syncRoster(context.Background())
+	w.SyncRoster(context.Background())
 	got := roster()
 	if a := got["local:ana-laptop/"+agentOne]; a == nil || a["state"] != busyWord || a["task"] != "giantswarm/beekeeper#157" || a["person"] != anaEmail {
 		t.Errorf("Agent one on the roster: %v", got)
@@ -161,12 +161,12 @@ func TestCentralEnvtest(t *testing.T) {
 		t.Errorf("Agent two on the roster: %v", got)
 	}
 	before := e.events(t)
-	w.syncRoster(context.Background())
+	w.SyncRoster(context.Background())
 	if n := e.events(t) - before; n != 0 {
 		t.Errorf("a sync without a transition wrote %d events", n)
 	}
 	setAgents(state.Agent{Party: state.Party{Name: agentOne}, Done: true, Registered: time.Now()})
-	w.syncRoster(context.Background())
+	w.SyncRoster(context.Background())
 	got = roster()
 	if a := got["local:ana-laptop/"+agentOne]; a == nil || a["state"] != "ended" {
 		t.Errorf("Agent one done: %v", got)
@@ -188,13 +188,13 @@ func TestCentralEnvtest(t *testing.T) {
 		t.Errorf("list while unreachable: exit %d, want the machine's leases and %d: %s", code, ExitCentral, out)
 	}
 	setAgents(state.Agent{Party: state.Party{Name: "Agent three"}, Registered: time.Now()})
-	w.syncRoster(context.Background())
-	w.syncRoster(context.Background())
+	w.SyncRoster(context.Background())
+	w.SyncRoster(context.Background())
 	if n := strings.Count(lines.String(), "CENTRAL UNREACHABLE lab: "); n != 1 {
 		t.Errorf("%d CENTRAL UNREACHABLE lines, want 1:\n%s", n, lines.String())
 	}
 	m.Down(false)
-	w.syncRoster(context.Background())
+	w.SyncRoster(context.Background())
 	if !strings.Contains(lines.String(), "ENDED CENTRAL UNREACHABLE lab") {
 		t.Errorf("no ENDED line once the central instance answers:\n%s", lines.String())
 	}

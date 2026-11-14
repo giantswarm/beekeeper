@@ -9,17 +9,17 @@ import (
 // ghKey starts the condition key of an agent whose gh is unbrokered.
 const ghKey = "gh "
 
-// unbrokered says each agent on the roster whose shell resolves a gh other
+// Unbrokered says each agent on the roster whose shell resolves a gh other
 // than the agent's own (agents.shell.path, the gh link to devctl): its gh
 // acts on the person's own login, or fails, instead of the App's token. One
 // GH UNBROKERED line each, and its ENDED line once the agent's gh is its own
 // or it left the roster.
-func (w *watcher) unbrokered() {
-	path := w.a.cfg.Agents.Shell.Path
+func (w *Watcher) Unbrokered() {
+	path := w.Host.cfg.Agents.Shell.Path
 	if len(path) == 0 {
 		return
 	}
-	st, err := w.a.store.Peek()
+	st, err := w.Host.store.Peek()
 	if err != nil {
 		return
 	}
@@ -30,8 +30,8 @@ func (w *watcher) unbrokered() {
 		}
 		key := ghKey + ag.Name
 		found[key] = true
-		w.emit(key, "GH UNBROKERED %q: its shell resolves gh to %s (read %s), not the agent's own in %s (agents.shell.path): its gh acts without the App's token",
-			ag.Name, ag.GH, clock(w.a.now, ag.GHAt), strings.Join(path, ", "))
+		w.Emit(key, "GH UNBROKERED %q: its shell resolves gh to %s (read %s), not the agent's own in %s (agents.shell.path): its gh acts without the App's token",
+			ag.Name, ag.GH, clock(w.Host.now, ag.GHAt), strings.Join(path, ", "))
 	}
-	w.clearMissing(ghKey, found)
+	w.ClearMissing(ghKey, found)
 }

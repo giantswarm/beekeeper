@@ -12,7 +12,7 @@ import (
 
 // The installed loop owns a watch for its entire lifetime. Use a separate
 // app value: both loops update their clock and transcript cache.
-var runLoopWatch = func(ctx context.Context, w *watcher) error { return w.run(ctx, false) }
+var runLoopWatch = func(ctx context.Context, w *Watcher) error { return w.Run(ctx, false) }
 
 func (a *app) startLoopWatch(ctx context.Context) func() {
 	ctx, cancel := context.WithCancel(ctx)
@@ -21,13 +21,13 @@ func (a *app) startLoopWatch(ctx context.Context) func() {
 	cfg.Watch.BudgetEvery.Duration = max(30*time.Second, cfg.Watch.Interval.Duration)
 	observing.cfg = &cfg
 	w := observing.newWatcher(false, true)
-	w.loopOwned = true
+	w.LoopOwned = true
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		defer w.bg.Wait()
-		defer w.stand.inflight.Wait()
-		defer w.timerActs.Wait()
+		defer w.Bg.Wait()
+		defer w.Stand.Inflight.Wait()
+		defer w.TimerActs.Wait()
 		if err := runLoopWatch(ctx, w); err != nil && ctx.Err() == nil {
 			_, _ = fmt.Fprintln(a.out, "SUPERVISOR WATCH FAILED:", err)
 		}

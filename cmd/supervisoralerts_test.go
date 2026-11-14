@@ -86,7 +86,7 @@ func TestLoopAlertIgnoresOtherTeamsPages(t *testing.T) {
 	unowned := loopFiring()
 	unowned.Installation, unowned.Team = "unowned-fixture", loopOtherTeam
 	w := r.a.newWatcher(false, false)
-	w.publishAlerts([]alerts.Firing{f, unowned})
+	w.PublishAlerts([]alerts.Firing{f, unowned})
 	r.pass(t)
 	st, err := r.a.store.Read()
 	if err != nil || len(st.Notes) != 0 {
@@ -123,7 +123,7 @@ func TestLoopAlertTeamPageUnderWorkingHoursInhibitionCounts(t *testing.T) {
 	}
 	blockLoopAlert(t, r, firing[0])
 	w := r.a.newWatcher(false, false)
-	w.publishAlerts(firing)
+	w.PublishAlerts(firing)
 	r.pass(t)
 	st, err := r.a.store.Read()
 	if err != nil || len(st.Notes) != 1 || !strings.Contains(st.Notes[0].Text, firing[0].Instance()) {
@@ -206,7 +206,7 @@ func TestLoopAlertBudgetHoldsWakeAndReplacement(t *testing.T) {
 			readLoopAlerts = func(context.Context, *app) ([]alerts.Firing, error) { return []alerts.Firing{f}, nil }
 			loopResumable = func(*app, *state.State, state.Agent) bool { return resumable }
 			r.park(t, loop.AlertParkPrefix+f.Alertname, time.Now())
-			if err := r.a.store.Record(event(watchParty, "watch.budget-state", "true")); err != nil {
+			if err := r.a.store.Record(event(WatchParty, "watch.budget-state", "true")); err != nil {
 				t.Fatal(err)
 			}
 			r.pass(t)
@@ -256,13 +256,13 @@ func TestLoopAlertReadsWatchEvent(t *testing.T) {
 	r := newLoopRig(t)
 	f := loopFiring()
 	w := r.a.newWatcher(false, false)
-	w.publishAlerts([]alerts.Firing{f})
-	w.emitNow("alerts", "NEW alert line after the structured snapshot")
+	w.PublishAlerts([]alerts.Firing{f})
+	w.EmitNow("alerts", "NEW alert line after the structured snapshot")
 	got, err := read(context.Background(), r.a)
 	if err != nil || len(got) != 1 || got[0].Instance() != f.Instance() {
 		t.Fatalf("watch event: %+v %v", got, err)
 	}
-	w.publishAlerts(nil)
+	w.PublishAlerts(nil)
 	got, err = read(context.Background(), r.a)
 	if err != nil || len(got) != 0 {
 		t.Fatalf("resolved: %+v %v", got, err)
@@ -494,7 +494,7 @@ func TestLoopAlertLegacyWatchStateKeepsOwner(t *testing.T) {
 		t.Fatal(err)
 	}
 	w := r.a.newWatcher(false, false)
-	w.publishAlerts([]alerts.Firing{f})
+	w.PublishAlerts([]alerts.Firing{f})
 	r.pass(t)
 	st, err := r.a.store.Read()
 	if err != nil || len(st.Notes) != 0 {

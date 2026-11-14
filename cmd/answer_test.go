@@ -307,7 +307,7 @@ func TestAnAnswerAfterItsDefaultReplacesIt(t *testing.T) {
 				Text: "Merge now?", Refs: []string{privateThread}, Due: due, Default: "merge it at the due time"})
 		}
 		st.NextNote = 2
-		_, evs, closed := closeDefaulted(st, notePerson, watchParty, relayNow)
+		_, evs, closed := closeDefaulted(st, notePerson, WatchParty, relayNow)
 		if len(closed) != 2 || len(st.Notes) != 0 || len(st.Defaulted) != 2 {
 			t.Fatalf("closed %+v, open %+v, defaulted %+v", closed, st.Notes, st.Defaulted)
 		}
@@ -340,7 +340,7 @@ func TestAnAnswerAfterItsDefaultReplacesIt(t *testing.T) {
 	}
 	for range 2 {
 		if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-			closeDefaulted(st, notePerson, watchParty, a.now)
+			closeDefaulted(st, notePerson, WatchParty, a.now)
 			return nil, nil
 		}); err != nil {
 			t.Fatal(err)
@@ -361,7 +361,7 @@ func TestNoteForAPersonNeedsItsThreadAndIsWarnedOfItsAnswer(t *testing.T) {
 	if err := addNote(a, append(noRef, "approve "+prURL+"?")...); Code(err) != ExitUsage || !strings.Contains(err.Error(), "it names no thread: --ref owner/repo#n") {
 		t.Fatalf("a decision without --ref: %v", err)
 	}
-	if err := addNote(a, "--for", guideRole.title, "State of the watch"); Code(err) != ExitUsage {
+	if err := addNote(a, "--for", guideRole.Title, "State of the watch"); Code(err) != ExitUsage {
 		t.Fatalf("a memo --for a role: %v", err)
 	}
 	if err := runAnswer(a, decisionRef, "keep the draft"); err != nil {

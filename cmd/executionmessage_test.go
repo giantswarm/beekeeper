@@ -138,8 +138,8 @@ func TestExecutionWakeNoteAnswerAndTimerShareDurableDelivery(t *testing.T) {
 	}
 	n := &state.Note{ID: 1, By: state.Party{Session: r.ConversationID, Name: r.Name}}
 	a.tellFiler(ctx, by, n, "the note answer")
-	w := &watcher{a: a}
-	w.wakeTimer(ctx, timerFire{t: state.Timer{ID: 1, Wake: r.Name, What: "the timer"}, reason: paramDue})
+	w := &Watcher{Host: a}
+	w.WakeTimer(ctx, timerFire{T: state.Timer{ID: 1, Wake: r.Name, What: "the timer"}, Reason: paramDue})
 	st, _ := a.store.Read()
 	if len(st.Starts[0].Execution.Messages) != 3 {
 		t.Fatal("a wake source bypassed the shared outbox")
@@ -172,13 +172,13 @@ func TestExecutionDistinctIdenticalSendsAreNotDeduplicated(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	w := &watcher{a: a}
+	w := &Watcher{Host: a}
 	timer := state.Timer{ID: 7, Repeat: "daily", Wake: r.Name, What: "continue", Due: a.now}
-	w.wakeTimer(ctx, timerFire{t: timer, reason: paramDue})
+	w.WakeTimer(ctx, timerFire{T: timer, Reason: paramDue})
 	// Retrying this particular fire must reuse its receipt.
-	w.wakeTimer(ctx, timerFire{t: timer, reason: paramDue})
+	w.WakeTimer(ctx, timerFire{T: timer, Reason: paramDue})
 	timer.Due = timer.Due.Add(24 * time.Hour)
-	w.wakeTimer(ctx, timerFire{t: timer, reason: paramDue})
+	w.WakeTimer(ctx, timerFire{T: timer, Reason: paramDue})
 	st, _ := a.store.Read()
 	if calls != 4 || len(st.Starts[0].Execution.Messages) != 4 {
 		t.Fatalf("distinct sends collapsed or a timer retry duplicated: calls=%d receipts=%d", calls, len(st.Starts[0].Execution.Messages))

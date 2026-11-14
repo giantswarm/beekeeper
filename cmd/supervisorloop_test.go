@@ -242,7 +242,7 @@ func newLoopRig(t *testing.T) *loopRig {
 		}
 		return github.Budget{Remaining: st.Budget.Remaining, Limit: st.Budget.Limit, Reset: st.Budget.Reset, GraphQL: graphqlOf(st.Budget.GraphQL)}, nil
 	}
-	if err := store.Record(event(watchParty, "watch.budget-state", "false")); err != nil {
+	if err := store.Record(event(WatchParty, "watch.budget-state", "false")); err != nil {
 		t.Fatal(err)
 	}
 	// The loop first started a minute ago: the rig's parks are requests
@@ -2282,16 +2282,16 @@ func TestSupervisorLoopLeavesLineOnlyTimersForWatch(t *testing.T) {
 				t.Fatalf("loop took watch-only timer: checks %d, wakes %d, timers %+v", checks, wakes, st.Timers)
 			}
 			if !conditional {
-				lines, evs := firePending(st, nil, r.a.now)
+				lines, evs := FirePending(st, nil, r.a.now)
 				if len(lines) != 1 || len(evs) != 1 || evs[0].Verb != "timer.due" {
 					t.Fatalf("firePending lost plain timer after loop: %v, %+v", lines, evs)
 				}
 			}
 			w, desktop, out := notifyingWatch(t, r.a.store.Dir(), false)
-			w.a.now, w.chores = r.a.now, true // a running watch, not --once
+			w.Host.now, w.Chores = r.a.now, true // a running watch, not --once
 			live := []*claude.Session{{ID: "s4", HostID: hostFour, Name: agentFour}}
-			w.pending(context.Background(), live)
-			w.timerActs.Wait()
+			w.Pending(context.Background(), live)
+			w.TimerActs.Wait()
 			if !strings.Contains(out.String(), "TIMER:") || len(desktop.sent) != 1 || !strings.Contains(desktop.sent[0].Summary, fmt.Sprintf("timer #%d", timer.ID)) {
 				t.Fatalf("watch lost timer line or notification: %s; %+v", out, desktop.sent)
 			}
@@ -2762,9 +2762,9 @@ func TestLoopRunsTheDoctorsRosterAndArchiveStepEveryPass(t *testing.T) {
 
 	doneWorker := state.Party{Session: "11111111-0000-4000-8000-000000000001", Name: loopWorker}
 	reviewer := state.Party{Session: "22222222-0000-4000-8000-000000000002", Name: loopReviewer}
-	guide3 := state.Party{Session: "33333333-0000-4000-8000-000000000003", Name: guideRole.runName(3)}
-	guide4 := state.Party{Session: "44444444-0000-4000-8000-000000000004", Name: guideRole.runName(4)}
-	guide5 := state.Party{Session: "55555555-0000-4000-8000-000000000005", Name: guideRole.runName(5)}
+	guide3 := state.Party{Session: "33333333-0000-4000-8000-000000000003", Name: guideRole.RunName(3)}
+	guide4 := state.Party{Session: "44444444-0000-4000-8000-000000000004", Name: guideRole.RunName(4)}
+	guide5 := state.Party{Session: "55555555-0000-4000-8000-000000000005", Name: guideRole.RunName(5)}
 	staleIdle := state.Party{Session: "66666666-0000-4000-8000-000000000006", Name: "stale worker"}
 	personOwn := state.Party{Session: "77777777-0000-4000-8000-000000000007", Name: "person session"}
 

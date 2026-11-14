@@ -269,19 +269,19 @@ func TestWatchCapacity(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
 	room := roomy()
 	reads := 0
-	w.readHeadroom = func(context.Context, *capacity.SwapReading) *capacity.Headroom { reads++; return room }
+	w.ReadHeadroom = func(context.Context, *capacity.SwapReading) *capacity.Headroom { reads++; return room }
 	count := func(s string) int { return strings.Count(out.String(), s) }
 
-	w.capacity(context.Background(), supervised(3), nil)
+	w.Capacity(context.Background(), supervised(3), nil)
 	if out.Len() != 0 || reads != 0 {
 		t.Fatalf("below ceiling (reads %d):\n%s", reads, out)
 	}
-	w.capacity(context.Background(), supervised(10), nil)
-	w.capacity(context.Background(), supervised(10), nil)
+	w.Capacity(context.Background(), supervised(10), nil)
+	w.Capacity(context.Background(), supervised(10), nil)
 	if count("CAPACITY FULL 10 of 10: headroom:") != 1 || reads != 2 {
 		t.Fatalf("at the ceiling twice (reads %d):\n%s", reads, out)
 	}
-	w.capacity(context.Background(), supervised(9), nil)
+	w.Capacity(context.Background(), supervised(9), nil)
 	if count("ENDED CAPACITY FULL 10 of 10") != 1 || reads != 2 {
 		t.Fatalf("below ceiling again (reads %d):\n%s", reads, out)
 	}
@@ -290,12 +290,12 @@ func TestWatchCapacity(t *testing.T) {
 // The watch's swap reading reaches capacity through the state while fresh.
 func TestWatchSwapReading(t *testing.T) {
 	w, _, _ := notifyingWatch(t, t.TempDir(), false)
-	w.keepSwap(&capacity.SwapReading{At: relayNow, UsedMiB: 900, PerHourMiB: 40, Rated: true})
-	if r := w.a.watchSwap(); r == nil || r.PerHourMiB != 40 {
+	w.KeepSwap(&capacity.SwapReading{At: relayNow, UsedMiB: 900, PerHourMiB: 40, Rated: true})
+	if r := w.Host.watchSwap(); r == nil || r.PerHourMiB != 40 {
 		t.Fatalf("fresh reading: %+v", r)
 	}
-	w.a.now = relayNow.Add(swapFresh + time.Second)
-	if r := w.a.watchSwap(); r != nil {
+	w.Host.now = relayNow.Add(swapFresh + time.Second)
+	if r := w.Host.watchSwap(); r != nil {
 		t.Errorf("stale reading counted: %+v", r)
 	}
 }
@@ -534,40 +534,40 @@ func TestCapacityCeilingZeroAndUnset(t *testing.T) {
 	watchDir := t.TempDir()
 	watchCfg := filepath.Join(watchDir, "config.yaml")
 	w, _, out := notifyingWatch(t, watchDir, false)
-	w.a.cfgPath = watchCfg
+	w.Host.cfgPath = watchCfg
 	reads := 0
-	w.readHeadroom = func(context.Context, *capacity.SwapReading) *capacity.Headroom { reads++; return roomy() }
-	w.capacity(context.Background(), supervised(10), nil)
+	w.ReadHeadroom = func(context.Context, *capacity.SwapReading) *capacity.Headroom { reads++; return roomy() }
+	w.Capacity(context.Background(), supervised(10), nil)
 	if !strings.Contains(out.String(), fullTenOfTen) || reads != 1 {
 		t.Fatalf("before ceiling 0 (reads %d):\n%s", reads, out)
 	}
 	out.Reset()
 	setCap(watchCfg, "0")
-	w.capacity(context.Background(), supervised(0), nil)
+	w.Capacity(context.Background(), supervised(0), nil)
 	if !strings.Contains(out.String(), "ENDED "+fullTenOfTen) || reads != 1 {
 		t.Fatalf("at ceiling 0 with 0 busy (reads %d):\n%s", reads, out)
 	}
-	if w.a.cfg.Capacity.Ceiling != config.DefaultCeiling {
-		t.Errorf("w.cfg.Capacity mutated to %+v", w.a.cfg.Capacity)
+	if w.Host.cfg.Capacity.Ceiling != config.DefaultCeiling {
+		t.Errorf("w.cfg.Capacity mutated to %+v", w.Host.cfg.Capacity)
 	}
 	out.Reset()
-	w.capacity(context.Background(), supervised(2), nil)
+	w.Capacity(context.Background(), supervised(2), nil)
 	if out.Len() != 0 || reads != 1 {
 		t.Fatalf("at ceiling 0 with 2 busy (reads %d):\n%s", reads, out)
 	}
 
 	// A watcher started at ceiling 0 speaks once watchCfg restores a positive ceiling.
 	wFromZero, _, outFromZero := notifyingWatch(t, t.TempDir(), false)
-	wFromZero.a.cfg.Capacity = zero
-	wFromZero.a.cfgPath = watchCfg
+	wFromZero.Host.cfg.Capacity = zero
+	wFromZero.Host.cfgPath = watchCfg
 	fromZeroReads := 0
-	wFromZero.readHeadroom = func(context.Context, *capacity.SwapReading) *capacity.Headroom { fromZeroReads++; return roomy() }
-	wFromZero.capacity(context.Background(), supervised(10), nil)
+	wFromZero.ReadHeadroom = func(context.Context, *capacity.SwapReading) *capacity.Headroom { fromZeroReads++; return roomy() }
+	wFromZero.Capacity(context.Background(), supervised(10), nil)
 	if outFromZero.Len() != 0 || fromZeroReads != 0 {
 		t.Fatalf("started at ceiling 0 (reads %d):\n%s", fromZeroReads, outFromZero)
 	}
 	setCap(watchCfg, "10")
-	wFromZero.capacity(context.Background(), supervised(10), nil)
+	wFromZero.Capacity(context.Background(), supervised(10), nil)
 	if !strings.Contains(outFromZero.String(), fullTenOfTen) || fromZeroReads != 1 {
 		t.Fatalf("after restoring positive ceiling (reads %d):\n%s", fromZeroReads, outFromZero)
 	}
@@ -576,7 +576,7 @@ func TestCapacityCeilingZeroAndUnset(t *testing.T) {
 	if err := os.WriteFile(watchCfg, []byte("capacity: ["), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if got := wFromZero.a.liveCapacity(); got.Ceiling != zero.Ceiling {
+	if got := wFromZero.Host.liveCapacity(); got.Ceiling != zero.Ceiling {
 		t.Errorf("liveCapacity on broken file = %+v, want fallback %+v", got, zero)
 	}
 }

@@ -244,7 +244,7 @@ func overridesDue(st *state.State, found map[int]checkResult, now time.Time) map
 			}
 		case o.Ref == "" && !o.Until.IsZero() && !now.Before(o.Until):
 			due[o.ID] = "its time " + clockZone(now, o.Until) + " came"
-		case o.Ref != "" && found[o.ID].holds:
+		case o.Ref != "" && found[o.ID].Holds:
 			due[o.ID] = o.Ref + " closed"
 		}
 	}
@@ -294,10 +294,10 @@ func (a *app) settleOverrides(ctx context.Context, by state.Party, check func([]
 				continue
 			}
 			if r, ok := found[o.ID]; ok {
-				if r.unreadable && (o.Found != r.reason) {
-					lines = append(lines, fmt.Sprintf("CONFIG OVERRIDE UNREADABLE: #%d, %s cannot be read (%s); it stays in effect", o.ID, o.Ref, r.reason))
+				if r.Unreadable && (o.Found != r.Reason) {
+					lines = append(lines, fmt.Sprintf("CONFIG OVERRIDE UNREADABLE: #%d, %s cannot be read (%s); it stays in effect", o.ID, o.Ref, r.Reason))
 				}
-				o.Checked, o.Found = now.UTC(), r.reason
+				o.Checked, o.Found = now.UTC(), r.Reason
 			}
 		}
 		return evs, nil
@@ -326,9 +326,9 @@ func loopSettleOverrides(l *loop.Loop, ctx context.Context, st *state.State) {
 		return a.loopTimerChecks(ctx, ts, a.now, held)
 	})
 	snapshot := *a
-	w := &watcher{a: &snapshot}
+	w := &Watcher{Host: &snapshot}
 	for _, line := range lines {
-		w.emitNow("timer", "%s", line)
+		w.EmitNow("timer", "%s", line)
 	}
 	if err != nil {
 		l.SayOnce("overrides", "SUPERVISOR CONFIG OVERRIDES FAILED: %v", err)

@@ -113,7 +113,7 @@ func TestEndedWorkerTimersAreCancelled(t *testing.T) {
 			{ID: 6, Wake: handedBy.Session, Due: now.Add(time.Hour)},
 		},
 	}
-	_, events, fires, changed := settleTimers(st, nil, now)
+	_, events, fires, changed := SettleTimers(st, nil, now)
 	if !changed || len(events) != 4 || len(fires) != 0 || len(st.Timers) != 2 || st.Timers[0].ID != 3 || st.Timers[1].ID != 6 {
 		t.Fatalf("timers=%+v events=%+v fires=%+v", st.Timers, events, fires)
 	}

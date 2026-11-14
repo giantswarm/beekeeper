@@ -141,7 +141,7 @@ func (d *timerDispatchSession) close() {
 	d.batches.Wait()
 }
 
-func (d *timerDispatchSession) pass(a *app) (*watcher, error) {
+func (d *timerDispatchSession) pass(a *app) (*Watcher, error) {
 	// Stop intent is read from the atomic snapshot: a locked read would queue
 	// this pass behind every writer before any due timer is even looked at.
 	stopped, err := timerStopRequested(a.store)
@@ -151,14 +151,14 @@ func (d *timerDispatchSession) pass(a *app) (*watcher, error) {
 	if stopped {
 		d.close()
 		d.ctx, d.cancel = context.WithCancel(d.parent)
-		return &watcher{a: a.snapshotAtNow()}, nil
+		return &Watcher{Host: a.snapshotAtNow()}, nil
 	}
 	w, err := a.dispatchTimerPass(d.ctx)
 	if err != nil {
 		return nil, err
 	}
 	d.active.Add(1)
-	d.batches.Go(func() { defer d.active.Add(-1); w.timerActs.Wait() })
+	d.batches.Go(func() { defer d.active.Add(-1); w.TimerActs.Wait() })
 	// Stop may have arrived while checks were running.
 	stopped, err = timerStopRequested(a.store)
 	if err != nil {
@@ -177,13 +177,13 @@ func (d *timerDispatchSession) pass(a *app) (*watcher, error) {
 // the dispatcher was ticking. Only the settlement below takes the lock, and it
 // settles against the current state, so a snapshot that a writer has just
 // superseded costs at most a repeated check, never a double claim.
-func (a *app) dispatchTimerPass(ctx context.Context) (*watcher, error) {
+func (a *app) dispatchTimerPass(ctx context.Context) (*Watcher, error) {
 	st, err := a.store.Peek()
 	if err != nil {
 		return nil, err
 	}
 	batch := a.snapshotAtNow()
-	w := &watcher{a: batch, clock: wallClock{}}
+	w := &Watcher{Host: batch, Clock: WallClock{}}
 	if st.Stop != nil {
 		return w, nil
 	}
@@ -212,7 +212,7 @@ func (a *app) dispatchTimerPass(ctx context.Context) (*watcher, error) {
 	for _, t := range st.Timers {
 		if checkOf(t).github && timerDispatchCheckDue(t, now) {
 			if _, ok := found[t.ID]; !ok {
-				found[t.ID] = checkResult{unreadable: true, reason: "GitHub check deferred by admission"}
+				found[t.ID] = checkResult{Unreadable: true, Reason: "GitHub check deferred by admission"}
 			}
 		}
 	}
@@ -232,7 +232,7 @@ func (a *app) dispatchTimerPass(ctx context.Context) (*watcher, error) {
 		var events []state.Event
 		lines, events, fires, _ = settleTimersMatching(current, found, now, timerTick, nil)
 		for _, line := range lines {
-			events = append(events, event(watchParty, "watch.timer", "%s", line))
+			events = append(events, event(WatchParty, "watch.timer", "%s", line))
 		}
 		return events, nil
 	})
@@ -240,9 +240,9 @@ func (a *app) dispatchTimerPass(ctx context.Context) (*watcher, error) {
 		return nil, err
 	}
 	for _, line := range lines {
-		w.outputEvent(line)
+		w.OutputEvent(line)
 	}
-	w.actTimers(ctx, fires)
+	w.ActTimers(ctx, fires)
 	return w, nil
 }
 

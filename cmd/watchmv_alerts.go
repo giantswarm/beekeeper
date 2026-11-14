@@ -11,22 +11,22 @@ import (
 // HelmReleases every alerts.discover.every, beginning with a restart only
 // once the kept discovery is that old, and says the ones that joined or
 // left; a failed listing of Teleport's clusters is a lasting condition.
-func (w *watcher) watchDiscovery(ctx context.Context) {
-	every := w.a.cfg.Alerts.Discover.Every.Duration
-	w.loop(ctx, every, true, func(ctx context.Context) {
-		if d, err := alerts.LoadDiscovery(w.a.cfg.StateDir); err == nil && time.Since(d.At) < every-time.Minute {
+func (w *Watcher) watchDiscovery(ctx context.Context) {
+	every := w.Host.cfg.Alerts.Discover.Every.Duration
+	w.Loop(ctx, every, true, func(ctx context.Context) {
+		if d, err := alerts.LoadDiscovery(w.Host.cfg.StateDir); err == nil && time.Since(d.At) < every-time.Minute {
 			return
 		}
-		changed, _, err := w.a.alertDiscovery(ctx)
+		changed, _, err := w.Host.alertDiscovery(ctx)
 		if err != nil {
 			if ctx.Err() == nil {
-				w.emit("discover", "ALERTS discovery failed: %v", err)
+				w.Emit("discover", "ALERTS discovery failed: %v", err)
 			}
 			return
 		}
-		w.clear("discover")
+		w.Clear("discover")
 		for _, l := range changed {
-			w.emitNow("alerts", "%s", l)
+			w.EmitNow("alerts", "%s", l)
 		}
 	})
 }

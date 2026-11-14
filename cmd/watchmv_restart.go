@@ -20,28 +20,28 @@ type restartRequest struct {
 // restartWatch tells a long-running process when an install asked it to
 // restart on the installed binary.
 type restartWatch struct {
-	file string
+	File string
 	// since is the newest request time this process already answered: its
 	// start, or the request it was re-executed for.
-	since time.Time
+	Since time.Time
 	// binary says the running binary's path and whether another file was
 	// renamed over it; nil reads this process's.
-	binary func() (string, bool)
+	Binary func() (string, bool)
 }
 
-// due is the request this process restarts for, nil when none: one newer
+// Due is the request this process restarts for, nil when none: one newer
 // than the last it answered, for the binary path this process runs, which
 // another file replaced since.
-func (r *restartWatch) due() *restartRequest {
-	raw, err := os.ReadFile(r.file)
+func (r *restartWatch) Due() *restartRequest {
+	raw, err := os.ReadFile(r.File)
 	if err != nil {
 		return nil
 	}
 	var req restartRequest
-	if json.Unmarshal(raw, &req) != nil || !req.At.After(r.since) {
+	if json.Unmarshal(raw, &req) != nil || !req.At.After(r.Since) {
 		return nil
 	}
-	bin := r.binary
+	bin := r.Binary
 	if bin == nil {
 		bin = func() (string, bool) { return processBinary(os.Getpid()) }
 	}
@@ -51,11 +51,11 @@ func (r *restartWatch) due() *restartRequest {
 	return &req
 }
 
-// exec replaces this process with the installed binary for req; it returns
+// Exec replaces this process with the installed binary for req; it returns
 // only when that binary does not start, and the process then stays on the
 // running one, req answered.
-func (r *restartWatch) exec(req *restartRequest) error {
-	r.since = req.At
+func (r *restartWatch) Exec(req *restartRequest) error {
+	r.Since = req.At
 	b := platform.RunningBinary()
 	if b == nil {
 		return errors.New("the running binary is unknown")

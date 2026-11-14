@@ -13,14 +13,14 @@ type suspendReader interface {
 	SuspendRecords(context.Context, time.Time) ([]machine.SuspendRecord, error)
 }
 
-func watchSuspends(w *watcher, ctx context.Context, since time.Time, sessions []*claude.Session) {
+func watchSuspends(w *Watcher, ctx context.Context, since time.Time, sessions []*claude.Session) {
 	reader, ok := plat.Machine.(suspendReader)
 	if !ok {
 		return
 	}
-	defer w.recoverSuspend(ctx)
-	if !w.suspendChecked.IsZero() && w.suspendChecked.Before(since) {
-		since = w.suspendChecked
+	defer w.RecoverSuspend(ctx)
+	if !w.SuspendChecked.IsZero() && w.SuspendChecked.Before(since) {
+		since = w.SuspendChecked
 	}
 	query, cancel := context.WithTimeout(ctx, commandTimeout)
 	records, err := reader.SuspendRecords(query, since.Add(-2*time.Second))
@@ -29,28 +29,28 @@ func watchSuspends(w *watcher, ctx context.Context, since time.Time, sessions []
 		return
 	} // journal access is optional, as on unsupported platforms
 	for _, record := range records {
-		if !record.At.After(w.suspendThrough) {
+		if !record.At.After(w.SuspendThrough) {
 			continue
 		}
 		if record.Entry {
-			w.suspendEntry = record.At
+			w.SuspendEntry = record.At
 			continue
 		}
-		if w.suspendEntry.IsZero() || record.At.Before(w.suspendEntry) {
+		if w.SuspendEntry.IsZero() || record.At.Before(w.SuspendEntry) {
 			continue
 		}
-		st, err := w.a.store.Peek()
+		st, err := w.Host.store.Peek()
 		if err != nil {
 			return
 		} // retry the pair on the next poll
-		w.resumed(st, sessions, w.suspendEntry, record.At)
+		w.Resumed(st, sessions, w.SuspendEntry, record.At)
 		// The supervisor is now a service loop. Apply the same service recovery
 		// as after a reboot; a healthy loop continues without restarting it.
-		if w.standby {
-			w.checkLoop(ctx, st)
+		if w.Standby {
+			w.CheckLoop(ctx, st)
 		}
-		w.suspendThrough = record.At
-		w.suspendEntry = time.Time{}
+		w.SuspendThrough = record.At
+		w.SuspendEntry = time.Time{}
 	}
-	w.suspendChecked = w.a.now
+	w.SuspendChecked = w.Host.now
 }

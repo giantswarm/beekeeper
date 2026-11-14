@@ -4,7 +4,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 )
 
-// sameTitles runs in the command, which holds what it needs (watchSameTitles).
-func (w *watcher) sameTitles(sessions []*claude.Session) {
+// SameTitles runs in the command, which holds what it needs (watchSameTitles).
+func (w *Watcher) SameTitles(sessions []*claude.Session) {
 	watchSameTitles(w, sessions)
 }

@@ -46,32 +46,32 @@ func TestExecutionCIParkSurvivesLostReplyAndWakesOnResult(t *testing.T) {
 			if p == nil || !p.Checks || p.ReviewHead != "" || p.PostMerge != nil || st.Starts[0].Execution.Completed || len(st.ReviewParks) != 0 || len(st.Timers) != 1 {
 				t.Fatalf("CI wait became review/completion or duplicated: park %+v, timers %+v", p, st.Timers)
 			}
-			w := &watcher{a: a}
-			if settled := w.settledParks(context.Background(), st); len(settled) != 0 {
+			w := &Watcher{Host: a}
+			if settled := w.SettledParks(context.Background(), st); len(settled) != 0 {
 				t.Fatalf("ordinary PR settlement handled CI park: %+v", settled)
 			}
-			if !timerSettlesPark(st.Timers[0], p, a.cfg.Guide.Person) {
+			if !TimerSettlesPark(st.Timers[0], p, a.cfg.Guide.Person) {
 				t.Fatal("CI timer cannot wake its park")
 			}
 			answer := ciAnswer("OPEN", ciRunning)
 			readErr := errors.New("CI read unavailable")
 			fakeRead(t, func(string) ([]byte, error) { return answer, readErr })
 			found := checkTimers(context.Background(), st.Timers, a.now, false)
-			_, _, fires, _ := settleTimers(st, found, a.now)
+			_, _, fires, _ := SettleTimers(st, found, a.now)
 			if len(fires) != 0 || len(st.Timers) != 1 {
 				t.Fatal("unreadable CI woke worker")
 			}
 			readErr = nil
 			found = checkTimers(context.Background(), st.Timers, a.now.Add(timerEvery), false)
-			_, _, fires, _ = settleTimers(st, found, a.now.Add(timerEvery))
+			_, _, fires, _ = SettleTimers(st, found, a.now.Add(timerEvery))
 			if len(fires) != 0 || len(st.Timers) != 1 {
 				t.Fatal("running CI woke worker")
 			}
 			answer = ciAnswer("OPEN", result)
 			now := a.now.Add(2 * timerEvery)
 			found = checkTimers(context.Background(), st.Timers, now, false)
-			_, _, fires, _ = settleTimers(st, found, now)
-			if len(fires) != 1 || len(st.Timers) != 1 || fires[0].t.Wake != r.Name || !strings.Contains(fires[0].message(), "CI ") {
+			_, _, fires, _ = SettleTimers(st, found, now)
+			if len(fires) != 1 || len(st.Timers) != 1 || fires[0].T.Wake != r.Name || !strings.Contains(fires[0].Message(), "CI ") {
 				t.Fatalf("settled CI did not produce worker wake: %+v", fires)
 			}
 			// Persist settlement, then lose the in-memory fires as a restart would.
@@ -85,11 +85,11 @@ func TestExecutionCIParkSurvivesLostReplyAndWakesOnResult(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, _, fires, _ = settleTimers(restarted, found, now)
+			_, _, fires, _ = SettleTimers(restarted, found, now)
 			if len(fires) != 1 {
 				t.Fatal("restart lost the CI wake before outbox insertion")
 			}
-			w = &watcher{a: a}
+			w = &Watcher{Host: a}
 			// A replaced park cannot consume an old timer's wake.
 			if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 				st.Agents[0].Park.At = p.At.Add(time.Second)
@@ -97,7 +97,7 @@ func TestExecutionCIParkSurvivesLostReplyAndWakesOnResult(t *testing.T) {
 			}); err != nil {
 				t.Fatal(err)
 			}
-			w.wakeTimer(context.Background(), fires[0])
+			w.WakeTimer(context.Background(), fires[0])
 			if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 				if len(st.Starts[0].Execution.Messages) != 0 {
 					t.Error("stale timer woke replacement park")
@@ -111,7 +111,7 @@ func TestExecutionCIParkSurvivesLostReplyAndWakesOnResult(t *testing.T) {
 			}); err != nil {
 				t.Fatal(err)
 			}
-			w.wakeTimer(context.Background(), fires[0])
+			w.WakeTimer(context.Background(), fires[0])
 			stored, err := a.store.Read()
 			if err != nil || stored.Agents[0].Park == nil || len(stored.Starts[0].Execution.Messages) != 0 || len(stored.Timers) != 0 {
 				t.Fatalf("CI used the old execution: %v", err)
@@ -124,7 +124,7 @@ func TestExecutionCIParkSurvivesLostReplyAndWakesOnResult(t *testing.T) {
 			} else if len(park.Continuation) != 1 {
 				t.Fatalf("red CI lost its fresh continuation: %+v", park)
 			}
-			w.wakeTimer(context.Background(), fires[0])
+			w.WakeTimer(context.Background(), fires[0])
 			replayed, _ := a.store.Read()
 			if len(replayed.Starts[0].Execution.Messages) != 0 || len(replayed.Agents[0].Park.Continuation) != len(park.Continuation) {
 				t.Fatal("replay duplicated a delivery")
@@ -157,8 +157,8 @@ func TestExecutionCIParkWakesAtItsDeadline(t *testing.T) {
 	if len(st.Timers) != 1 || st.Timers[0].Until.IsZero() {
 		t.Fatalf("CI wait has no deadline: %+v", st.Timers)
 	}
-	_, _, fires, _ := settleTimers(st, map[int]checkResult{}, st.Timers[0].Until.Add(time.Minute))
-	if len(fires) != 1 || fires[0].t.Wake != r.Name || !fires[0].timedOut {
+	_, _, fires, _ := SettleTimers(st, map[int]checkResult{}, st.Timers[0].Until.Add(time.Minute))
+	if len(fires) != 1 || fires[0].T.Wake != r.Name || !fires[0].TimedOut {
 		t.Fatalf("deadline did not wake the worker: %+v", fires)
 	}
 }

@@ -303,7 +303,7 @@ func TestClosedAndMergedPlacesLeaveTheirLane(t *testing.T) {
 		asked = append(asked, n)
 		return pulls[n], nil
 	}
-	if err := a.checkPlaces(context.Background(), watchParty, now, "", "", 0, 30*time.Second); err != nil {
+	if err := a.checkPlaces(context.Background(), WatchParty, now, "", "", 0, 30*time.Second); err != nil {
 		t.Fatal(err)
 	}
 	if !slices.Equal(asked, []int{1, 2, 3, 4}) {

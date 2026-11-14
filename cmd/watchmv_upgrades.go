@@ -17,13 +17,13 @@ import (
 // upgrades.every, and one watch.interval while an upgrade runs on it or
 // holds it, so its end and the hold's lift are said within one interval.
 // Half an interval of slack lets a reading due at a tick be read at it.
-func (w *watcher) upgradeFresh(st *state.State, now time.Time) func(string) time.Duration {
-	interval := w.a.cfg.Watch.Interval.Duration
+func (w *Watcher) upgradeFresh(st *state.State, now time.Time) func(string) time.Duration {
+	interval := w.Host.cfg.Watch.Interval.Duration
 	return func(installation string) time.Duration {
-		if _, held := upgrade.Held(st, installation, now); held || w.upgrades.Running(installation) {
+		if _, held := upgrade.Held(st, installation, now); held || w.Upgrades.Running(installation) {
 			return interval / 2
 		}
-		return w.a.cfg.Upgrades.Every.Duration - interval/2
+		return w.Host.cfg.Upgrades.Every.Duration - interval/2
 	}
 }
 
@@ -40,55 +40,55 @@ type upgradeBeat struct {
 // upgradeWatchLive says whether a supervisor's watch began an upgrade cycle
 // within slowReads+1 intervals of now: its cycles run every interval, every
 // slowReads intervals while the machine is strained.
-func (w *watcher) upgradeWatchLive(now time.Time) bool {
+func (w *Watcher) upgradeWatchLive(now time.Time) bool {
 	var b upgradeBeat
-	found, err := w.a.store.ReadFile(upgradeWatchFile, &b)
-	return found && err == nil && now.Sub(b.At) < (slowReads+1)*w.a.cfg.Watch.Interval.Duration
+	found, err := w.Host.store.ReadFile(upgradeWatchFile, &b)
+	return found && err == nil && now.Sub(b.At) < (SlowReads+1)*w.Host.cfg.Watch.Interval.Duration
 }
 
-// upgradeCycle makes the upgrade holds those of the running upgrades. The
+// UpgradeCycle makes the upgrade holds those of the running upgrades. The
 // watch whose update sets a hold says UPGRADE, the one whose update lifts it
 // UPGRADE ENDED, so a second or restarted watch says neither again. An
 // unreadable installation is one line until it is readable again and keeps
 // its holds as they are; one without a kube context keeps them too and is
 // named once per watch (sayNoContext). The standby watch runs it only while no
 // supervisor's watch does, and says so once.
-func (w *watcher) upgradeCycle(ctx context.Context) {
-	w.upgradeCycleRead(ctx, w.a.upgradeStatuses)
+func (w *Watcher) UpgradeCycle(ctx context.Context) {
+	w.UpgradeCycleRead(ctx, w.Host.upgradeStatuses)
 }
 
-func (w *watcher) upgradeCycleRead(ctx context.Context, read func(context.Context, *state.State, time.Time, upgrade.Readings, func(string) time.Duration) []upgrade.Status) {
-	now := w.clk().Now()
-	if w.standby {
+func (w *Watcher) UpgradeCycleRead(ctx context.Context, read func(context.Context, *state.State, time.Time, upgrade.Readings, func(string) time.Duration) []upgrade.Status) {
+	now := w.Clk().Now()
+	if w.Standby {
 		live := w.upgradeWatchLive(now)
-		w.check("upgrades-standby", !live, "UPGRADES read by the standby watch: no supervisor's watch reads them, so this one sets and lifts the upgrade holds")
+		w.Check("upgrades-standby", !live, "UPGRADES read by the standby watch: no supervisor's watch reads them, so this one sets and lifts the upgrade holds")
 		if live {
 			return
 		}
 	} else {
-		_ = w.a.store.WriteFile(upgradeWatchFile, upgradeBeat{At: now})
+		_ = w.Host.store.WriteFile(upgradeWatchFile, upgradeBeat{At: now})
 	}
 	// Serialize observation and reconciliation across watches without holding
 	// the desk state lock during Kubernetes reads. Those reads can take minutes;
 	// timers, stop requests and other desk writers must remain able to settle.
 	var statuses []upgrade.Status
-	if dir := w.a.store.Dir(); dir != "" {
+	if dir := w.Host.store.Dir(); dir != "" {
 		cycle := flock.New(filepath.Join(dir, "upgrades-cycle.lock"))
 		ok, err := cycle.TryLockContext(ctx, 10*time.Millisecond)
 		if err != nil || !ok {
 			if ctx.Err() == nil {
-				w.fail("upgrades", "UPGRADES unknown: cycle lock unavailable (%v)", err)
+				w.Fail("upgrades", "UPGRADES unknown: cycle lock unavailable (%v)", err)
 			}
 			return
 		}
 		defer func() { _ = cycle.Unlock() }()
-		observed, err := w.a.store.Read()
+		observed, err := w.Host.store.Read()
 		if err != nil {
-			w.fail("upgrades", "UPGRADES unknown: the state does not load (%v)", err)
+			w.Fail("upgrades", "UPGRADES unknown: the state does not load (%v)", err)
 			return
 		}
-		now = w.clk().Now()
-		statuses = read(ctx, observed, now, w.upgrades, w.upgradeFresh(observed, now))
+		now = w.Clk().Now()
+		statuses = read(ctx, observed, now, w.Upgrades, w.upgradeFresh(observed, now))
 		if ctx.Err() != nil {
 			return
 		}
@@ -102,12 +102,12 @@ func (w *watcher) upgradeCycleRead(ctx context.Context, read func(context.Contex
 			if s.Err != "" {
 				continue
 			}
-			b, e := upgrade.Reconcile(st, s.Installation, s.Upgrades, at, watchParty)
+			b, e := upgrade.Reconcile(st, s.Installation, s.Upgrades, at, WatchParty)
 			for _, h := range b {
-				ev = append(ev, event(watchParty, "hold.set", "%s until the upgrade ends: %s", h.Target, h.Reason))
+				ev = append(ev, event(WatchParty, "hold.set", "%s until the upgrade ends: %s", h.Target, h.Reason))
 			}
 			for _, h := range e {
-				ev = append(ev, event(watchParty, "hold.lift", "%s: the upgrade ended", h.Target))
+				ev = append(ev, event(WatchParty, "hold.lift", "%s: the upgrade ended", h.Target))
 			}
 			begun, ended = append(begun, b...), append(ended, e...)
 		}
@@ -124,22 +124,22 @@ func (w *watcher) upgradeCycleRead(ctx context.Context, read func(context.Contex
 		return ev, changed
 	}
 	needUpdate := true
-	if w.a.store.Dir() != "" {
-		current, readErr := w.a.store.Read()
+	if w.Host.store.Dir() != "" {
+		current, readErr := w.Host.store.Read()
 		if readErr != nil {
-			w.fail("upgrades", "UPGRADES unknown: the state does not load (%v)", readErr)
+			w.Fail("upgrades", "UPGRADES unknown: the state does not load (%v)", readErr)
 			return
 		}
-		_, needUpdate = reconcile(&state.State{Holds: append([]state.Hold(nil), current.Holds...)}, w.clk().Now())
+		_, needUpdate = reconcile(&state.State{Holds: append([]state.Hold(nil), current.Holds...)}, w.Clk().Now())
 	}
 	var err error
 	if needUpdate {
-		err = w.a.store.Update(func(st *state.State) ([]state.Event, error) {
-			now = w.clk().Now()
-			if w.a.store.Dir() == "" {
+		err = w.Host.store.Update(func(st *state.State) ([]state.Event, error) {
+			now = w.Clk().Now()
+			if w.Host.store.Dir() == "" {
 				// Remote stores have no shared filesystem lock; retain observation
 				// on each resource-version retry instead of reusing a stale reading.
-				statuses = read(ctx, st, now, w.upgrades, w.upgradeFresh(st, now))
+				statuses = read(ctx, st, now, w.Upgrades, w.upgradeFresh(st, now))
 			}
 			if err := ctx.Err(); err != nil {
 				return nil, err
@@ -152,61 +152,61 @@ func (w *watcher) upgradeCycleRead(ctx context.Context, read func(context.Contex
 		return
 	}
 	if err != nil {
-		w.fail("upgrades", "UPGRADES unknown: the state does not load (%v)", err)
+		w.Fail("upgrades", "UPGRADES unknown: the state does not load (%v)", err)
 		return
 	}
-	w.clear("upgrades")
-	if w.upgradeFailures == nil {
-		w.upgradeFailures = map[string]int{}
+	w.Clear("upgrades")
+	if w.UpgradeFailures == nil {
+		w.UpgradeFailures = map[string]int{}
 	}
 	var noContext []string
 	for _, s := range statuses {
 		if s.Err != "" {
-			w.upgradeFailures[s.Installation]++
+			w.UpgradeFailures[s.Installation]++
 			for _, h := range holds {
 				if h.Active(now) && strings.HasPrefix(h.Target, upgrade.HoldPrefix+s.Installation+"/") {
-					w.emitNow("upgrade-reader", "%s held: reader failed %d consecutive ticks: %s", h.Target, w.upgradeFailures[s.Installation], s.Err)
+					w.EmitNow("upgrade-reader", "%s held: reader failed %d consecutive ticks: %s", h.Target, w.UpgradeFailures[s.Installation], s.Err)
 				}
 			}
 		} else {
-			delete(w.upgradeFailures, s.Installation)
+			delete(w.UpgradeFailures, s.Installation)
 		}
 		switch {
 		case s.NoContext:
 			noContext = append(noContext, s.Installation)
-			w.clear("upgrades:" + s.Installation)
+			w.Clear("upgrades:" + s.Installation)
 		case s.Err != "":
-			w.fail("upgrades:"+s.Installation, "UPGRADES %s unreadable: %s", s.Installation, s.Err)
+			w.Fail("upgrades:"+s.Installation, "UPGRADES %s unreadable: %s", s.Installation, s.Err)
 		default:
-			w.clear("upgrades:" + s.Installation)
+			w.Clear("upgrades:" + s.Installation)
 		}
 	}
 	w.sayNoContext("UPGRADES", noContext)
 	for _, h := range begun {
-		w.emitNow("upgrade", "%s", upgrade.Line(h))
+		w.EmitNow("upgrade", "%s", upgrade.Line(h))
 	}
 	for _, h := range ended {
-		w.emitNow("upgrade", "%s", upgrade.EndLine(h))
+		w.EmitNow("upgrade", "%s", upgrade.EndLine(h))
 	}
-	w.saveMark()
+	w.SaveMark()
 }
 
 // sayNoContext says once per watch, in one line, the installations of the
 // reader (ALERTS, UPGRADES) without a kube context: they are not read, and
 // no line names them one by one.
-func (w *watcher) sayNoContext(reader string, names []string) {
+func (w *Watcher) sayNoContext(reader string, names []string) {
 	if len(names) == 0 {
 		return
 	}
-	w.mu.Lock()
+	w.Mu.Lock()
 	said := w.noContextSaid[reader]
 	if w.noContextSaid == nil {
 		w.noContextSaid = map[string]bool{}
 	}
 	w.noContextSaid[reader] = true
-	w.mu.Unlock()
+	w.Mu.Unlock()
 	if said {
 		return
 	}
-	w.emitNow("nocontext", "%s: %s", reader, alerts.NoContextLine(names))
+	w.EmitNow("nocontext", "%s: %s", reader, alerts.NoContextLine(names))
 }

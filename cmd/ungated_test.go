@@ -95,11 +95,11 @@ func TestUngatedMerges(t *testing.T) {
 // and its parent, and its end once, as one ENDED line with the same label.
 func TestTheWatchSaysAnUngatedMerge(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
-	w.a.now = time.Now()
+	w.Host.now = time.Now()
 	sessions := []*claude.Session{{PID: 10, ID: workerSession, Name: ungatedWorker}}
 	tb := ungatedTable()
-	w.ungated(sessions, tb)
-	w.ungated(sessions, tb)
+	w.Ungated(sessions, tb)
+	w.Ungated(sessions, tb)
 	s := out.String()
 	for _, want := range []string{
 		`UNGATED MERGE devctl pr merge o/r 1 (pid 12, session "Worker A", under bash /home/u/scratch/merge.sh (pid 11)` + ungatedWhat,
@@ -118,7 +118,7 @@ func TestTheWatchSaysAnUngatedMerge(t *testing.T) {
 	delete(tb.ByPID, 12)
 	delete(tb.ByPID, 11)
 	out.Reset()
-	w.ungated(sessions, tb)
+	w.Ungated(sessions, tb)
 	if got := out.String(); strings.Count(got, "\n") != 1 ||
 		!strings.Contains(got, `ENDED UNGATED MERGE devctl pr merge o/r 1 (pid 12, session "Worker A", under bash /home/u/scratch/merge.sh (pid 11)) (since `) {
 		t.Errorf("the merge's end is not one ENDED line:\n%s", got)
@@ -228,8 +228,8 @@ func TestUngatedMergesUnderRunners(t *testing.T) {
 		t.Errorf("doctor's ungated lines:\n got %q\nwant %q", got, want)
 	}
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
-	w.a.now = time.Now()
-	w.ungated(sessions, runnerTable())
+	w.Host.now = time.Now()
+	w.Ungated(sessions, runnerTable())
 	s := out.String()
 	for _, l := range want {
 		if strings.Count(s, "UNGATED MERGE "+l) != 1 {
@@ -255,8 +255,8 @@ func TestUngatedMergesInShellCode(t *testing.T) {
 				t.Fatalf("doctor's ungated lines = %q", got)
 			}
 			w, _, out := notifyingWatch(t, t.TempDir(), false)
-			w.a.now = time.Now()
-			w.ungated(sessions, tb)
+			w.Host.now = time.Now()
+			w.Ungated(sessions, tb)
 			if strings.Count(out.String(), "UNGATED MERGE "+want) != 1 {
 				t.Fatalf("watch did not report the script's merge: %s", out.String())
 			}

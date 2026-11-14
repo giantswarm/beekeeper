@@ -138,8 +138,8 @@ func TestExecutionRetiresOnHostAfterMultiplePublications(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w := &watcher{a: rig.a}
-	st = w.syncExecutions(ctx, st)
+	w := &Watcher{Host: rig.a}
+	st = w.SyncExecutions(ctx, st)
 	if len(fake.requests) != 1 || fake.requests[0].Trigger != execution.RetireTriggerReport {
 		t.Fatalf("host retire requests after syncExecutions = %+v, want 1 report retirement", fake.requests)
 	}

@@ -207,8 +207,8 @@ func (a *app) readHandover(q string) (handover, error) {
 		return handover{}, refused("%q is an %s agent: a hand-over starts a Claude Code successor from a Claude transcript", p.Name, hr.Name())
 	}
 	for _, rl := range roles {
-		if r := rl.get(st); r.Holder != nil && r.Holder.Is(p) {
-			return handover{}, refused("%q holds the %s role: it moves by relay (%s)", p.Name, rl.name, rl.handover)
+		if r := rl.Get(st); r.Holder != nil && r.Holder.Is(p) {
+			return handover{}, refused("%q holds the %s role: it moves by relay (%s)", p.Name, rl.Name, rl.Handover)
 		}
 	}
 	sessions, _, err := a.sessions()
@@ -973,7 +973,7 @@ func endSession(ctx context.Context, s *claude.Session) (int, error) {
 
 func holdsRole(st *state.State, p state.Party) bool {
 	for _, rl := range roles {
-		if r := rl.get(st); r.Holder != nil && r.Holder.Is(p) {
+		if r := rl.Get(st); r.Holder != nil && r.Holder.Is(p) {
 			return true
 		}
 	}

@@ -32,14 +32,14 @@ func TestIssueParkWaitsForCloseAndBoundsReads(t *testing.T) {
 	if p := agentOf(t, w).Park; p.RefKind != github.RefIssue {
 		t.Fatalf("park %+v", p)
 	}
-	st, _ := w.a.store.Read()
-	if out := w.settledParks(t.Context(), st); len(out) != 0 {
+	st, _ := w.Host.store.Read()
+	if out := w.SettledParks(t.Context(), st); len(out) != 0 {
 		t.Fatal(out)
 	}
 	initial := reads
 	for range 3 {
-		st, _ = w.a.store.Read()
-		if out := w.settledParks(t.Context(), st); len(out) != 0 {
+		st, _ = w.Host.store.Read()
+		if out := w.SettledParks(t.Context(), st); len(out) != 0 {
 			t.Fatal(out)
 		}
 	}
@@ -47,9 +47,9 @@ func TestIssueParkWaitsForCloseAndBoundsReads(t *testing.T) {
 		t.Fatalf("issue read every pass: %d -> %d", initial, reads)
 	}
 	closed = true
-	w.a.now = w.a.now.Add(5 * time.Minute)
-	st, _ = w.a.store.Read()
-	if out := w.settledParks(t.Context(), st); len(out) != 1 || !strings.Contains(out[0].answer, overrideClosed) {
+	w.Host.now = w.Host.now.Add(5 * time.Minute)
+	st, _ = w.Host.store.Read()
+	if out := w.SettledParks(t.Context(), st); len(out) != 1 || !strings.Contains(out[0].Answer, overrideClosed) {
 		t.Fatalf("close: %+v", out)
 	}
 }
@@ -90,13 +90,13 @@ func TestIssueParkSuggestsLinkedPullForServedIssue(t *testing.T) {
 	t.Cleanup(func() { readParkSuggestions = prev })
 	const pullURL = "https://github.com/o/r/pull/2"
 	readParkSuggestions = func(context.Context, github.PR) (string, error) { return pullURL, nil }
-	if err := w.a.store.Update(func(st *state.State) ([]state.Event, error) {
+	if err := w.Host.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Records = append(st.Records, state.Record{Session: st.Agents[0].Party, Issue: refOne})
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	line, err := w.a.park(state.Party{Name: agentOne}, refOne, "desk review")
+	line, err := w.Host.park(state.Party{Name: agentOne}, refOne, "desk review")
 	if err != nil || !strings.Contains(line, pullURL) {
 		t.Fatalf("suggestion %q %v", line, err)
 	}
@@ -146,20 +146,20 @@ func TestIssueParkOffTheRosterBoundsReadsAndSettles(t *testing.T) {
 		}
 		return map[github.PR]github.RefState{refs[0]: {Kind: github.RefIssue, State: s}}, nil
 	}
-	if _, err := w.a.park(offSession, refOne, "wait for issue"); err != nil {
+	if _, err := w.Host.park(offSession, refOne, "wait for issue"); err != nil {
 		t.Fatal(err)
 	}
-	st, _ := w.a.store.Read()
-	if out := w.settledParks(t.Context(), st); len(out) != 0 {
+	st, _ := w.Host.store.Read()
+	if out := w.SettledParks(t.Context(), st); len(out) != 0 {
 		t.Fatal(out)
 	}
 	initial := reads
 	for range 3 {
-		st, _ = w.a.store.Read()
+		st, _ = w.Host.store.Read()
 		if len(st.Parks) != 1 || st.Parks[0].RefChecked.IsZero() || st.Parks[0].RefKind != github.RefIssue {
 			t.Fatalf("cache %+v", st.Parks)
 		}
-		if out := w.settledParks(t.Context(), st); len(out) != 0 {
+		if out := w.SettledParks(t.Context(), st); len(out) != 0 {
 			t.Fatal(out)
 		}
 	}
@@ -167,9 +167,9 @@ func TestIssueParkOffTheRosterBoundsReadsAndSettles(t *testing.T) {
 		t.Fatalf("off-roster issue read every pass: %d -> %d", initial, reads)
 	}
 	closed = true
-	w.a.now = w.a.now.Add(5 * time.Minute)
-	st, _ = w.a.store.Read()
-	if out := w.settledParks(t.Context(), st); len(out) != 1 || !out[0].party.Is(offSession) || !strings.Contains(out[0].answer, overrideClosed) {
+	w.Host.now = w.Host.now.Add(5 * time.Minute)
+	st, _ = w.Host.store.Read()
+	if out := w.SettledParks(t.Context(), st); len(out) != 1 || !out[0].Party.Is(offSession) || !strings.Contains(out[0].Answer, overrideClosed) {
 		t.Fatalf("close %+v", out)
 	}
 }
@@ -193,15 +193,15 @@ func TestParkRefusesFailedReadsThenRetries(t *testing.T) {
 			if err := park(t, w, "--on", refOne, "waiting for GitHub"); err != nil {
 				t.Fatal(err)
 			}
-			st, _ := w.a.store.Read()
-			if out := w.settledParks(t.Context(), st); len(out) != 0 {
+			st, _ := w.Host.store.Read()
+			if out := w.SettledParks(t.Context(), st); len(out) != 0 {
 				t.Fatal(out)
 			}
 			if p := agentOf(t, w).Park; p.RefKind != kind {
 				t.Fatalf("classification %+v", p)
 			}
-			st, _ = w.a.store.Read()
-			if got := w.a.parkIsPull(t.Context(), st, refOne); got != (kind == github.RefPullRequest) {
+			st, _ = w.Host.store.Read()
+			if got := w.Host.parkIsPull(t.Context(), st, refOne); got != (kind == github.RefPullRequest) {
 				t.Fatalf("PR classification %v for %s", got, kind)
 			}
 		})
@@ -299,11 +299,11 @@ func TestWatcherBacksOffFailedLegacyParkClassification(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			w := parkingWatch(t, nil)
-			if err := w.a.store.Update(func(st *state.State) ([]state.Event, error) {
+			if err := w.Host.store.Update(func(st *state.State) ([]state.Event, error) {
 				if offRoster {
-					st.Parks = []state.Park{{By: offSession, At: w.a.now, On: refOne}}
+					st.Parks = []state.Park{{By: offSession, At: w.Host.now, On: refOne}}
 				} else {
-					st.Agents[0].Park = &state.Park{At: w.a.now, On: refOne}
+					st.Agents[0].Park = &state.Park{At: w.Host.now, On: refOne}
 				}
 				return nil, nil
 			}); err != nil {
@@ -315,22 +315,22 @@ func TestWatcherBacksOffFailedLegacyParkClassification(t *testing.T) {
 				return nil, errParkLookup
 			}
 			for range 3 {
-				st, _ := w.a.store.Read()
-				if out := w.settledParks(t.Context(), st); len(out) != 0 {
+				st, _ := w.Host.store.Read()
+				if out := w.SettledParks(t.Context(), st); len(out) != 0 {
 					t.Fatal(out)
 				}
 			}
 			if reads != 1 {
 				t.Fatalf("failed classification read %d times", reads)
 			}
-			w.a.now = w.a.now.Add(parkRefRetry)
+			w.Host.now = w.Host.now.Add(parkRefRetry)
 			refStates = func(_ context.Context, refs []github.PR) (map[github.PR]github.RefState, error) {
 				reads++
 				return map[github.PR]github.RefState{refs[0]: {Kind: github.RefIssue, State: github.Open}}, nil
 			}
-			st, _ := w.a.store.Read()
-			w.settledParks(t.Context(), st)
-			st, _ = w.a.store.Read()
+			st, _ := w.Host.store.Read()
+			w.SettledParks(t.Context(), st)
+			st, _ = w.Host.store.Read()
 			typed := false
 			for _, ag := range parkedAgents(st) {
 				if ag.Park != nil && ag.Park.RefKind == github.RefIssue {
@@ -359,11 +359,11 @@ func TestParkSuggestionMatchesWholeIssueReferences(t *testing.T) {
 		{"Work o/r#1.", true},
 		{"Work https://github.com/o/r/issues/1", true},
 	} {
-		if err := w.a.store.Update(func(st *state.State) ([]state.Event, error) { st.Agents[0].Task = tc.task; return nil, nil }); err != nil {
+		if err := w.Host.store.Update(func(st *state.State) ([]state.Event, error) { st.Agents[0].Task = tc.task; return nil, nil }); err != nil {
 			t.Fatal(err)
 		}
 		calls = 0
-		got := w.a.parkSuggestion(state.Party{Name: agentOne}, refOne)
+		got := w.Host.parkSuggestion(state.Party{Name: agentOne}, refOne)
 		if (got != "") != tc.want || (calls == 1) != tc.want {
 			t.Errorf("%q: suggestion %q, calls %d", tc.task, got, calls)
 		}
@@ -384,21 +384,21 @@ func TestParkRefusesSettledReference(t *testing.T) {
 				}
 				var err error
 				if offRoster {
-					_, err = w.a.park(offSession, refOne, "wait for target")
+					_, err = w.Host.park(offSession, refOne, "wait for target")
 				} else {
 					err = park(t, w, "--on", refOne, "wait for target")
 				}
 				if err == nil || !strings.Contains(err.Error(), "already "+strings.ToLower(target.status)) {
 					t.Fatalf("settled target: %v", err)
 				}
-				st, err := w.a.store.Read()
+				st, err := w.Host.store.Read()
 				if err != nil {
 					t.Fatal(err)
 				}
 				if st.Agents[0].Park != nil || len(st.Parks) != 0 || len(st.ReviewParks) != 0 {
 					t.Fatal("settled target recorded a park")
 				}
-				if settled := w.settledParks(t.Context(), st); len(settled) != 0 {
+				if settled := w.SettledParks(t.Context(), st); len(settled) != 0 {
 					t.Fatalf("refused park can resume: %+v", settled)
 				}
 			}

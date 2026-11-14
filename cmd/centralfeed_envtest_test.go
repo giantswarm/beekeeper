@@ -17,21 +17,21 @@ import (
 
 // feedWatch is ana's watch of the central feed, keeping its mark in her
 // state as a session's watch does, running until stop returns.
-func (p *person) feedWatch(out *syncBuffer) (w *watcher, stop func()) {
+func (p *person) feedWatch(out *syncBuffer) (w *Watcher, stop func()) {
 	p.t.Helper()
 	a := &app{cfgPath: p.cfg, as: p.agent, out: out}
 	if err := a.load(); err != nil {
 		p.t.Fatal(err)
 	}
 	w = a.newWatcher(false, true)
-	if w.markFile == "" {
+	if w.MarkFile == "" {
 		p.t.Fatal("the watch keeps no mark")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		w.watchFeed(ctx)
+		w.WatchFeed(ctx)
 	}()
 	return w, func() { cancel(); <-done }
 }
@@ -59,7 +59,7 @@ func TestCentralFeedEnvtest(t *testing.T) {
 	}
 	var lines syncBuffer
 	w, stop := ana.feedWatch(&lines)
-	feedID := func() string { w.mu.Lock(); defer w.mu.Unlock(); return w.feedID }
+	feedID := func() string { w.Mu.Lock(); defer w.Mu.Unlock(); return w.FeedID }
 	soon(t, "the first read", func() bool { return feedID() != "" })
 	if strings.Contains(lines.String(), "CENTRAL ") {
 		t.Errorf("a watch without a mark printed the past:\n%s", lines.String())
@@ -85,7 +85,7 @@ func TestCentralFeedEnvtest(t *testing.T) {
 	var again syncBuffer
 	w2, stop2 := ana.feedWatch(&again)
 	defer stop2()
-	if w2.feedID == "" {
+	if w2.FeedID == "" {
 		t.Fatal("the restarted watch read no last id from its mark")
 	}
 	release := "CENTRAL lease.release (pia-agent): " + graveler
@@ -125,7 +125,7 @@ func TestCentralFeedResumeEnvtest(t *testing.T) {
 	burst(0, 1)
 	var first syncBuffer
 	w, stop := ana.feedWatch(&first)
-	soon(t, "the first read", func() bool { w.mu.Lock(); defer w.mu.Unlock(); return w.feedID != "" })
+	soon(t, "the first read", func() bool { w.Mu.Lock(); defer w.Mu.Unlock(); return w.FeedID != "" })
 	stop()
 
 	// Down through more than feedLength events: all of them, no gap.

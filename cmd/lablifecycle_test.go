@@ -53,7 +53,7 @@ func TestLabLifecycleStopsAndClaimRestarts(t *testing.T) {
 	a := claimApp(t)
 	running, starts, stops := lifecycleDocker(t, a)
 	ctx := context.Background()
-	r := doctorRun{by: watchParty}
+	r := doctorRun{by: WatchParty}
 	if lines := a.doctorLabs(ctx, nil, r); len(lines) != 0 {
 		t.Fatal(lines)
 	}
@@ -63,7 +63,7 @@ func TestLabLifecycleStopsAndClaimRestarts(t *testing.T) {
 		t.Fatal("stopped before the grace period")
 	}
 	a.now = a.now.Add(time.Second)
-	lines := a.doctorLabs(ctx, nil, doctorRun{by: watchParty, dryRun: true})
+	lines := a.doctorLabs(ctx, nil, doctorRun{by: WatchParty, dryRun: true})
 	if !*running || len(lines) != 1 || !strings.HasPrefix(lines[0], "would stop kind lab") {
 		t.Fatalf("dry run: %v, running %v", lines, *running)
 	}
@@ -122,7 +122,7 @@ func TestDoctorReleasesGoneLeaseOnce(t *testing.T) {
 				sessions = []*claude.Session{{ID: tc.party.Session}}
 			}
 			for range 2 {
-				a.doctorLabs(context.Background(), sessions, doctorRun{by: watchParty})
+				a.doctorLabs(context.Background(), sessions, doctorRun{by: WatchParty})
 			}
 			h, err := dir.Get(labOne)
 			if err != nil || (h == nil) != tc.wantRelease {
@@ -172,7 +172,7 @@ func TestLabLifecycleDryRunAndDockerFailures(t *testing.T) {
 	_, _, stops := lifecycleDocker(t, a)
 	holdLease(t, a, labOne, claimOther)
 	ctx := context.Background()
-	a.doctorLabs(ctx, nil, doctorRun{by: watchParty, dryRun: true})
+	a.doctorLabs(ctx, nil, doctorRun{by: WatchParty, dryRun: true})
 	h, _ := lease.Dir(a.cfg.LeaseDir).Get(labOne)
 	st, err := a.store.Read()
 	if err != nil || h == nil || len(st.Released) != 0 || len(st.LabIdle) != 0 {
@@ -183,13 +183,13 @@ func TestLabLifecycleDryRunAndDockerFailures(t *testing.T) {
 	}
 	working := a.labDocker
 	a.labDocker = func(context.Context, ...string) ([]byte, error) { return nil, errors.New("cannot list nodes") }
-	a.doctorLabs(ctx, nil, doctorRun{by: watchParty})
+	a.doctorLabs(ctx, nil, doctorRun{by: WatchParty})
 	st, err = a.store.Read()
 	if err != nil || len(st.LabIdle) != 0 {
 		t.Fatal("failed Docker read started an idle timer")
 	}
 	a.labDocker = working
-	a.doctorLabs(ctx, nil, doctorRun{by: watchParty})
+	a.doctorLabs(ctx, nil, doctorRun{by: WatchParty})
 	a.now = a.now.Add(labIdleGrace)
 	a.labDocker = func(ctx context.Context, args ...string) ([]byte, error) {
 		if args[0] == labStop {
@@ -197,12 +197,12 @@ func TestLabLifecycleDryRunAndDockerFailures(t *testing.T) {
 		}
 		return working(ctx, args...)
 	}
-	lines := a.doctorLabs(ctx, nil, doctorRun{by: watchParty})
+	lines := a.doctorLabs(ctx, nil, doctorRun{by: WatchParty})
 	if *stops != 0 || len(lines) != 1 || !strings.Contains(lines[0], "cannot stop nodes") {
 		t.Fatalf("failed stop: %v", lines)
 	}
 	a.labDocker = working
-	a.doctorLabs(ctx, nil, doctorRun{by: watchParty})
+	a.doctorLabs(ctx, nil, doctorRun{by: WatchParty})
 	if *stops != 1 {
 		t.Fatal("failed stop was not retried")
 	}
@@ -219,7 +219,7 @@ func TestDoctorProtectsClaimAfterSessionSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a.doctorLabs(context.Background(), nil, doctorRun{by: watchParty})
+	a.doctorLabs(context.Background(), nil, doctorRun{by: WatchParty})
 	if h, err := dir.Get(labOne); err != nil || h == nil {
 		t.Fatalf("released a claim newer than session snapshot: %v", err)
 	}
@@ -272,7 +272,7 @@ func TestDoctorProtectsHandoverAfterSnapshot(t *testing.T) {
 				}); err != nil {
 					t.Fatal(err)
 				}
-				lines := a.doctorLabs(context.Background(), snapshot, doctorRun{by: watchParty})
+				lines := a.doctorLabs(context.Background(), snapshot, doctorRun{by: WatchParty})
 				h, err := dir.Get(labOne)
 				if err != nil || (h != nil) != tc.wantHeld {
 					t.Fatalf("holder=%+v, error=%v, chores=%v; want held %v", h, err, lines, tc.wantHeld)

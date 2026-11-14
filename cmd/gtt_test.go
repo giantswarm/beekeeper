@@ -22,7 +22,7 @@ func TestGTTLine(t *testing.T) {
 	if gttLine(nil, models) != "" {
 		t.Error("a machine without amdgpu has a GTT line")
 	}
-	if because("") != "" || because("x") != "; cause: x" {
+	if Because("") != "" || Because("x") != "; cause: x" {
 		t.Error("because")
 	}
 }

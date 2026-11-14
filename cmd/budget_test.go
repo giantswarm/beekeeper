@@ -179,9 +179,9 @@ func TestWatchSaysAGraphQLRefusalOnce(t *testing.T) {
 	a, out := budgetApp(t)
 	a.cfg.Merge.BudgetFresh.Duration = 0
 	a.cfg.Watch.Repeat.Duration = time.Hour
-	w := &watcher{a: a, last: map[string]time.Time{}}
+	w := &Watcher{Host: a, Last: map[string]time.Time{}}
 	for range 2 {
-		w.budget(context.Background(), time.Now())
+		w.Budget(context.Background(), time.Now())
 	}
 	if n := strings.Count(out.String(), "GRAPHQL REFUSED"); n != 1 {
 		t.Errorf("the watch said the refusal %d times, want once:\n%s", n, out)
@@ -190,7 +190,7 @@ func TestWatchSaysAGraphQLRefusalOnce(t *testing.T) {
 		t.Errorf("the refusal names no callers:\n%s", out)
 	}
 	refuse = false
-	w.budget(context.Background(), time.Now())
+	w.Budget(context.Background(), time.Now())
 	if !strings.Contains(out.String(), "ENDED GRAPHQL REFUSED") {
 		t.Errorf("the refusal's end was not said:\n%s", out)
 	}

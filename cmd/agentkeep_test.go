@@ -78,7 +78,7 @@ func TestRemoveAgentsHonoursAKeepSetSincePlan(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	removed, err := a.removeAgents(chores, watchParty)
+	removed, err := a.removeAgents(chores, WatchParty)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +169,7 @@ func TestStoppedAgentsLeaveKeptEntriesOut(t *testing.T) {
 	kept.Task, woken.Task, stopped.Task = "review", "a batch job", "a crash"
 	kept.Keep = &state.Keep{}
 	st := &state.State{Agents: []state.Agent{kept, woken, stopped}, Timers: []state.Timer{{ID: 1, Wake: "BK 1"}}}
-	w.stoppedAgents(st, nil)
+	w.StoppedAgents(st, nil)
 	if s := out.String(); !strings.Contains(s, `"Crashed"`) || strings.Contains(s, "Judge") || strings.Contains(s, "BK 1") {
 		t.Errorf("stopped line:\n%s", s)
 	}

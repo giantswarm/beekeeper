@@ -81,7 +81,7 @@ func slotTable() *proc.Table {
 		&proc.Process{PID: 300, PPID: 900, Comm: "kube-apiserver"},
 		&proc.Process{PID: 301, PPID: 300, Comm: "etcd"},
 		&proc.Process{PID: 400, PPID: 1, Comm: sleepComm},
-		&proc.Process{PID: 500, PPID: 50, Comm: sandboxInitCommand},
+		&proc.Process{PID: 500, PPID: 50, Comm: SandboxInitCommand},
 		&proc.Process{PID: 501, PPID: 500, Comm: sleepComm},
 		&proc.Process{PID: 502, PPID: 501, Comm: sleepComm},
 		&proc.Process{PID: 503, PPID: 500, Comm: pluginName},
@@ -118,8 +118,8 @@ func TestWatchStopsAnOrphanedSlotScope(t *testing.T) {
 	t0 := time.Date(2026, 10, 21, 10, 0, 0, 0, time.Local)
 
 	once := a.newWatcher(false, false)
-	once.slotOrphans(t0, table)
-	once.slotOrphans(t0.Add(2*slotOrphanGrace), table)
+	once.SlotOrphans(t0, table)
+	once.SlotOrphans(t0.Add(2*SlotOrphanGrace), table)
 	named := "ORPHANED SLOT SCOPE: slot 1's " + orphanSlotScope + " runs on without its run: 300 (kube-apiserver); it keeps slot 1 busy, the watch stops it at 10:01:00"
 	if got := out.String(); strings.Count(got, named) != 1 || strings.Contains(got, liveSlotScope) || len(l.stopped) != 0 {
 		t.Fatalf("a --once watch said:\n%s\nstopped %v; want the orphan named once, nothing stopped", got, l.stopped)
@@ -127,13 +127,13 @@ func TestWatchStopsAnOrphanedSlotScope(t *testing.T) {
 
 	out.Reset()
 	w := a.newWatcher(false, false)
-	w.slotsOn = true
-	w.slotOrphans(t0, table)
-	w.slotOrphans(t0.Add(slotOrphanGrace/2), table)
+	w.SlotsOn = true
+	w.SlotOrphans(t0, table)
+	w.SlotOrphans(t0.Add(SlotOrphanGrace/2), table)
 	if got := out.String(); strings.Count(got, named) != 1 || len(l.stopped) != 0 {
 		t.Fatalf("within the grace the watch said:\n%s\nstopped %v; want the orphan named once, nothing stopped", got, l.stopped)
 	}
-	w.slotOrphans(t0.Add(slotOrphanGrace), table)
+	w.SlotOrphans(t0.Add(SlotOrphanGrace), table)
 	if !slices.Equal(l.stopped, []string{orphanSlotScope}) {
 		t.Fatalf("stopped %v, want only %s", l.stopped, orphanSlotScope)
 	}
@@ -142,7 +142,7 @@ func TestWatchStopsAnOrphanedSlotScope(t *testing.T) {
 		t.Errorf("after the grace the watch said:\n%s\nwant %q and the ENDED line", got, stopped)
 	}
 	out.Reset()
-	w.slotOrphans(t0.Add(2*slotOrphanGrace), table)
+	w.SlotOrphans(t0.Add(2*SlotOrphanGrace), table)
 	if out.Len() != 0 || len(l.stopped) != 1 {
 		t.Errorf("after the stop the watch said %q, stopped %v; want nothing more", out.String(), l.stopped)
 	}
@@ -166,7 +166,7 @@ func TestOrphanedScope(t *testing.T) {
 		{"live sandbox command beside an adopted child", []int{504, 501}, false},
 		{"sandbox init inside a live run's scope", []int{500, 501, 502}, false},
 	} {
-		if got := orphanedScope(table, c.pids); got != c.want {
+		if got := OrphanedScope(table, c.pids); got != c.want {
 			t.Errorf("%s: orphanedScope(%v) = %v, want %v", c.name, c.pids, got, c.want)
 		}
 	}
@@ -231,11 +231,11 @@ func TestWatchRecoversEmptySlotHolders(t *testing.T) {
 			}
 			m := &slotMachine{Machine: plat.Machine, slices: map[string][]string{}, pids: map[string][]int{}}
 			capper := &emptyHolderCapper{live: mode == holderLive, bad: mode == scopeReadFailureMode}
-			savedM, savedC, savedStop := plat.Machine, plat.Capper, stopEmptyHolder
+			savedM, savedC, savedStop := plat.Machine, plat.Capper, StopEmptyHolder
 			plat.Machine, plat.Capper = m, capper
-			t.Cleanup(func() { plat.Machine, plat.Capper, stopEmptyHolder = savedM, savedC, savedStop })
+			t.Cleanup(func() { plat.Machine, plat.Capper, StopEmptyHolder = savedM, savedC, savedStop })
 			stops := 0
-			stopEmptyHolder = func(pid int, at time.Time, empty func() bool) error {
+			StopEmptyHolder = func(pid int, at time.Time, empty func() bool) error {
 				if pid != 100 || !at.Equal(started) {
 					t.Fatal("wrong process identity")
 				}
@@ -253,9 +253,9 @@ func TestWatchRecoversEmptySlotHolders(t *testing.T) {
 			out := &bytes.Buffer{}
 			a := &app{cfg: cfg, store: store, now: now, out: out}
 			w := a.newWatcher(false, false)
-			w.slotsOn = mode != "once"
-			w.slotOrphans(now, table)
-			w.slotOrphans(now.Add(slotOrphanGrace), table)
+			w.SlotsOn = mode != "once"
+			w.SlotOrphans(now, table)
+			w.SlotOrphans(now.Add(SlotOrphanGrace), table)
 			want := mode == "deadline" || mode == legacyHolderMode
 			if (stops == 1) != want {
 				t.Fatalf("mode %s stops %d; output %s", mode, stops, out.String())

@@ -12,15 +12,15 @@ import (
 // again after the subscription ended.
 const mailboxRetry = time.Minute
 
-// watchMailbox delivers the person's mailbox to the machine's agents while
+// WatchMailbox delivers the person's mailbox to the machine's agents while
 // ctx lasts: it subscribes to beekeeper://mailbox/<person> through muster
 // and drains the mailbox once the subscription stands and on each update.
 // A subscription that ends is one MAILBOX UNSUBSCRIBED line and is opened
 // again after mailboxRetry; meanwhile, and while a message waits for an
 // agent that did not take it or an acknowledgement that failed, the mailbox
 // is drained every watch interval.
-func (w *watcher) watchMailbox(ctx context.Context) {
-	person := mailbox.Key(w.a.cfg.Identity.Person)
+func (w *Watcher) WatchMailbox(ctx context.Context) {
+	person := mailbox.Key(w.Host.cfg.Identity.Person)
 	if person == "" {
 		return
 	}
@@ -37,7 +37,7 @@ func (w *watcher) watchMailbox(ctx context.Context) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		tick := time.NewTicker(w.a.cfg.Watch.Interval.Duration)
+		tick := time.NewTicker(w.Host.cfg.Watch.Interval.Duration)
 		defer tick.Stop()
 		for {
 			select {
@@ -49,14 +49,14 @@ func (w *watcher) watchMailbox(ctx context.Context) {
 					continue
 				}
 			}
-			waiting.Store(w.drainMailbox(ctx))
+			waiting.Store(w.DrainMailbox(ctx))
 		}
 	}()
 	defer func() { <-done }()
 	for ctx.Err() == nil {
-		err := w.a.hub().Listen(ctx, []string{uri}, func() {
+		err := w.Host.hub().Listen(ctx, []string{uri}, func() {
 			down.Store(false)
-			w.clear(mailboxKey)
+			w.Clear(mailboxKey)
 			signal()
 		}, func(u string) {
 			if u == uri {
@@ -67,7 +67,7 @@ func (w *watcher) watchMailbox(ctx context.Context) {
 			return
 		}
 		down.Store(true)
-		w.emit(mailboxKey, "MAILBOX UNSUBSCRIBED %s: %s; drained every %s until it stands again", uri, unreadableReason(err), w.a.cfg.Watch.Interval.Duration)
+		w.Emit(mailboxKey, "MAILBOX UNSUBSCRIBED %s: %s; drained every %s until it stands again", uri, unreadableReason(err), w.Host.cfg.Watch.Interval.Duration)
 		t := time.NewTimer(mailboxRetry)
 		select {
 		case <-ctx.Done():
@@ -78,7 +78,7 @@ func (w *watcher) watchMailbox(ctx context.Context) {
 	}
 }
 
-// drainMailbox runs in the command, which holds what it needs (watchDrainMailbox).
-func (w *watcher) drainMailbox(ctx context.Context) bool {
+// DrainMailbox runs in the command, which holds what it needs (watchDrainMailbox).
+func (w *Watcher) DrainMailbox(ctx context.Context) bool {
 	return watchDrainMailbox(w, ctx)
 }

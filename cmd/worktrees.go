@@ -426,7 +426,7 @@ func (a *app) trimWorktrees(dryRun bool, read func() (worktreeMachine, error)) w
 	}
 	r.trim(ctx, m)
 	if !dryRun && (r.acted() || len(r.failed) > 0) {
-		_ = a.store.Log(event(watchParty, worktreesVerb, "%s\n%s", r, strings.Join(r.paths(), "\n")))
+		_ = a.store.Log(event(WatchParty, worktreesVerb, "%s\n%s", r, strings.Join(r.paths(), "\n")))
 	}
 	return r
 }
@@ -747,39 +747,39 @@ type worktreesMark struct {
 // watchWorktrees runs the trim every doctor.worktreesEvery, in the background so
 // the sample goes on. A run that removed something is one WORKTREES line; a
 // failed one is WORKTREES FAILED until a run succeeds.
-func watchWorktrees(w *watcher, now time.Time) {
-	every := w.a.cfg.Doctor.WorktreesEvery.Duration
-	if w.a.cfg.Disk.Auto() || !w.worktreesOn || every <= 0 || !w.worktreesTrimming.CompareAndSwap(false, true) {
+func watchWorktrees(w *Watcher, now time.Time) {
+	every := w.Host.cfg.Doctor.WorktreesEvery.Duration
+	if w.Host.cfg.Disk.Auto() || !w.WorktreesOn || every <= 0 || !w.WorktreesTrimming.CompareAndSwap(false, true) {
 		return
 	}
-	if now.Before(w.worktreesNext) {
-		w.worktreesTrimming.Store(false)
+	if now.Before(w.WorktreesNext) {
+		w.WorktreesTrimming.Store(false)
 		return
 	}
-	d := *w.a
-	w.bg.Add(1)
+	d := *w.Host
+	w.Bg.Add(1)
 	go func() {
-		defer w.bg.Done()
-		defer w.worktreesTrimming.Store(false)
+		defer w.Bg.Done()
+		defer w.WorktreesTrimming.Store(false)
 		var m worktreesMark
-		_, _ = w.a.store.ReadFile(worktreesFile, &m)
+		_, _ = w.Host.store.ReadFile(worktreesFile, &m)
 		if now.Sub(m.At) < every {
-			w.worktreesNext = m.At.Add(every)
+			w.WorktreesNext = m.At.Add(every)
 			return
 		}
-		r := w.a.trimWorktrees(false, func() (worktreeMachine, error) { return liveWorktrees(&d) })
+		r := w.Host.trimWorktrees(false, func() (worktreeMachine, error) { return liveWorktrees(&d) })
 		if d.context().Err() != nil {
 			return
 		}
 		if r.locked {
-			w.worktreesNext = now.Add(goCacheRetry)
+			w.WorktreesNext = now.Add(goCacheRetry)
 			return
 		}
-		w.worktreesNext = now.Add(every)
-		_ = w.a.store.WriteFile(worktreesFile, worktreesMark{At: now})
-		w.check("worktrees", r.err != nil || len(r.failed) > 0, "WORKTREES FAILED: %s", r)
+		w.WorktreesNext = now.Add(every)
+		_ = w.Host.store.WriteFile(worktreesFile, worktreesMark{At: now})
+		w.Check("worktrees", r.err != nil || len(r.failed) > 0, "WORKTREES FAILED: %s", r)
 		if r.acted() {
-			w.emitNow("worktrees-trim", "WORKTREES %s (doctor.worktreesEvery)", r)
+			w.EmitNow("worktrees-trim", "WORKTREES %s (doctor.worktreesEvery)", r)
 		}
 	}()
 }

@@ -22,7 +22,7 @@ func TestLeaseWakeReservesFullWindow(t *testing.T) {
 		t.Fatalf("wake: %q, %v", answer, ready)
 	}
 	st.Agents = []state.Agent{{Party: claimMe, Park: &state.Park{On: leaseParkOn(labTwo)}}}
-	markResumable(st, []settledPark{{party: claimMe, on: leaseParkOn(labTwo), answer: answer}}, true, a.now)
+	MarkResumable(st, []settledPark{{Party: claimMe, On: leaseParkOn(labTwo), Answer: answer}}, true, a.now)
 	later := a.now.Add(29 * time.Minute)
 	gate := lease.Gate{Resource: labTwo, Caller: claimOther, Now: later, TTL: 30 * time.Minute}
 	if _, err := lease.Check(st, gate); err == nil {
@@ -56,7 +56,7 @@ func TestLeaseWakeRechecksQueue(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	parks := []settledPark{{party: claimMe, on: leaseParkOn(labTwo), answer: "previous queue observation"}}
+	parks := []settledPark{{Party: claimMe, On: leaseParkOn(labTwo), Answer: "previous queue observation"}}
 	if got := a.recheckLeaseParks(st, parks); len(got) != 0 {
 		t.Fatalf("stale queue wake: %+v", got)
 	}
