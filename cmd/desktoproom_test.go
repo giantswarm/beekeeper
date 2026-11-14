@@ -82,9 +82,12 @@ func TestRoomFor(t *testing.T) {
 // relay relieved is past (its work ended with the relay), so its idle CLI
 // makes room, and the forRole successor may end a worker idle on its task.
 // Neither the holder nor a run still active within stewardQuiet is ended.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestRoomForRelievedRun(t *testing.T) {
 	now := time.Date(2026, 10, 6, 13, 4, 0, 0, time.UTC)
-	old := state.Party{Session: "pastrun", HostSession: "local_pastrun", Name: guideRole.runName(12)}
+	old := state.Party{Session: "pastrun", HostSession: "local_pastrun", Name: guideRole.RunName(12)}
 	succ := state.Party{Session: successorName, HostSession: "local_successor", Name: "Guide run 13"}
 	sessions := []*claude.Session{
 		{PID: 1, ID: old.Session, HostID: old.HostSession, Name: old.Name, LastActive: now.Add(-3 * time.Minute)},
@@ -95,7 +98,7 @@ func TestRoomForRelievedRun(t *testing.T) {
 		tbl.ByPID[s.PID] = &proc.Process{PID: s.PID, Comm: claudeComm, Args: desktopArgs}
 	}
 	st := &state.State{Starts: []state.Start{{Party: old}, {Party: succ}}}
-	guideRole.update(st, func(r *state.Role) {
+	guideRole.Update(st, func(r *state.Role) {
 		r.Holder = &state.Supervisor{Party: succ, Since: now.Add(-3 * time.Minute)}
 		r.Relay = &state.Relay{From: old, To: succ, At: now.Add(-3 * time.Minute), Taken: now.Add(-3 * time.Minute), Expires: now.Add(time.Hour)}
 		r.Relieved = []state.Relief{{Party: old, Taken: now.Add(-3 * time.Minute)}}

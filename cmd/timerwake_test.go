@@ -12,6 +12,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/mailbox"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 const (
@@ -25,10 +26,13 @@ const (
 // Include an old repeating reminder, a successful unrelated probe, a failed
 // probe reaching its deadline, and idle/usage notices. Only the note's
 // answer may resume the agent.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestPersonParkEightHoursWithoutTurns(t *testing.T) {
 	w := parkingWatch(t, nil)
-	w.cfg.Agents.AutoResume = true
-	w.cfg.Guide.Person = personTimo
+	watchApp(w.Host).cfg.Agents.AutoResume = true
+	watchApp(w.Host).cfg.Guide.Person = personTimo
 	woke := stubWakes(t)
 	fakeRead(t, func(cmd string) ([]byte, error) {
 		if cmd == probeHolds {
@@ -39,7 +43,7 @@ func TestPersonParkEightHoursWithoutTurns(t *testing.T) {
 	if err := park(t, w, "--on", "#3", "Alex's answer"); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+	if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Agents[0].Session = "parked-eight-hours"
 		st.Owed = []state.Owed{{Owner: st.Agents[0].Party, Line: "completed unrelated command", Since: relayNow}}
 		st.Timers = []state.Timer{
@@ -52,34 +56,36 @@ func TestPersonParkEightHoursWithoutTurns(t *testing.T) {
 		t.Fatal(err)
 	}
 	for elapsed := time.Duration(0); elapsed <= 8*time.Hour; elapsed += 5 * time.Minute {
-		w.now = relayNow.Add(elapsed)
-		w.pending(t.Context(), nil)
-		w.timerActs.Wait()
-		st, err := w.store.Read()
+		watchApp(w.Host).now = relayNow.Add(elapsed)
+		w.Pending(t.Context(), nil)
+		w.TimerActs.Wait()
+		st, err := watchApp(w.Host).store.Read()
 		if err != nil {
 			t.Fatal(err)
 		}
-		w.stoppedAgents(st, nil)
+		w.StoppedAgents(st, nil)
 		if len(st.Owed) != 1 {
 			t.Fatalf("command result was lost: %+v", st.Owed)
 		}
-		w.payOwed(t.Context(), st.Owed[0])
-		if err := w.quietWake(t.Context(), watchParty, agentOne, "an unrelated note defaulted"); err != nil {
+		watchApp(w.Host).payOwed(t.Context(), st.Owed[0])
+		if err := watchApp(w.Host).quietWake(t.Context(), watch.WatchParty, agentOne, "an unrelated note defaulted"); err != nil {
 			t.Fatal(err)
 		}
-		w.tellBusyWorkersUsageHigh(t.Context(), st, []*claude.Session{{Name: agentOne}}, &capacity.UsageView{High: true}, "park-usage.json", nil)
+		w.TellBusyWorkersUsageHigh(t.Context(), st, []*claude.Session{{Name: agentOne}}, &capacity.UsageView{High: true}, "park-usage.json", nil)
 		if len(*woke) != 0 || st.Agents[0].Park == nil || !st.Agents[0].Park.Resumable.IsZero() {
 			t.Fatalf("after %s: turns=%v, park=%+v", elapsed, *woke, st.Agents[0].Park)
 		}
 	}
 	answer(t, w)
-	w.pending(context.Background(), nil)
-	w.pending(context.Background(), nil)
+	w.Pending(context.Background(), nil)
+	w.Pending(context.Background(), nil)
 	assertFreshQueue(t, w, *woke, parkAnswer)
 	t.Log("eight simulated hours: no transcript resumes; answer retained for a fresh worker")
 
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTimerRechecksTheCurrentParkAtDelivery(t *testing.T) {
 	for _, tc := range []struct {
 		name, on, waits, when string
@@ -109,10 +115,10 @@ func TestTimerRechecksTheCurrentParkAtDelivery(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w, _, _ := notifyingWatch(t, t.TempDir(), false)
-			w.cfg.Guide.Person = personTimo
+			watchApp(w.Host).cfg.Guide.Person = personTimo
 			woke := stubWakes(t)
 			q := agentOne
-			if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+			if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 				p := state.Park{By: state.Party{Name: agentOne, Session: "park-fixture-session"}, At: relayNow, On: tc.on, Waits: tc.waits}
 				if tc.offRoster {
 					st.Parks = []state.Park{p}
@@ -121,7 +127,7 @@ func TestTimerRechecksTheCurrentParkAtDelivery(t *testing.T) {
 					st.Agents = []state.Agent{{Party: p.By, Task: parkTask, Park: &p}}
 				}
 				if tc.guide {
-					guideRole.set(st, state.Role{Holder: &state.Supervisor{Party: p.By}})
+					guideRole.Set(st, state.Role{Holder: &state.Supervisor{Party: p.By}})
 					q = theGuide
 				}
 				return nil, nil
@@ -129,8 +135,8 @@ func TestTimerRechecksTheCurrentParkAtDelivery(t *testing.T) {
 				t.Fatal(err)
 			}
 			fakeRead(t, func(string) ([]byte, error) { return ciAnswer("OPEN", ciLintRed), nil })
-			w.wakeTimer(t.Context(), timerFire{t: state.Timer{ID: 1, Wake: q, When: tc.when}, reason: "holds"})
-			st, _ := w.store.Read()
+			w.WakeTimer(t.Context(), timerFire{T: state.Timer{ID: 1, Wake: q, When: tc.when}, Reason: "holds"})
+			st, _ := watchApp(w.Host).store.Read()
 			delivered := len(*woke) == 1
 			for _, ag := range st.Agents {
 				delivered = delivered || ag.Park != nil && len(ag.Park.Continuation) == 1
@@ -165,13 +171,15 @@ func TestSupervisorLeavesPersonParkAsleep(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestPersonMessageStillReachesParkedSession(t *testing.T) {
 	w := parkingWatch(t, nil)
 	woke := stubWakes(t)
 	if err := park(t, w, "--on", "#3", "Alex's answer"); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.quietWake(t.Context(), state.Party{Name: personTimo}, agentOne, parkAnswer); err != nil {
+	if err := watchApp(w.Host).quietWake(t.Context(), state.Party{Name: personTimo}, agentOne, parkAnswer); err != nil {
 		t.Fatal(err)
 	}
 	if len(*woke) != 1 || !strings.Contains((*woke)[0], parkAnswer) {
@@ -179,6 +187,8 @@ func TestPersonMessageStillReachesParkedSession(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestMailboxDefaultLeavesPersonParkAsleep(t *testing.T) {
 	const target = "parked-mail-worker"
 	address := "local:" + mailHost + "/" + target
@@ -187,19 +197,21 @@ func TestMailboxDefaultLeavesPersonParkAsleep(t *testing.T) {
 		slackReply(t, 2, address, parkAnswer),
 	}}
 	w, sent, _ := mailboxWatch(t, mb)
-	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+	if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Agents = []state.Agent{{Party: state.Party{Name: target}, Task: parkTask, Park: &state.Park{On: parkedCentralNote, At: relayNow}}}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	w.drainMailbox(t.Context())
-	w.drainMailbox(t.Context())
+	w.DrainMailbox(t.Context())
+	w.DrainMailbox(t.Context())
 	if len(*sent) != 1 || !strings.Contains((*sent)[0], parkAnswer) || len(mb.acked) != 2 {
 		t.Fatalf("default should stay asleep, person's message delivered once: sent=%v acked=%v", *sent, mb.acked)
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestCommandOutcomeWaitsForPersonPark(t *testing.T) {
 	for _, on := range []string{"#3", parkedCentralNote} {
 		t.Run(on, func(t *testing.T) {
@@ -207,26 +219,26 @@ func TestCommandOutcomeWaitsForPersonPark(t *testing.T) {
 			woke := stubWakes(t)
 			owner := state.Party{Name: agentOne, Session: "owed-park-fixture"}
 			o := state.Owed{Owner: owner, Line: "old command completed", Since: relayNow}
-			if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+			if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 				st.Agents = []state.Agent{{Party: owner, Task: parkTask, Park: &state.Park{On: on, At: relayNow}}}
 				st.Owed = []state.Owed{o}
 				return nil, nil
 			}); err != nil {
 				t.Fatal(err)
 			}
-			w.payOwed(t.Context(), o)
-			st, err := w.store.Read()
+			watchApp(w.Host).payOwed(t.Context(), o)
+			st, err := watchApp(w.Host).store.Read()
 			if err != nil || len(*woke) != 0 || len(st.Owed) != 1 {
 				t.Fatalf("pending park: deliveries=%v state=%+v error=%v", *woke, st, err)
 			}
-			if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+			if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 				st.Agents[0].Park = nil
 				return nil, nil
 			}); err != nil {
 				t.Fatal(err)
 			}
-			w.payOwed(t.Context(), o)
-			st, err = w.store.Read()
+			watchApp(w.Host).payOwed(t.Context(), o)
+			st, err = watchApp(w.Host).store.Read()
 			if err != nil || len(*woke) != 1 || len(st.Owed) != 0 {
 				t.Fatalf("ended park: deliveries=%v state=%+v error=%v", *woke, st, err)
 			}
@@ -236,41 +248,46 @@ func TestCommandOutcomeWaitsForPersonPark(t *testing.T) {
 
 // A gated wait's own result is a wake condition, including red CI. A plain
 // PR park must still hear it; waiting for a person's review is different.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestCommandOutcomeCanCompletePullRequestWait(t *testing.T) {
 	w, _, _ := notifyingWatch(t, t.TempDir(), false)
 	woke := stubWakes(t)
 	owner := state.Party{Name: agentOne, Session: "ci-wait-fixture"}
 	o := state.Owed{Owner: owner, Line: "devctl pr wait o/r 7 exit 1: red", Since: relayNow}
-	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+	if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Agents = []state.Agent{{Party: owner, Task: parkTask, Park: &state.Park{On: claimIssue, At: relayNow, Waits: "CI completion"}}}
 		st.Owed = []state.Owed{o}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	w.payOwed(t.Context(), o)
+	watchApp(w.Host).payOwed(t.Context(), o)
 	if len(*woke) != 1 || !strings.Contains((*woke)[0], o.Line) {
 		t.Fatalf("the CI result did not reach its waiting caller: %v", *woke)
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTimerGuideRoleFollowsRelay(t *testing.T) {
 	w, _, _ := notifyingWatch(t, t.TempDir(), false)
 	woke := stubWakes(t)
-	timer, err := w.timerFrom(timerSpec{wake: theGuide}, relayNow)
+	timer, err := watchApp(w.Host).timerFrom(timerSpec{wake: theGuide}, relayNow)
 	if err != nil || timer.Wake != theGuide {
 		t.Fatalf("role timer: %+v, %v", timer, err)
 	}
 	for _, name := range []string{"previous guide", "successor guide"} {
-		if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+		if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 			holder := state.Party{Name: name, Session: name + "-session"}
 			st.Agents = append(st.Agents, state.Agent{Party: holder})
-			guideRole.set(st, state.Role{Holder: &state.Supervisor{Party: holder, Since: relayNow}})
+			guideRole.Set(st, state.Role{Holder: &state.Supervisor{Party: holder, Since: relayNow}})
 			return nil, nil
 		}); err != nil {
 			t.Fatal(err)
 		}
-		w.wakeTimer(t.Context(), timerFire{t: timer, reason: paramDue})
+		w.WakeTimer(t.Context(), timerFire{T: timer, Reason: paramDue})
 		if len(*woke) == 0 || !strings.Contains((*woke)[len(*woke)-1], name+"-session") {
 			t.Fatalf("timer did not reach current holder: %v", *woke)
 		}
@@ -280,17 +297,21 @@ func TestTimerGuideRoleFollowsRelay(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTimerSupervisorExplainsServiceRole(t *testing.T) {
 	w, _, _ := notifyingWatch(t, t.TempDir(), false)
-	if _, err := w.timerFrom(timerSpec{wake: resumer}, relayNow); err != errSupervisorMessage {
+	if _, err := watchApp(w.Host).timerFrom(timerSpec{wake: resumer}, relayNow); err != errSupervisorMessage {
 		t.Fatalf("want supervisor service explanation, got %v", err)
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTimerGuideWithoutHolderDoesNotWake(t *testing.T) {
 	w, _, _ := notifyingWatch(t, t.TempDir(), false)
 	woke := stubWakes(t)
-	w.wakeTimer(t.Context(), timerFire{t: state.Timer{Wake: theGuide}, reason: paramDue})
+	w.WakeTimer(t.Context(), timerFire{T: state.Timer{Wake: theGuide}, Reason: paramDue})
 	if len(*woke) != 0 {
 		t.Fatalf("woke without a holder: %v", *woke)
 	}
@@ -299,14 +320,17 @@ func TestTimerGuideWithoutHolderDoesNotWake(t *testing.T) {
 // A skip or harness failure must leave another attempt, rather than a park
 // with its only timer gone. Run settlement as well as delivery to cover the
 // claim removing the timer before the park is checked again.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTimerUndeliveredWakeRetries(t *testing.T) {
 	for _, fail := range []bool{false, true} {
 		t.Run(fmt.Sprint("harness failure=", fail), func(t *testing.T) {
 			for _, repeat := range []string{"", state.RepeatDaily} {
 				t.Run("repeat="+repeat, func(t *testing.T) {
 					w, _, _ := notifyingWatch(t, t.TempDir(), false)
-					w.clock = timerRetryClock{w: w}
-					w.cfg.Guide.Person = personTimo
+					w.Clock = timerRetryClock{w: w}
+					watchApp(w.Host).cfg.Guide.Person = personTimo
 					old := wakeOwner
 					calls := 0
 					wakeOwner = func(*app, context.Context, state.Party, string, string, string) error {
@@ -317,7 +341,7 @@ func TestTimerUndeliveredWakeRetries(t *testing.T) {
 						return nil
 					}
 					t.Cleanup(func() { wakeOwner = old })
-					if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+					if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 						p := &state.Park{At: relayNow, On: "#3", Waits: verbAnswer}
 						if fail {
 							p.On, p.Waits = "", "Timer 42: proof running"
@@ -331,32 +355,32 @@ func TestTimerUndeliveredWakeRetries(t *testing.T) {
 					fire := func() {
 						t.Helper()
 						var fires []timerFire
-						if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
-							_, events, f, _ := settleTimers(st, nil, w.now)
+						if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
+							_, events, f, _ := watch.SettleTimers(st, nil, watchApp(w.Host).now)
 							fires = f
 							return events, nil
 						}); err != nil {
 							t.Fatal(err)
 						}
 						for _, f := range fires {
-							w.wakeTimer(t.Context(), f)
+							w.WakeTimer(t.Context(), f)
 						}
 					}
 					fire()
-					st, err := w.store.Read()
+					st, err := watchApp(w.Host).store.Read()
 					if err != nil || len(st.Timers) != 1 || !st.Timers[0].Due.Equal(relayNow) {
 						t.Fatalf("undelivered occurrence lost: %+v, %v", st, err)
 					}
-					if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+					if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 						st.Agents[0].Park.On, st.Agents[0].Park.Waits = "", "Timer 42: proof running"
 						return nil, nil
 					}); err != nil {
 						t.Fatal(err)
 					}
 					// Delivery retries retain the occurrence but wait one interval.
-					w.now = relayNow.Add(timerEvery)
+					watchApp(w.Host).now = relayNow.Add(timerEvery)
 					fire()
-					st, err = w.store.Read()
+					st, err = watchApp(w.Host).store.Read()
 					wantCalls := 1
 					if fail {
 						wantCalls++
@@ -370,11 +394,13 @@ func TestTimerUndeliveredWakeRetries(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestSkippedConditionalTimerStaysOpenPastExpiry(t *testing.T) {
 	w, _, _ := notifyingWatch(t, t.TempDir(), false)
-	w.clock = timerRetryClock{w: w}
+	w.Clock = timerRetryClock{w: w}
 	woke := stubWakes(t)
-	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+	if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Agents = []state.Agent{{Party: state.Party{Name: agentOne}, Park: &state.Park{On: "#3", Waits: verbAnswer, At: relayNow}}}
 		st.Timers = []state.Timer{{ID: 42, Due: relayNow, Wake: agentOne, Probe: probeHolds, Until: relayNow.Add(time.Minute), Expire: true}}
 		return nil, nil
@@ -382,8 +408,8 @@ func TestSkippedConditionalTimerStaysOpenPastExpiry(t *testing.T) {
 		t.Fatal(err)
 	}
 	var fires []timerFire
-	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
-		_, events, f, _ := settleTimers(st, map[int]checkResult{42: {holds: true}}, w.now)
+	if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
+		_, events, f, _ := watch.SettleTimers(st, map[int]checkResult{42: {Holds: true}}, watchApp(w.Host).now)
 		fires = f
 		return events, nil
 	}); err != nil {
@@ -392,24 +418,24 @@ func TestSkippedConditionalTimerStaysOpenPastExpiry(t *testing.T) {
 	if len(fires) != 1 {
 		t.Fatalf("expected one fire: %+v", fires)
 	}
-	w.wakeTimer(t.Context(), fires[0])
-	st, err := w.store.Read()
-	if err != nil || len(st.Timers) != 1 || st.Timers[0].Expire || !st.Timers[0].Checked.Equal(w.now) || len(*woke) != 0 {
+	w.WakeTimer(t.Context(), fires[0])
+	st, err := watchApp(w.Host).store.Read()
+	if err != nil || len(st.Timers) != 1 || st.Timers[0].Expire || !st.Timers[0].Checked.Equal(watchApp(w.Host).now) || len(*woke) != 0 {
 		t.Fatalf("skip lost retry: %+v error=%v wakes=%v", st, err, *woke)
 	}
-	w.now = relayNow.Add(timerEvery)
-	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Agents[0].Park = &state.Park{Waits: "Timer 42: review proof running", At: w.now}
-		_, events, f, _ := settleTimers(st, nil, w.now)
+	watchApp(w.Host).now = relayNow.Add(timerEvery)
+	if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents[0].Park = &state.Park{Waits: "Timer 42: review proof running", At: watchApp(w.Host).now}
+		_, events, f, _ := watch.SettleTimers(st, nil, watchApp(w.Host).now)
 		fires = f
 		return events, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if len(fires) != 1 || fires[0].timedOut {
+	if len(fires) != 1 || fires[0].TimedOut {
 		t.Fatalf("expiry discarded fired wake: %+v", fires)
 	}
-	w.wakeTimer(t.Context(), fires[0])
+	w.WakeTimer(t.Context(), fires[0])
 	if len(*woke) != 1 {
 		t.Fatalf("retry did not wake: %v", *woke)
 	}
@@ -417,17 +443,20 @@ func TestSkippedConditionalTimerStaysOpenPastExpiry(t *testing.T) {
 
 // A one-shot probe may stop holding after its first successful observation.
 // Retry the fired wake, rather than waiting for that observation again.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestConditionalWakeRetryKeepsFiredOccurrence(t *testing.T) {
 	for _, repeat := range []string{"", state.RepeatDaily} {
 		t.Run("repeat="+repeat, func(t *testing.T) {
 			w, _, _ := notifyingWatch(t, t.TempDir(), false)
-			w.clock = timerRetryClock{w: w}
+			w.Clock = timerRetryClock{w: w}
 			woke := stubWakes(t)
 			var initial timerFire
-			if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+			if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 				st.Agents = []state.Agent{{Party: state.Party{Name: agentOne}, Park: &state.Park{On: "#3", Waits: verbAnswer, At: relayNow}}}
 				st.Timers = []state.Timer{{ID: 42, Due: relayNow, Wake: agentOne, Probe: probeHolds, Repeat: repeat}}
-				_, events, fires, _ := settleTimers(st, map[int]checkResult{42: {holds: true}}, w.now)
+				_, events, fires, _ := watch.SettleTimers(st, map[int]checkResult{42: {Holds: true}}, watchApp(w.Host).now)
 				if len(fires) != 1 {
 					t.Fatalf("expected initial fire: %+v", fires)
 				}
@@ -437,22 +466,22 @@ func TestConditionalWakeRetryKeepsFiredOccurrence(t *testing.T) {
 				t.Fatal(err)
 			}
 			// The initial occurrence was claimed; delivery is rejected by the note park.
-			w.wakeTimer(t.Context(), initial)
-			w.now = relayNow.Add(timerEvery)
+			w.WakeTimer(t.Context(), initial)
+			watchApp(w.Host).now = relayNow.Add(timerEvery)
 			var fires []timerFire
-			if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
-				st.Agents[0].Park = &state.Park{Waits: "Timer 42: running", At: w.now}
-				_, events, f, _ := settleTimers(st, map[int]checkResult{42: {holds: false}}, w.now)
+			if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Agents[0].Park = &state.Park{Waits: "Timer 42: running", At: watchApp(w.Host).now}
+				_, events, f, _ := watch.SettleTimers(st, map[int]checkResult{42: {Holds: false}}, watchApp(w.Host).now)
 				fires = f
 				return events, nil
 			}); err != nil {
 				t.Fatal(err)
 			}
-			if len(fires) != 1 || fires[0].reason != initial.reason || fires[0].timedOut {
+			if len(fires) != 1 || fires[0].Reason != initial.Reason || fires[0].TimedOut {
 				t.Fatalf("lost the fired occurrence: %+v", fires)
 			}
-			w.wakeTimer(t.Context(), fires[0])
-			st, err := w.store.Read()
+			w.WakeTimer(t.Context(), fires[0])
+			st, err := watchApp(w.Host).store.Read()
 			if err != nil || len(*woke) != 1 {
 				t.Fatalf("wake not delivered: %v, %v", *woke, err)
 			}
@@ -465,23 +494,25 @@ func TestConditionalWakeRetryKeepsFiredOccurrence(t *testing.T) {
 
 // Keep existing simulated tick tests explicit about their delivery clock.
 type timerRetryClock struct {
-	wallClock
-	w *watcher
+	watch.WallClock
+	w *watch.Watcher
 }
 
-func (c timerRetryClock) Now() time.Time { return c.w.now }
+func (c timerRetryClock) Now() time.Time { return watchApp(c.w.Host).now }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestDelayedWakeRetryUsesDeliveryTime(t *testing.T) {
 	w, _, _ := notifyingWatch(t, t.TempDir(), false)
 	clock := newFakeClock(t)
 	clock.now = relayNow.Add(4 * time.Minute)
-	w.clock = clock
+	w.Clock = clock
 	timer := state.Timer{ID: 42, Due: relayNow, Wake: agentOne, Every: time.Minute}
-	rearmed, err := w.rearmTimer(timerFire{t: timer, reason: paramDue}, "wake skipped")
+	rearmed, err := w.RearmTimer(timerFire{T: timer, Reason: paramDue}, "wake skipped")
 	if err != nil || !rearmed {
 		t.Fatalf("rearm: %v, %v", rearmed, err)
 	}
-	st, err := w.store.Read()
+	st, err := watchApp(w.Host).store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -491,16 +522,18 @@ func TestDelayedWakeRetryUsesDeliveryTime(t *testing.T) {
 	if got := fatalTimers(st, clock.Now()); got.overdue != 0 {
 		t.Fatalf("fresh delivery reported overdue: %+v", got)
 	}
-	_, _, fires, _ := settleTimers(st, nil, clock.Now().Add(30*time.Second))
+	_, _, fires, _ := watch.SettleTimers(st, nil, clock.Now().Add(30*time.Second))
 	if len(fires) != 0 {
 		t.Fatal("retry did not wait a full interval")
 	}
-	_, _, fires, _ = settleTimers(st, nil, clock.Now().Add(time.Minute))
+	_, _, fires, _ = watch.SettleTimers(st, nil, clock.Now().Add(time.Minute))
 	if len(fires) != 1 {
 		t.Fatal("retry did not fire at the next interval")
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestOwnedExternalWaitTimerIsItsWakeCondition(t *testing.T) {
 	owner := state.Party{Name: agentOne, Session: continuationOldSession}
 	for _, tc := range []struct {
@@ -524,7 +557,7 @@ func TestOwnedExternalWaitTimerIsItsWakeCondition(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			p := &state.Park{By: owner, On: tc.on, Waits: tc.waits}
 			timer := state.Timer{By: tc.by, When: tc.when, Repeat: tc.repeat}
-			if got := timerSettlesPark(timer, p, personTimo); got != tc.want {
+			if got := watch.TimerSettlesPark(timer, p, personTimo); got != tc.want {
 				t.Fatalf("timer settlement = %v, want %v", got, tc.want)
 			}
 		})

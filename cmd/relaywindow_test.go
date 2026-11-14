@@ -18,6 +18,9 @@ import (
 // a run the relay relieved, whose status no longer counts it, and never a
 // bare run name nothing answers: while the successor's CLI runs without a
 // peer socket the message is refused with when to send again.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestSupervisorAliasThroughTheRelayWindow(t *testing.T) {
 	at := time.Date(2026, 10, 18, 1, 7, 0, 0, time.UTC)
 	window := 15 * time.Minute
@@ -26,12 +29,12 @@ func TestSupervisorAliasThroughTheRelayWindow(t *testing.T) {
 	succ := state.Party{Session: "sup-223", HostSession: "local_sup-223", Name: "Supervisor run 223"}
 
 	st := &state.State{}
-	guideRole.set(st, state.Role{
+	guideRole.Set(st, state.Role{
 		Holder:   &state.Supervisor{Party: out, Since: at.Add(-2 * time.Hour)},
 		Relieved: []state.Relief{{Party: older, By: out, At: at.Add(-2 * time.Hour), Taken: at.Add(-2 * time.Hour)}},
 		Run:      222,
 	})
-	if _, _, err := guideRole.relay(st, out, succ, at, window); err != nil {
+	if _, _, err := guideRole.Relay(st, out, succ, at, window); err != nil {
 		t.Fatal(err)
 	}
 
@@ -48,14 +51,14 @@ func TestSupervisorAliasThroughTheRelayWindow(t *testing.T) {
 	}
 	check := func(step string, now time.Time, sessions []*claude.Session, sock func(int) string, want string) {
 		t.Helper()
-		got, err := relayAddress(guideRole.get(st), guideRole, sessions, sock, now, window)
+		got, err := relayAddress(guideRole.Get(st), guideRole, sessions, sock, now, window)
 		if err != nil || got != want {
 			t.Errorf("%s: %q, %v; want %q", step, got, err, want)
 		}
 	}
 	refused := func(step string, now time.Time, sessions []*claude.Session, sock func(int) string) {
 		t.Helper()
-		got, err := relayAddress(guideRole.get(st), guideRole, sessions, sock, now, window)
+		got, err := relayAddress(guideRole.Get(st), guideRole, sessions, sock, now, window)
 		if err == nil || !strings.Contains(err.Error(), "send again") || !strings.Contains(err.Error(), out.Name) {
 			t.Errorf("%s: %q, %v; want a refusal saying when to send again", step, got, err)
 		}
@@ -69,10 +72,10 @@ func TestSupervisorAliasThroughTheRelayWindow(t *testing.T) {
 	headless := succ
 	headless.HostSession = ""
 	taken := at.Add(10 * time.Second)
-	if _, _, err := guideRole.start(st, headless, true, false, taken); err != nil {
+	if _, _, err := guideRole.Take(st, headless, true, false, taken); err != nil {
 		t.Fatal(err)
 	}
-	if h := guideRole.get(st).Holder; h.HostSession != succ.HostSession {
+	if h := guideRole.Get(st).Holder; h.HostSession != succ.HostSession {
 		t.Fatalf("holder's desktop id %q, want the relay's %q", h.HostSession, succ.HostSession)
 	}
 
@@ -93,17 +96,20 @@ func TestSupervisorAliasThroughTheRelayWindow(t *testing.T) {
 // name reaches the successor's CLI by the name it takes messages under, which
 // a desktop CLI derived from its folder keeps while its title follows the
 // run's name; never the relieved predecessor.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestSupervisorSendAfterARelayReachesTheCLIByItsPeerName(t *testing.T) {
 	at := time.Date(2026, 10, 21, 8, 34, 0, 0, time.UTC)
 	window := 15 * time.Minute
 	out := state.Party{Session: "sup-249", HostSession: "local_sup-249", Name: "Supervisor run 249"}
 	succ := state.Party{Session: "sup-250", HostSession: "local_sup-250", Name: "Supervisor run 250"}
 	st := &state.State{}
-	guideRole.set(st, state.Role{Holder: &state.Supervisor{Party: out, Since: at.Add(-3 * time.Hour)}, Run: 249})
-	if _, _, err := guideRole.relay(st, out, succ, at, window); err != nil {
+	guideRole.Set(st, state.Role{Holder: &state.Supervisor{Party: out, Since: at.Add(-3 * time.Hour)}, Run: 249})
+	if _, _, err := guideRole.Relay(st, out, succ, at, window); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := guideRole.start(st, succ, true, false, at.Add(10*time.Second)); err != nil {
+	if _, _, err := guideRole.Take(st, succ, true, false, at.Add(10*time.Second)); err != nil {
 		t.Fatal(err)
 	}
 	sessions := []*claude.Session{
@@ -117,7 +123,7 @@ func TestSupervisorSendAfterARelayReachesTheCLIByItsPeerName(t *testing.T) {
 			if role == guard.RoleGuide {
 				rl = guideRole
 			}
-			return relayAddress(rl.get(st), rl, sessions, sock, at.Add(time.Minute), window)
+			return relayAddress(rl.Get(st), rl, sessions, sock, at.Add(time.Minute), window)
 		},
 		Holds: func(name string) string { return holderRole(st, name) },
 	}

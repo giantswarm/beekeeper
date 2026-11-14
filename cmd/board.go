@@ -598,7 +598,7 @@ func servingWork(st *state.State, sessions []*claude.Session, work []claude.Work
 	var out []sessionWork
 	for i, s := range sessions {
 		p := s.Party()
-		holder := slices.ContainsFunc(roles, func(rl role) bool { h := rl.get(st).Holder; return h != nil && h.Is(p) })
+		holder := slices.ContainsFunc(roles, func(rl role) bool { h := rl.Get(st).Holder; return h != nil && h.Is(p) })
 		registered := slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(p) })
 		if i >= len(work) || holder || registered && agentIdle(st, p) || !registered && (s.LastActive.Before(since) || endedOwner(st, p)) {
 			continue
@@ -1087,11 +1087,11 @@ func endedOwner(st *state.State, p state.Party) bool {
 // the role's relief list names, or a run numbered below the holder's.
 func relievedRun(st *state.State, p state.Party) bool {
 	for _, rl := range roles {
-		r := rl.get(st)
+		r := rl.Get(st)
 		if slices.ContainsFunc(r.Relieved, func(rf state.Relief) bool { return rf.Party.Is(p) }) {
 			return true
 		}
-		if n := rl.runOf(p.Name); n > 0 && r.Holder != nil && n < rl.runOf(r.Holder.Name) {
+		if n := rl.RunOf(p.Name); n > 0 && r.Holder != nil && n < rl.RunOf(r.Holder.Name) {
 			return true
 		}
 	}

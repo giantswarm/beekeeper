@@ -28,10 +28,10 @@ func (a *app) agentDir(dir, roleName string) (string, error) {
 		return abs, nil
 	}
 	for _, rl := range roles {
-		if rl.name != roleName || rl.cfg(a.cfg).Dir == "" {
+		if rl.Name != roleName || rl.Cfg(a.cfg).Dir == "" {
 			continue
 		}
-		roleDir, err := filepath.Abs(homePath(rl.cfg(a.cfg).Dir))
+		roleDir, err := filepath.Abs(homePath(rl.Cfg(a.cfg).Dir))
 		if err != nil {
 			return "", err
 		}

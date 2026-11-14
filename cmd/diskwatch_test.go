@@ -11,15 +11,16 @@ import (
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/machine"
 	"github.com/giantswarm/beekeeper/internal/proc"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 const gibMiB = 1024
 
-func diskWatcher(out *bytes.Buffer, writes map[int]int64) *watcher {
+func diskWatcher(out *bytes.Buffer, writes map[int]int64) *watch.Watcher {
 	cfg := &config.Config{Watch: config.Watch{DiskFillWithin: config.Duration{Duration: 2 * time.Hour}}}
-	w := &watcher{app: &app{out: out, cfg: cfg}, last: map[string]time.Time{}}
-	w.disk.readPaths = func(context.Context) []diskPath { return nil }
-	w.disk.readWrites = func(pid int) (int64, error) {
+	w := &watch.Watcher{Host: &app{out: out, cfg: cfg}, Last: map[string]time.Time{}}
+	w.Disk.ReadPaths = func(context.Context) []diskPath { return nil }
+	w.Disk.ReadWrites = func(pid int) (int64, error) {
 		b, ok := writes[pid]
 		if !ok {
 			return 0, errUnreadable
@@ -35,12 +36,15 @@ var errUnreadable = errors.New("permission denied")
 // by one session's crane: LOW DISK at once, DISK FILLING naming crane and
 // the session once two minutes of samples show the rate, DISK NEARLY FULL
 // under 1 % free, each said once.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestSampleDiskSaysTheFillAndItsWriter(t *testing.T) {
 	var out bytes.Buffer
 	writes := map[int]int64{20: 0}
 	w := diskWatcher(&out, writes)
 	scans := int64(0)
-	w.disk.readPaths = func(context.Context) []diskPath {
+	w.Disk.ReadPaths = func(context.Context) []diskPath {
 		scans++
 		return []diskPath{{Path: "/cache/build", Bytes: scans << 30}}
 	}
@@ -56,7 +60,7 @@ func TestSampleDiskSaysTheFillAndItsWriter(t *testing.T) {
 		now := start.Add(time.Duration(i) * 30 * time.Second)
 		lost := int64(i) * 1229 << 20 // 1.2 GiB per 30s
 		writes[20] = lost
-		w.sampleDisk(now, machine.Disk{FreeMiB: 24*gibMiB - int(lost>>20), TotalMiB: total}, tab, owners)
+		w.SampleDisk(now, machine.Disk{FreeMiB: 24*gibMiB - int(lost>>20), TotalMiB: total}, tab, owners)
 	}
 	got := out.String()
 	for _, want := range []string{
@@ -79,6 +83,9 @@ func TestSampleDiskSaysTheFillAndItsWriter(t *testing.T) {
 // A fill rate over the free-disk floor is a forecast: the published
 // reading says Filling without Low, and LOW DISK stays silent. The same
 // rate under the floor is the emergency (Low), which is what holds starts.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestSampleDiskPublishesTheForecastApartFromTheFloor(t *testing.T) {
 	r := newLoopRig(t)
 	r.a.cfg.Watch.DiskFillWithin = config.Duration{Duration: 2 * time.Hour}
@@ -86,7 +93,7 @@ func TestSampleDiskPublishesTheForecastApartFromTheFloor(t *testing.T) {
 	total := 1900 * gibMiB // floor 95 GiB
 	for i := range 5 {
 		now := time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC).Add(time.Duration(i) * 30 * time.Second)
-		w.sampleDisk(now, machine.Disk{FreeMiB: 100*gibMiB - i*1229, TotalMiB: total}, nil, nil)
+		w.SampleDisk(now, machine.Disk{FreeMiB: 100*gibMiB - i*1229, TotalMiB: total}, nil, nil)
 	}
 	if got := r.a.watchDisk(); got == nil || !got.Filling || got.Low {
 		t.Fatalf("forecast over the floor: %+v", got)
@@ -94,7 +101,7 @@ func TestSampleDiskPublishesTheForecastApartFromTheFloor(t *testing.T) {
 	if strings.Contains(r.out.String(), "LOW DISK") {
 		t.Errorf("LOW DISK said above the floor:\n%s", r.out.String())
 	}
-	w.sampleDisk(time.Date(2026, 10, 6, 12, 2, 30, 0, time.UTC), machine.Disk{FreeMiB: 90 * gibMiB, TotalMiB: total}, nil, nil)
+	w.SampleDisk(time.Date(2026, 10, 6, 12, 2, 30, 0, time.UTC), machine.Disk{FreeMiB: 90 * gibMiB, TotalMiB: total}, nil, nil)
 	if got := r.a.watchDisk(); got == nil || !got.Low || !got.Filling {
 		t.Fatalf("the same rate under the floor: %+v", got)
 	}
@@ -102,13 +109,16 @@ func TestSampleDiskPublishesTheForecastApartFromTheFloor(t *testing.T) {
 
 // A slow fill that would take far longer than diskFillWithin is no DISK
 // FILLING, and free space that holds steady ends one.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestSampleDiskIgnoresASlowFill(t *testing.T) {
 	var out bytes.Buffer
 	w := diskWatcher(&out, map[int]int64{})
 	start := time.Now()
 	for i := range 21 {
 		free := 500*gibMiB - i*50 // 0.1 GiB/min
-		w.sampleDisk(start.Add(time.Duration(i)*30*time.Second), machine.Disk{FreeMiB: free, TotalMiB: 1900 * gibMiB}, table(), nil)
+		w.SampleDisk(start.Add(time.Duration(i)*30*time.Second), machine.Disk{FreeMiB: free, TotalMiB: 1900 * gibMiB}, table(), nil)
 	}
 	if out.Len() != 0 {
 		t.Errorf("a slow fill said:\n%s", out.String())
@@ -117,12 +127,15 @@ func TestSampleDiskIgnoresASlowFill(t *testing.T) {
 
 // A fill no readable process wrote (a root daemon) says so, with the share
 // of the loss it cannot attribute.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWritersLineNamesTheUnreadableShare(t *testing.T) {
-	dw := diskWatch{readWrites: func(int) (int64, error) { return 0, errUnreadable }}
+	dw := watch.DiskWatch{ReadWrites: func(int) (int64, error) { return 0, errUnreadable }}
 	start := time.Now()
 	tab := table(&proc.Process{PID: 30, Comm: "dockerd", StartTicks: 2})
-	dw.rebase(start, 50*gibMiB, tab)
-	got := dw.writersLine(start.Add(5*time.Minute), 40*gibMiB, tab, nil)
+	dw.Rebase(start, 50*gibMiB, tab)
+	got := dw.WritersLine(start.Add(5*time.Minute), 40*gibMiB, tab, nil)
 	want := "written over the last 5m0s: by no process the watch can read; 10.0 GiB of the 10.0 GiB lost by processes the watch cannot read (another user's, such as dockerd, or ended ones)"
 	if got != want {
 		t.Errorf("writersLine =\n %q\nwant\n %q", got, want)
@@ -131,23 +144,26 @@ func TestWritersLineNamesTheUnreadableShare(t *testing.T) {
 
 // The baseline is replaced once the newer one is a window old, so the
 // writers span between one and two windows; a reused PID counts from zero.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestRebaseKeepsTheOlderBaseline(t *testing.T) {
 	writes := map[int]int64{1: 100}
-	dw := diskWatch{readWrites: func(pid int) (int64, error) { return writes[pid], nil }}
+	dw := watch.DiskWatch{ReadWrites: func(pid int) (int64, error) { return writes[pid], nil }}
 	start := time.Now()
 	tab := table(&proc.Process{PID: 1, Comm: "go", StartTicks: 5})
-	dw.rebase(start, 100, tab)
-	dw.rebase(start.Add(diskWindow-time.Second), 100, tab)
-	if dw.base.at != start || dw.next.at != start {
+	dw.Rebase(start, 100, tab)
+	dw.Rebase(start.Add(watch.DiskWindow-time.Second), 100, tab)
+	if dw.Base.At != start || dw.Next.At != start {
 		t.Fatalf("rebased before a window passed")
 	}
-	dw.rebase(start.Add(diskWindow), 100, tab)
-	if dw.base.at != start || dw.next.at != start.Add(diskWindow) {
-		t.Fatalf("base %v next %v, want the first kept and a new next", dw.base.at, dw.next.at)
+	dw.Rebase(start.Add(watch.DiskWindow), 100, tab)
+	if dw.Base.At != start || dw.Next.At != start.Add(watch.DiskWindow) {
+		t.Fatalf("base %v next %v, want the first kept and a new next", dw.Base.At, dw.Next.At)
 	}
 	tab.ByPID[1] = &proc.Process{PID: 1, Comm: "go", StartTicks: 9}
 	writes[1] = 3 << 30
-	if got := dw.writersLine(start.Add(diskWindow), 100, tab, nil); !strings.Contains(got, "top: go 3.0 GiB") {
+	if got := dw.WritersLine(start.Add(watch.DiskWindow), 100, tab, nil); !strings.Contains(got, "top: go 3.0 GiB") {
 		t.Errorf("a reused PID's writes = %q, want all 3 GiB", got)
 	}
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // sinkApp is an app on a scratch state whose configuration dispatches o/site's
@@ -42,9 +43,9 @@ func sinkApp(t *testing.T, sinkYAML string) (*app, *bytes.Buffer) {
 func fakeSinkGH(t *testing.T, fail *bool) *[]string {
 	t.Helper()
 	var calls []string
-	prev := sinkGH
-	t.Cleanup(func() { sinkGH = prev })
-	sinkGH = func(_ context.Context, args ...string) ([]byte, error) {
+	prev := watch.SinkGH
+	t.Cleanup(func() { watch.SinkGH = prev })
+	watch.SinkGH = func(_ context.Context, args ...string) ([]byte, error) {
 		calls = append(calls, strings.Join(args, " "))
 		if *fail {
 			return nil, errors.New("HTTP 422: Unexpected inputs provided")
@@ -55,10 +56,10 @@ func fakeSinkGH(t *testing.T, fail *bool) *[]string {
 }
 
 // poll runs one poll's sink of w and waits for its dispatch.
-func sinkPoll(w *watcher) {
-	w.now = time.Now()
-	w.sink(context.Background())
-	w.bg.Wait()
+func sinkPoll(w *watch.Watcher) {
+	watchApp(w.Host).now = time.Now()
+	w.Sink(context.Background())
+	w.Bg.Wait()
 }
 
 // The watch dispatches the configured workflow once for each selected event
@@ -130,6 +131,9 @@ func TestTheWatchDispatchesTheSinksWorkflowOnTheSelectedEvents(t *testing.T) {
 }
 
 // Cancellation releases every failed claim for a replacement watch to retry.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTheSinkReleasesFailedClaimsAfterCancellation(t *testing.T) {
 	a, _ := sinkApp(t, "sink:\n  repo: o/site\n  workflow: refresh.yaml\n  verbs: [session.serve, merged]\n")
 	w := a.newWatcher(false, true)
@@ -143,16 +147,16 @@ func TestTheSinkReleasesFailedClaimsAfterCancellation(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	previous := sinkGH
-	t.Cleanup(func() { sinkGH = previous })
+	previous := watch.SinkGH
+	t.Cleanup(func() { watch.SinkGH = previous })
 	var failed []string
-	sinkGH = func(ctx context.Context, args ...string) ([]byte, error) {
+	watch.SinkGH = func(ctx context.Context, args ...string) ([]byte, error) {
 		failed = append(failed, strings.Join(args, " "))
 		cancel() // shutdown interrupts the first dispatch and the rest of its batch
 		return nil, ctx.Err()
 	}
-	w.sink(ctx)
-	w.bg.Wait()
+	w.Sink(ctx)
+	w.Bg.Wait()
 	if len(failed) != len(evs) {
 		t.Fatalf("failed dispatches: %q, want both events", failed)
 	}
@@ -166,7 +170,7 @@ func TestTheSinkReleasesFailedClaimsAfterCancellation(t *testing.T) {
 	}
 	replacement := other.newWatcher(false, true)
 	var retried []string
-	sinkGH = func(_ context.Context, args ...string) ([]byte, error) {
+	watch.SinkGH = func(_ context.Context, args ...string) ([]byte, error) {
 		retried = append(retried, strings.Join(args, " "))
 		return nil, nil
 	}

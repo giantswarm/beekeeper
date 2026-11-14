@@ -10,6 +10,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/machine"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // A lab resource and the kind node its first cluster runs.
@@ -20,6 +21,8 @@ const (
 	bigModel   = "big"
 )
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestModelBreaches(t *testing.T) {
 	resources := []string{labOne, labTwo}
 	lab1 := machine.HostModel{Name: bigModel, SizeMiB: 18000, Client: labOneNode}
@@ -56,7 +59,7 @@ func TestModelBreaches(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			got := modelBreaches(tc.models, tc.holders, resources, 12)
+			got := watch.ModelBreaches(tc.models, tc.holders, resources, 12)
 			if len(got) != len(tc.want) {
 				t.Fatalf("breaches %v, want %v", got, tc.want)
 			}
@@ -73,6 +76,8 @@ func TestModelBreaches(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLabOf(t *testing.T) {
 	res := []string{labOne, labTwo, "kind-x"}
 	for client, want := range map[string]string{
@@ -82,15 +87,17 @@ func TestLabOf(t *testing.T) {
 		"172.21.0.5 agentlab-registry":        "",
 		"127.0.0.1":                           "",
 	} {
-		if got := labOf(machine.HostModel{Client: client}, res); got != want {
+		if got := watch.LabOf(machine.HostModel{Client: client}, res); got != want {
 			t.Errorf("labOf(%q) = %q, want %q", client, got, want)
 		}
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestModelServerLine(t *testing.T) {
-	bs := []modelBreach{{Model: machine.HostModel{Name: bigModel, SizeMiB: 1, Client: "c"}, Reason: "r", Unload: true}, {Model: machine.HostModel{Name: "h", SizeMiB: 2}, Reason: "s"}}
-	got := modelServerLine(bs, map[string]error{bigModel: nil})
+	bs := []watch.ModelBreach{{Model: machine.HostModel{Name: bigModel, SizeMiB: 1, Client: "c"}, Reason: "r", Unload: true}, {Model: machine.HostModel{Name: "h", SizeMiB: 2}, Reason: "s"}}
+	got := watch.ModelServerLine(bs, map[string]error{bigModel: nil})
 	if want := "big 1 MiB loaded by c: r; unloaded | h 2 MiB loaded by an unknown client: s"; got != want {
 		t.Errorf("line %q, want %q", got, want)
 	}
@@ -119,6 +126,8 @@ func TestClaimBudget(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestHostModels(t *testing.T) {
 	lemonade := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/v1/health" {
@@ -138,7 +147,7 @@ func TestHostModels(t *testing.T) {
 	if err != nil || len(got) != 1 || got[0].Server != machine.Lemonade {
 		t.Errorf("ollama down: %+v, %v", got, err)
 	}
-	if serverURL(cfg(down.URL, lemonade.URL), got[0]) != lemonade.URL {
+	if watch.ServerURL(cfg(down.URL, lemonade.URL), got[0]) != lemonade.URL {
 		t.Error("a Lemonade model is unloaded at ollama's URL")
 	}
 	if _, err := hostModels(context.Background(), cfg(down.URL, "")); err == nil {

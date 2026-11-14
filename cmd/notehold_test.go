@@ -14,6 +14,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // The board's statuses as the fake board names them.
@@ -347,26 +348,29 @@ func TestItemHeldByTwoDecisionsWaitsForBoth(t *testing.T) {
 
 // A decision closed by its default, or as overtaken, by the watch releases
 // its hold with no other command: board next offers the item again.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchReleasesTheHoldOfADefaultedOrOvertakenDecision(t *testing.T) {
 	for _, tc := range []struct {
 		name, ref, how string
 		due            time.Duration
 	}{
-		{paramDefault, github.Open, closedDefaulted, -time.Minute},
+		{paramDefault, github.Open, watch.ClosedDefaulted, -time.Minute},
 		{"overtaken", github.Merged, closedOvertaken, time.Hour},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w, out := overtakingWatch(t, map[string]string{heldRef: tc.ref})
-			f := useFakeBoard(t, w.app, map[int]string{7: holdBlocked})
+			f := useFakeBoard(t, watchApp(w.Host), map[int]string{7: holdBlocked})
 			setNotes(t, w, state.Note{ID: 1, Kind: noteDecision, For: notePerson, Text: "merge o/r#7?", Refs: []string{heldRef},
-				Default: dfltOK, Due: w.now.Add(tc.due), By: state.Party{Name: agentOne}, TaskEnded: w.now,
+				Default: dfltOK, Due: watchApp(w.Host).now.Add(tc.due), By: state.Party{Name: agentOne}, TaskEnded: watchApp(w.Host).now,
 				Held: &state.ItemHold{Ref: heldRef, Status: holdBlocked, Was: holdUpNext}})
-			w.pending(context.Background(), nil)
-			w.timerActs.Wait()
+			w.Pending(context.Background(), nil)
+			w.TimerActs.Wait()
 			if ids := openIDs(t, w); len(ids) != 0 {
 				t.Fatalf("open %v", ids)
 			}
-			if got := f.offered(w.app); got != heldRef {
+			if got := f.offered(watchApp(w.Host)); got != heldRef {
 				t.Fatalf("offered %q (Status %q)", got, f.statusOf(7))
 			}
 			if !strings.Contains(out.String(), "BOARD RELEASED: o/r#7 back to Up Next, note #1 "+tc.how) {

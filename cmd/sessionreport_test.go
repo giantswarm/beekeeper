@@ -17,6 +17,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 func sessionReportFixture(t *testing.T) *app {
@@ -227,6 +228,9 @@ func TestSessionReportDeliveryOutcomes(t *testing.T) {
 // minutes after it queued its approval; the loop then rejected the approval
 // as one of an ended assignment, and the guide never got it
 // (https://github.com/giantswarm/beekeeper/issues/3625).
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestDoctorKeepsSessionUntilItsQueuedReportApplies(t *testing.T) {
 	a, _ := stubApp(t)
 	runLive(t, a, nil)
@@ -254,7 +258,7 @@ func TestDoctorKeepsSessionUntilItsQueuedReportApplies(t *testing.T) {
 		t.Fatal("precondition: the session is not gone")
 	}
 
-	rep, err := a.doctor(t.Context(), doctorRun{by: watchParty, dryRun: true})
+	rep, err := a.doctor(t.Context(), doctorRun{by: watch.WatchParty, dryRun: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,7 +267,7 @@ func TestDoctorKeepsSessionUntilItsQueuedReportApplies(t *testing.T) {
 	}) {
 		t.Fatalf("dry run does not name the waiting report: %q", rep.chores)
 	}
-	if _, err := a.doctor(t.Context(), doctorRun{by: watchParty}); err != nil {
+	if _, err := a.doctor(t.Context(), doctorRun{by: watch.WatchParty}); err != nil {
 		t.Fatal(err)
 	}
 	// The loop's own roster tidy removes through the same path.
@@ -286,7 +290,7 @@ func TestDoctorKeepsSessionUntilItsQueuedReportApplies(t *testing.T) {
 	if r, ok := st.ReportReceipts[id]; !ok || r.Error != "" || len(st.Agents) != 1 || !st.Agents[0].Done {
 		t.Fatalf("report not applied: receipt %+v, roster %+v", st.ReportReceipts, st.Agents)
 	}
-	rep, err = a.doctor(t.Context(), doctorRun{by: watchParty})
+	rep, err = a.doctor(t.Context(), doctorRun{by: watch.WatchParty})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -67,7 +68,7 @@ func (a *app) splitNotes(notes []state.Note) noteSplit {
 // 3: …") rather than for a person.
 func forGuide(n *state.Note) bool {
 	who, _ := noteFor(n)
-	return strings.HasPrefix(strings.ToLower(who), strings.ToLower(guideRole.title))
+	return strings.HasPrefix(strings.ToLower(who), strings.ToLower(guideRole.Title))
 }
 
 // guidedText is the one line that stands for the guide's notes.
@@ -117,17 +118,17 @@ var answeredDetail = regexp.MustCompile(`(?s)^(\S+) answered by ("(?:[^"\\]|\\.)
 
 // parseAnswered reads an answer.recorded event; ok is false for another
 // one.
-func parseAnswered(e state.Event) (answered, bool) {
+func parseAnswered(e state.Event) (loop.Answered, bool) {
 	m := answeredDetail.FindStringSubmatch(e.Detail)
 	if e.Verb != answerRecorded || m == nil {
-		return answered{}, false
+		return loop.Answered{}, false
 	}
 	id, _ := strconv.Atoi(m[5])
 	unquote := func(s string) string {
 		u, _ := strconv.Unquote(s)
 		return u
 	}
-	return answered{About: m[1], For: unquote(m[2]), Via: m[3], Comment: m[4], ID: id, Asker: unquote(m[6]), Audience: unquote(m[7]), Question: unquote(m[8]), Answer: m[9], At: e.At, By: e.By.Name}, true
+	return loop.Answered{About: m[1], For: unquote(m[2]), Via: m[3], Comment: m[4], ID: id, Asker: unquote(m[6]), Audience: unquote(m[7]), Question: unquote(m[8]), Answer: m[9], At: e.At, By: e.By.Name}, true
 }
 
 // answeredSince is the answers recorded since since, oldest first.

@@ -3,16 +3,11 @@ package cmd
 import (
 	"fmt"
 	"path/filepath"
-	"strings"
 
 	"github.com/gofrs/flock"
 )
 
 const probeInProgressPrefix = "probe already in progress: "
-
-func isProbeInProgress(msg string) bool {
-	return strings.HasPrefix(msg, probeInProgressPrefix)
-}
 
 // Probes never queue behind another probe or hold the state lock. A contender
 // uses the last valid usage observation (including its quota stops), or refuses

@@ -142,16 +142,19 @@ func TestSeedArchives(t *testing.T) {
 // worker's that reported done) and never a session someone brought back
 // from the Archived list; each is asked for once its session stayed quiet
 // a day.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestSeedArchivesAgainOnlyWhatReseedTakes(t *testing.T) {
 	st := handOverState()
 	done := state.Party{Session: "w-done", HostSession: "local_w-done", Name: "reported done"}
 	back := state.Party{Session: "w-back", HostSession: "local_w-back", Name: "brought back"}
 	stale := state.Party{Session: kindStale, HostSession: "local_stale", Name: "left stale"}
 	st.Starts = []state.Start{{Party: supA}, {Party: supB}, {Party: done}, {Party: back}, {Party: stale}}
-	if _, _, err := guideRole.relay(st, supA, supB, relayNow, 15*time.Minute); err != nil {
+	if _, _, err := guideRole.Relay(st, supA, supB, relayNow, 15*time.Minute); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := guideRole.start(st, supB, true, false, relayNow.Add(time.Minute)); err != nil {
+	if _, _, err := guideRole.Take(st, supB, true, false, relayNow.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	st.Archives, st.ArchivesSeeded, st.FinishedSeeded = nil, true, true
@@ -273,13 +276,16 @@ func TestHandoverChainOwesEachOldSession(t *testing.T) {
 // its session stays the person's to close, and the start message says how.
 // An archive owed before the fix is owed no longer; the doctor neither
 // seeds nor reseeds one (https://github.com/giantswarm/beekeeper/issues/2195).
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestRelievedRunStaysThePersons(t *testing.T) {
 	st := handOverState()
 	st.Starts = []state.Start{{Party: supA, Role: guideName}, {Party: supB}}
-	if _, _, err := guideRole.relay(st, supA, supB, relayNow, 15*time.Minute); err != nil {
+	if _, _, err := guideRole.Relay(st, supA, supB, relayNow, 15*time.Minute); err != nil {
 		t.Fatal(err)
 	}
-	msg, _, err := guideRole.start(st, supB, true, false, relayNow.Add(time.Minute))
+	msg, _, err := guideRole.Take(st, supB, true, false, relayNow.Add(time.Minute))
 	if err != nil || !strings.Contains(msg, "stays in the person's session list until they archive it") {
 		t.Fatalf("start: %q, %v", msg, err)
 	}
@@ -312,6 +318,9 @@ func TestRelievedRunStaysThePersons(t *testing.T) {
 
 // A guide taken over after a crash or a reboot, its session gone without a
 // relay, stays the person's too: its start took the role.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTakenOverGuideStaysThePersons(t *testing.T) {
 	// Names that are no role's runs: only the start says they guided.
 	old := state.Party{Session: "gA", HostSession: "local_gA", Name: "desk guide"}
@@ -320,10 +329,10 @@ func TestTakenOverGuideStaysThePersons(t *testing.T) {
 	if keepsRole(st, old) {
 		t.Fatal("keepsRole before it guided")
 	}
-	if _, _, err := guideRole.start(st, old, false, false, relayNow); err != nil {
+	if _, _, err := guideRole.Take(st, old, false, false, relayNow); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := guideRole.start(st, next, false, false, relayNow.Add(time.Hour)); err != nil {
+	if _, _, err := guideRole.Take(st, next, false, false, relayNow.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	if holdsRole(st, old) || !keepsRole(st, old) {

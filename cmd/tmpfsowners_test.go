@@ -8,8 +8,11 @@ import (
 	"testing"
 
 	"github.com/giantswarm/beekeeper/internal/proc"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTmpfsLargestNamesEntriesAndWorkerOwners(t *testing.T) {
 	root := t.TempDir()
 	for i, name := range []string{litSmall, "medium", "large", "largest"} {
@@ -22,7 +25,7 @@ func TestTmpfsLargestNamesEntriesAndWorkerOwners(t *testing.T) {
 		}
 		return nil, errors.New("process unavailable")
 	}
-	got := tmpfsLargest(root, table, map[int]string{10: "Build issue 797"}, refs)
+	got := watch.TmpfsLargest(root, table, map[int]string{10: "Build issue 797"}, refs)
 	for _, want := range []string{`"largest"`, `go pid 11 ("Build issue 797")`, `"large"`, `"medium"`, "owner unknown"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("%q missing %q", got, want)
@@ -39,20 +42,22 @@ func TestTmpfsLargestNamesEntriesAndWorkerOwners(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTmpfsLargestDoesNotFollowSymlinks(t *testing.T) {
 	root, outside := t.TempDir(), t.TempDir()
 	writeT(t, filepath.Join(outside, "data"), strings.Repeat("x", 2<<20))
 	if err := os.Symlink(outside, filepath.Join(root, "link")); err != nil {
 		t.Fatal(err)
 	}
-	got := tmpfsLargest(root, nil, nil, nil)
+	got := watch.TmpfsLargest(root, nil, nil, nil)
 	if !strings.Contains(got, `"link"`) || !strings.Contains(got, "owner unknown") || !strings.Contains(got, "0 MiB") {
 		t.Fatal(got)
 	}
-	if got := tmpfsLargest(filepath.Join(root, "absent"), nil, nil, nil); got != "largest entries unavailable" {
+	if got := watch.TmpfsLargest(filepath.Join(root, "absent"), nil, nil, nil); got != "largest entries unavailable" {
 		t.Fatal(got)
 	}
-	if got := tmpfsLargest(t.TempDir(), nil, nil, nil); !strings.Contains(got, "deleted open files") {
+	if got := watch.TmpfsLargest(t.TempDir(), nil, nil, nil); !strings.Contains(got, "deleted open files") {
 		t.Fatal(got)
 	}
 }

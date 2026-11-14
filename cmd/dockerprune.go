@@ -16,6 +16,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/dockerprune"
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/proc"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // A lab machine that loads dev images into kind clusters piles up Docker
@@ -328,7 +329,7 @@ func (a *app) pruneDockerForPressure(dryRun, pressure bool, holds func() string)
 	// the trims ran over a cap and freed nothing, as the record of why
 	// (the keep reasons name what no removal may take).
 	if r.acted() || r.attempted {
-		_ = a.store.Log(event(watchParty, dockerVerb, "%s", r.logLine()))
+		_ = a.store.Log(event(watch.WatchParty, dockerVerb, "%s", r.logLine()))
 	}
 	return r
 }
@@ -386,52 +387,52 @@ func dockerKeep(labs []lease.Holder, now time.Time) time.Time {
 // read last, and since when a prune waits.
 type dockerMark = goCacheMark
 
-// docker reads Docker's sizes every doctor.dockerEvery and prunes what is
+// watchDocker reads Docker's sizes every doctor.dockerEvery and prunes what is
 // over its cap, in the background so the sample goes on. A prune an import
 // or a fresh lab lease holds back is tried again every goCacheRetry; once
 // it has waited doctor.dockerEvery the watch says DOCKER until it ran. A
 // failed read or prune, or one that leaves the images over their cap, is
 // DOCKER too.
-func (w *watcher) docker(now time.Time) {
-	if !w.dockerOn || dockerCLI == nil || (w.cfg.Doctor.DockerImagesMax() == 0 && w.cfg.Doctor.DockerBuildCacheMax() == 0) ||
-		!w.dockerPruning.CompareAndSwap(false, true) {
+func watchDocker(w *watch.Watcher, now time.Time) {
+	if !w.DockerOn || dockerCLI == nil || (watchApp(w.Host).cfg.Doctor.DockerImagesMax() == 0 && watchApp(w.Host).cfg.Doctor.DockerBuildCacheMax() == 0) ||
+		!w.DockerPruning.CompareAndSwap(false, true) {
 		return
 	}
-	if now.Before(w.dockerNext) {
-		w.dockerPruning.Store(false)
+	if now.Before(w.DockerNext) {
+		w.DockerPruning.Store(false)
 		return
 	}
-	w.bg.Add(1)
+	w.Bg.Add(1)
 	go func() {
-		defer w.bg.Done()
-		defer w.dockerPruning.Store(false)
-		every := w.cfg.Doctor.DockerEvery.Duration
+		defer w.Bg.Done()
+		defer w.DockerPruning.Store(false)
+		every := watchApp(w.Host).cfg.Doctor.DockerEvery.Duration
 		var m dockerMark
-		_, _ = w.store.ReadFile(dockerFile, &m)
+		_, _ = watchApp(w.Host).store.ReadFile(dockerFile, &m)
 		if m.Waiting.IsZero() && now.Sub(m.Checked) < every {
-			w.dockerNext = m.Checked.Add(every)
+			w.DockerNext = m.Checked.Add(every)
 			return
 		}
-		r := w.pruneDocker(false, w.dockerHolds)
-		if w.context().Err() != nil {
+		r := watchApp(w.Host).pruneDocker(false, watchApp(w.Host).dockerHolds)
+		if watchApp(w.Host).context().Err() != nil {
 			return
 		}
 		switch {
 		case r.locked:
-			w.dockerNext = now.Add(goCacheRetry)
+			w.DockerNext = now.Add(goCacheRetry)
 			return
 		case r.held != "":
 			if m.Waiting.IsZero() {
 				m.Waiting = now
 			}
-			w.dockerNext = now.Add(goCacheRetry)
+			w.DockerNext = now.Add(goCacheRetry)
 		default:
 			m.Waiting = time.Time{}
-			w.dockerNext = now.Add(every)
+			w.DockerNext = now.Add(every)
 		}
 		m.Checked = now
-		_ = w.store.WriteFile(dockerFile, m)
+		_ = watchApp(w.Host).store.WriteFile(dockerFile, m)
 		waited := !m.Waiting.IsZero() && now.Sub(m.Waiting) >= every
-		w.check("docker", r.err != nil || r.blocked() || waited, "DOCKER: %s", r)
+		w.Check("docker", r.err != nil || r.blocked() || waited, "DOCKER: %s", r)
 	}()
 }

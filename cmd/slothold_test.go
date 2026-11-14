@@ -11,11 +11,15 @@ import (
 	"github.com/gofrs/flock"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // A run holding a build slot past memcap.holdBound is one SLOT HELD LONG
 // line naming the slot, its holder, since when and the command, folded
 // while it lasts, and one ENDED line once the slot is free.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchSaysASlotHeldLong(t *testing.T) {
 	t.Setenv("MEMCAP_STATE", "")
 	t.Setenv("MEMCAP_SLOTS", "")
@@ -45,16 +49,16 @@ func TestWatchSaysASlotHeldLong(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	w := &watcher{app: &app{cfg: cfg, out: &out}, last: map[string]time.Time{}}
+	w := &watch.Watcher{Host: &app{cfg: cfg, out: &out}, Last: map[string]time.Time{}}
 
-	w.now = time.Date(2026, 10, 9, 20, 50, 0, 0, time.UTC)
-	w.slotHolds()
+	watchApp(w.Host).now = time.Date(2026, 10, 9, 20, 50, 0, 0, time.UTC)
+	w.SlotHolds()
 	if out.Len() != 0 {
 		t.Errorf("a slot held 23m, under the bound, was said:\n%s", out.String())
 	}
-	w.now = time.Date(2026, 10, 9, 23, 20, 0, 0, time.UTC)
-	w.slotHolds()
-	w.slotHolds()
+	watchApp(w.Host).now = time.Date(2026, 10, 9, 23, 20, 0, 0, time.UTC)
+	w.SlotHolds()
+	w.SlotHolds()
 	want := "SLOT HELD LONG: slot 1 past memcap.holdBound (30m), held by Agent four (pid 4711) since 20:27Z (2h53m0s): python3 benchmark_preset.py"
 	if n := strings.Count(out.String(), want); n != 1 {
 		t.Errorf("want %q once, said %d times:\n%s", want, n, out.String())
@@ -63,7 +67,7 @@ func TestWatchSaysASlotHeldLong(t *testing.T) {
 		t.Errorf("the line does not name the slotless classes:\n%s", out.String())
 	}
 	_ = l.Unlock()
-	w.slotHolds()
+	w.SlotHolds()
 	if !strings.Contains(out.String(), "ENDED SLOT HELD LONG") {
 		t.Errorf("a freed slot does not end the condition:\n%s", out.String())
 	}

@@ -17,6 +17,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 const (
@@ -322,6 +323,8 @@ func TestLoopFillNeverRepeatsStaleBoardItem(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLoopFillBacksOffEmptyAndFailedBoardReads(t *testing.T) {
 	for _, answer := range []struct {
 		name, body string
@@ -350,7 +353,7 @@ func TestLoopFillBacksOffEmptyAndFailedBoardReads(t *testing.T) {
 			l.Once = true // These checks inspect completed pass effects.
 			pass := func() {
 				t.Helper()
-				fresh := event(watchParty, "watch.budget-state", "false")
+				fresh := event(watch.WatchParty, "watch.budget-state", "false")
 				fresh.At = r.a.now
 				if err := r.a.store.Record(fresh); err != nil {
 					t.Fatal(err)
@@ -803,7 +806,7 @@ func (r *loopRig) loopPass(t *testing.T, l *loop.Loop) {
 	})
 	r.a.now = r.a.now.Add(30 * time.Second)
 	// The watch keeps publishing: its budget reading never goes stale.
-	w := event(watchParty, "watch.budget-state", "false")
+	w := event(watch.WatchParty, "watch.budget-state", "false")
 	w.At = r.a.now
 	if err := r.a.store.Record(w); err != nil {
 		t.Fatal(err)
@@ -998,6 +1001,9 @@ func TestLoopHeldOnAStaleReadingReadsTheBudgetItself(t *testing.T) {
 
 // Consecutive empty reads double the refill's pause up to four times
 // supervisor.fillRetryEvery; a change that ends the pause starts it over.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLoopFillBacksOffOverAnEmptyBoard(t *testing.T) {
 	r, l, reads := emptyBoardFill(t)
 	ceiling := 5
@@ -1018,7 +1024,7 @@ func TestLoopFillBacksOffOverAnEmptyBoard(t *testing.T) {
 		for end := r.a.now.Add(d); r.a.now.Before(end); r.a.now = r.a.now.Add(30 * time.Second) {
 			// Advance the watch with the test clock: this scenario exercises
 			// board backoff, not a hold caused by stale watch observations.
-			fresh := event(watchParty, "watch.budget-state", "false")
+			fresh := event(watch.WatchParty, "watch.budget-state", "false")
 			fresh.At = r.a.now
 			if err := r.a.store.Record(fresh); err != nil {
 				t.Fatal(err)

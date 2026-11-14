@@ -1,4 +1,4 @@
-package cmd
+package watch
 
 import (
 	"context"
@@ -7,10 +7,10 @@ import (
 	"strings"
 )
 
-// routineLine is deliberately an allowlist: new and unknown events wake
+// RoutineLine is deliberately an allowlist: new and unknown events wake
 // immediately. In particular, faults, pages, thresholds, leases and reports
 // must not inherit the policy of a routine line emitted by the same source.
-func (w *watcher) routineLine(line string) bool {
+func (w *Watcher) RoutineLine(line string) bool {
 	switch {
 	case strings.HasPrefix(line, "SESSIONS "), strings.HasPrefix(line, "CENTRAL agents.register "):
 		return true
@@ -30,51 +30,51 @@ func (w *watcher) routineLine(line string) bool {
 		fields := strings.Fields(line)
 		// ALERT <kind> <installation> <severity> <team> ...; our team's
 		// marker is uppercase. No configured team means no known other team.
-		return len(fields) >= 6 && w.cfg.Alerts.Team != "" &&
+		return len(fields) >= 6 && w.Host.Cfg().Alerts.Team != "" &&
 			strings.EqualFold(fields[3], "notify") &&
-			!strings.EqualFold(fields[4], w.cfg.Alerts.Team)
+			!strings.EqualFold(fields[4], w.Host.Cfg().Alerts.Team)
 	}
 	return false
 }
 
-func (w *watcher) outputEvent(line string) {
-	stamped := w.clk().Now().Format("15:04:05") + " " + line
-	routine := w.batchEvery > 0 && w.routineLine(line)
-	w.mu.Lock()
-	defer w.mu.Unlock()
+func (w *Watcher) OutputEvent(line string) {
+	stamped := w.Clk().Now().Format("15:04:05") + " " + line
+	routine := w.BatchEvery > 0 && w.RoutineLine(line)
+	w.Mu.Lock()
+	defer w.Mu.Unlock()
 	if routine {
 		w.batch = append(w.batch, stamped)
 		return
 	}
-	_, _ = fmt.Fprintln(w.out, stamped)
+	_, _ = fmt.Fprintln(w.Host.Out(), stamped)
 }
 
-// flushBatch makes one physical stdout line: newline-delimited monitors
+// FlushBatch makes one physical stdout line: newline-delimited monitors
 // would wake once per item if the batch contained literal line breaks.
 // JSON retains each item's timestamp and embedded newlines losslessly.
-func (w *watcher) flushBatch() {
-	w.mu.Lock()
-	defer w.mu.Unlock()
+func (w *Watcher) FlushBatch() {
+	w.Mu.Lock()
+	defer w.Mu.Unlock()
 	if len(w.batch) == 0 {
 		return
 	}
 	items, _ := json.Marshal(w.batch) // strings always marshal
-	_, _ = fmt.Fprintf(w.out, "%s BATCH: %s\n", w.clk().Now().Format("15:04:05"), items)
+	_, _ = fmt.Fprintf(w.Host.Out(), "%s BATCH: %s\n", w.Clk().Now().Format("15:04:05"), items)
 	w.batch = nil
 }
 
 // A dedicated clock keeps a slow poll from delaying the routine tick. No
 // empty notices are printed. Action output does not flush or reset it.
-func (w *watcher) batchLoop(ctx context.Context) {
+func (w *Watcher) BatchLoop(ctx context.Context) {
 	for {
-		fire, stop := w.clk().Timer(w.batchEvery)
+		fire, stop := w.Clk().Timer(w.BatchEvery)
 		select {
 		case <-ctx.Done():
 			stop()
 			return // every buffered item already has its durable watch event
 		case <-fire:
 			stop()
-			w.flushBatch()
+			w.FlushBatch()
 		}
 	}
 }

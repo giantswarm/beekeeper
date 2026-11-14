@@ -16,6 +16,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 func TestGoneAgentBoundaryAndProtections(t *testing.T) {
@@ -128,6 +129,8 @@ func TestGoneAgentReadsTranscriptBetweenTurns(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestGoneRetirementReleasesBoardAndPreservesHandover(t *testing.T) {
 	a, _ := stubApp(t)
 	runLive(t, a, nil)
@@ -148,7 +151,7 @@ func TestGoneRetirementReleasesBoardAndPreservesHandover(t *testing.T) {
 		t.Fatal("precondition: item unowned")
 	}
 	chores := planChores(st, nil, func(string) (*claude.Record, bool) { return nil, false }, func(state.Party) bool { return false }, 24*time.Hour, a.now, a.cfg)
-	removed, err := a.removeAgents(chores, watchParty)
+	removed, err := a.removeAgents(chores, watch.WatchParty)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,6 +168,8 @@ func TestGoneRetirementReleasesBoardAndPreservesHandover(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestGoneRetirementRechecksActivity(t *testing.T) {
 	for _, change := range []string{agentWakeName, "keep", "transcript"} {
 		t.Run(change, func(t *testing.T) {
@@ -192,7 +197,7 @@ func TestGoneRetirementRechecksActivity(t *testing.T) {
 					}
 				})
 			}
-			removed, err := a.removeAgents(chores, watchParty)
+			removed, err := a.removeAgents(chores, watch.WatchParty)
 			if err != nil || len(removed) != 0 {
 				t.Fatalf("removed=%+v err=%v", removed, err)
 			}
@@ -239,20 +244,22 @@ func TestGoneWakeAndResumeRestoreCapacity(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestGoneWatchReportsAgeTransition(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
-	w.cfg.Claude.ProjectsDir = t.TempDir()
-	w.cfg.Claude.DesktopDir = t.TempDir()
+	watchApp(w.Host).cfg.Claude.ProjectsDir = t.TempDir()
+	watchApp(w.Host).cfg.Claude.DesktopDir = t.TempDir()
 	ag := tasked("watch-gone-test")
-	ag.Registered = w.now.Add(-23 * time.Hour)
+	ag.Registered = watchApp(w.Host).now.Add(-23 * time.Hour)
 	st := &state.State{Agents: []state.Agent{ag}}
-	w.stoppedAgents(st, nil)
+	w.StoppedAgents(st, nil)
 	if strings.Contains(out.String(), strings.TrimSpace(goneActivityPrefix)) {
 		t.Fatal("recent worker shown gone")
 	}
-	w.now = w.now.Add(time.Hour)
-	w.stoppedAgents(st, nil)
-	w.stoppedAgents(st, nil)
+	watchApp(w.Host).now = watchApp(w.Host).now.Add(time.Hour)
+	w.StoppedAgents(st, nil)
+	w.StoppedAgents(st, nil)
 	if strings.Count(out.String(), strings.TrimSpace(goneActivityPrefix)) != 1 {
 		t.Fatalf("watch = %s", out)
 	}

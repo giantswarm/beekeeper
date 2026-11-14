@@ -20,6 +20,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/install"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 	"github.com/giantswarm/beekeeper/pkg/project"
 )
 
@@ -248,7 +249,7 @@ func noteFaults(st *state.State, findings []faultFinding, person string, now tim
 			n := st.Notes[i]
 			st.Notes = slices.Delete(st.Notes, i, i+1)
 			lines = append(lines, fmt.Sprintf("closed note #%d: fault %q is absent again", n.ID, f.fault.Name))
-			evs = append(evs, event(watchParty, noteDone, "#%d closed, its fault is absent again: %s", n.ID, n.Text))
+			evs = append(evs, event(watch.WatchParty, noteDone, "#%d closed, its fault is absent again: %s", n.ID, n.Text))
 		case !f.healthy && i < 0 && person != "":
 			d := noteDraft{
 				Question:  fmt.Sprintf("%s run `beekeeper doctor --fault %s` (its remedy: `%s`)?", prefix, f.fault.Name, f.fault.Remedy),
@@ -257,11 +258,11 @@ func noteFaults(st *state.State, findings []faultFinding, person string, now tim
 				Options:   []string{"run it: the remedy runs once, the doctor probes again"},
 			}
 			st.NextNote++
-			n := state.Note{ID: st.NextNote, For: person, Text: d.text(), By: watchParty, At: now.UTC(), Kind: noteDecision,
+			n := state.Note{ID: st.NextNote, For: person, Text: d.text(), By: watch.WatchParty, At: now.UTC(), Kind: noteDecision,
 				Default: "the doctor keeps probing and closes this note once the fault is absent"}
 			st.Notes = append(st.Notes, n)
 			lines = append(lines, fmt.Sprintf("note #%d for %s: fault %q", n.ID, person, f.fault.Name))
-			evs = append(evs, event(watchParty, "note.add", "#%d %s", n.ID, n.Text))
+			evs = append(evs, event(watch.WatchParty, "note.add", "#%d %s", n.ID, n.Text))
 		}
 	}
 	return lines, evs
@@ -656,7 +657,7 @@ func (a *app) owedArchives(sessions []*claude.Session, record func(host string) 
 // openRelayTo reports whether an open relay names p as the successor.
 func openRelayTo(st *state.State, p state.Party, now time.Time) bool {
 	for _, rl := range roles {
-		if rel := rl.get(st).Relay; rel.Open(now) && takesRelay(rel.To, p) {
+		if rel := rl.Get(st).Relay; rel.Open(now) && takesRelay(rel.To, p) {
 			return true
 		}
 	}
@@ -1096,67 +1097,67 @@ func (a *app) doctorDisk(dry bool) []string {
 // asked a steward to retitle before it asks again.
 const retitleAgain = 30 * time.Minute
 
-// doctor runs the doctor in the background, unless its last run still
+// watchDoctor runs the doctor in the background, unless its last run still
 // goes: a steward's turn takes up to a minute, and the poll goes on. Each
 // chore it did is one DOCTOR line; a fault it could not fix is one DOCTOR
 // FAULT line while it lasts.
-func (w *watcher) doctor(ctx context.Context) {
-	if !w.chores || !w.doctoring.CompareAndSwap(false, true) {
+func watchDoctor(w *watch.Watcher, ctx context.Context) {
+	if !w.Chores || !w.Doctoring.CompareAndSwap(false, true) {
 		return
 	}
-	d := *w.app // the poll moves w.now on
+	d := *watchApp(w.Host) // the poll moves w.now on
 	retry := func(host string) bool {
-		if d.now.Sub(w.retitled[host]) < retitleAgain {
+		if d.now.Sub(w.Retitled[host]) < retitleAgain {
 			return false
 		}
-		w.retitled[host] = d.now
+		w.Retitled[host] = d.now
 		return true
 	}
-	w.bg.Add(1)
+	w.Bg.Add(1)
 	go func() {
-		defer w.bg.Done()
-		defer w.doctoring.Store(false)
-		rep, err := d.doctor(ctx, doctorRun{by: watchParty, retry: retry, loopOwned: w.loopRunning()})
+		defer w.Bg.Done()
+		defer w.Doctoring.Store(false)
+		rep, err := d.doctor(ctx, doctorRun{by: watch.WatchParty, retry: retry, loopOwned: w.LoopRunning()})
 		if ctx.Err() != nil {
 			return
 		}
 		if err != nil {
-			w.emit("doctor", "DOCTOR: %v", err)
+			w.Emit("doctor", "DOCTOR: %v", err)
 			return
 		}
-		w.clear("doctor")
-		w.sayChores(rep)
+		w.Clear("doctor")
+		watchSayChores(w, rep)
 		for _, f := range rep.faults {
 			if f.fixed {
-				w.emitNow("doctor", "DOCTOR %s", f)
+				w.EmitNow("doctor", "DOCTOR %s", f)
 			}
-			w.check("doctor-fault "+f.fault.Name, !f.healthy, "DOCTOR FAULT %s", f)
+			w.Check("doctor-fault "+f.fault.Name, !f.healthy, "DOCTOR FAULT %s", f)
 		}
 		stale := map[string]bool{}
 		for _, s := range rep.stale {
 			key := fmt.Sprintf("doctor-stale %d", s.PID)
 			stale[key] = true
-			w.check(key, true, "DOCTOR %s", staleLine(s))
+			w.Check(key, true, "DOCTOR %s", staleLine(s))
 		}
-		w.clearMissing("doctor-stale ", stale)
-		w.check("doctor-stale-loop", rep.staleLoop != "", "DOCTOR %s", rep.staleLoop)
+		w.ClearMissing("doctor-stale ", stale)
+		w.Check("doctor-stale-loop", rep.staleLoop != "", "DOCTOR %s", rep.staleLoop)
 	}()
 }
 
-// sayChores says the doctor's chore lines, each once per watch (a stay that
+// watchSayChores says the doctor's chore lines, each once per watch (a stay that
 // repeats is not said again), and its notes.
-func (w *watcher) sayChores(rep doctorReport) {
-	if w.doctored == nil {
-		w.doctored = map[string]bool{}
+func watchSayChores(w *watch.Watcher, rep doctorReport) {
+	if w.Doctored == nil {
+		w.Doctored = map[string]bool{}
 	}
 	for _, l := range rep.chores {
-		if !w.doctored[l] {
-			w.doctored[l] = true
-			w.emitNow("doctor", "DOCTOR %s", l)
+		if !w.Doctored[l] {
+			w.Doctored[l] = true
+			w.EmitNow("doctor", "DOCTOR %s", l)
 		}
 	}
 	for _, l := range rep.notes {
-		w.emitNow("doctor", "DOCTOR %s", l)
+		w.EmitNow("doctor", "DOCTOR %s", l)
 	}
 }
 

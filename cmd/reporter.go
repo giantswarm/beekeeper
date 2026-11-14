@@ -3,11 +3,9 @@ package cmd
 import (
 	"cmp"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
-	"slices"
 	"strings"
 	"time"
 
@@ -16,33 +14,13 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
-	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/post"
-	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // reporterParty is who the standby watch's reporter events are by.
 var reporterParty = state.Party{Name: "beekeeper reporter"}
-
-// reportAction is what the watch does about the reporter at a poll.
-type reportAction int
-
-const (
-	reportNone reportAction = iota
-	// reportStart starts the reporter of the current slot.
-	reportStart
-	// reportFinal starts the final report before the pause.
-	reportFinal
-	// reportSkip says the current slot skipped: the last one's still runs.
-	reportSkip
-	// reportPosted ends a reporter that posted.
-	reportPosted
-	// reportUnposted ends a reporter whose turn ended without a post.
-	reportUnposted
-	// reportTimeout stops a reporter that ran past the timeout.
-	reportTimeout
-)
 
 // reportSlot is the start of the interval slot now is in: a multiple of
 // every since the zero time, on the hour for 1h.
@@ -56,92 +34,44 @@ func reportDue(r *state.Report, pause *state.ReportPause, rc config.Reporter, no
 	case !r.Running():
 		switch {
 		case pause.FinalDue(now):
-			return reportFinal
+			return watch.ReportFinal
 		case pause.Paused():
 		case r == nil || slot.After(r.Slot):
-			return reportStart
+			return watch.ReportStart
 		}
 	case posted:
-		return reportPosted
+		return watch.ReportPosted
 	case ended:
-		return reportUnposted
+		return watch.ReportUnposted
 	case now.Sub(r.Started) >= rc.Timeout.Duration:
-		return reportTimeout
+		return watch.ReportTimeout
 	case slot.After(r.Slot) && !r.Skipped.Equal(slot) && !pause.Paused():
-		return reportSkip
+		return watch.ReportSkip
 	}
-	return reportNone
+	return watch.ReportNone
 }
 
-// tendReporter runs the scheduled reporter, in the standby watch only: it
-// starts one per slot, skips a slot while the last one runs, and takes a
-// reporter that posted, ended or timed out off the roster and stops it.
-func (w *watcher) tendReporter(ctx context.Context, sessions []*claude.Session) {
-	rc := w.cfg.Reporter
-	if !w.standby || !rc.Enabled() {
-		return
-	}
-	st, err := w.store.Peek()
-	if err != nil {
-		return // pending says it
-	}
-	r := st.Report
-	var posted, ended bool
-	if r.Running() {
-		turnEnded := w.turnEnded
-		if turnEnded == nil {
-			turnEnded = unitEnded
-		}
-		posted = w.reportPosted(r.Session)
-		ended = !posted && turnEnded(ctx, r.Unit)
-	}
-	switch action := reportDue(r, st.ReportPause, rc, w.now, posted, ended); action {
-	case reportStart, reportFinal:
-		err := w.startReport(ctx, sessions, action)
-		w.check("reporter", err != nil, "REPORTER not started: %v", err)
-	case reportSkip:
-		w.skipReport()
-	case reportPosted:
-		w.recordReportThread(*r)
-		w.endReport(ctx, "posted", "posted its report")
-	case reportUnposted:
-		w.endReport(ctx, "unposted", "its turn ended without a post")
-	case reportTimeout:
-		w.endReport(ctx, "timeout", fmt.Sprintf("no post within %s, stopped", dur(rc.Timeout.Duration)))
-	}
-}
-
-// reportPosted reports whether the session's transcript holds the post.
-func (w *watcher) reportPosted(id string) bool {
-	path := transcriptOf(w.cfg, id)
-	if path == "" {
-		return false
-	}
-	ok, _ := claude.Called(path, guard.PostTool) // unreadable: not yet
-	return ok
-}
-
-// startReport starts the current slot's reporter: one headless turn in
+// watchStartReport starts the current slot's reporter: one headless turn in
 // bypassPermissions in a transient user unit, registered on the roster busy
 // with the brief's first line. It is not imported into the desktop: the
 // command-line turn has the connectors, and the person's window stays put.
-func (w *watcher) startReport(ctx context.Context, sessions []*claude.Session, action reportAction) error {
-	rc := w.cfg.Reporter
+func watchStartReport(w *watch.Watcher, ctx context.Context, sessions []*claude.Session, action reportAction) error {
+	rc := watchApp(w.Host).cfg.Reporter
 	brief, err := readBrief(rc.Brief)
 	if err != nil {
 		return err
 	}
-	zone, err := reportZone(rc.TZ, w.zone)
+	zone, err := reportZone(rc.TZ, watchApp(w.Host).zone)
 	if err != nil {
 		return err
 	}
-	slot := reportSlot(rc.Every.Duration, w.now)
-	final := action == reportFinal
+	slot := reportSlot(rc.Every.Duration, watchApp(w.Host).now)
+	final := action == watch.ReportFinal
 	// A scheduled report covers the interval before its slot; the final one
 	// the time since the last report started, up to now.
 	from, to := slot.Add(-rc.Every.Duration), slot
 	if final {
-		from, to = w.now.Add(-rc.Every.Duration), w.now
+		from, to = watchApp(w.Host).now.Add(-rc.Every.Duration), watchApp(w.Host).now
 	}
 	id := uuid.NewString()
 	p := state.Party{Session: id, Name: "Status report " + to.In(zone).Format("15:04")}
@@ -151,8 +81,8 @@ func (w *watcher) startReport(ctx context.Context, sessions []*claude.Session, a
 		return ok
 	}
 	started := false
-	err = w.store.Update(func(st *state.State) ([]state.Event, error) {
-		if reportDue(st.Report, st.ReportPause, rc, w.now, false, false) != action {
+	err = watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
+		if reportDue(st.Report, st.ReportPause, rc, watchApp(w.Host).now, false, false) != action {
 			return nil, nil // another watch started it
 		}
 		if st.Stop != nil {
@@ -162,14 +92,14 @@ func (w *watcher) startReport(ctx context.Context, sessions []*claude.Session, a
 			if st.Report != nil {
 				from = st.Report.Started
 			}
-			st.ReportPause.Final, st.ReportPause.Since = time.Time{}, w.now.UTC()
+			st.ReportPause.Final, st.ReportPause.Since = time.Time{}, watchApp(w.Host).now.UTC()
 		}
-		s := state.Start{Party: p, Mode: state.ModeBypass, Dir: rc.Dir, By: reporterParty, At: w.now.UTC()}
-		reg, err := w.recordStart(st, s, briefTask(brief), "", live)
+		s := state.Start{Party: p, Mode: state.ModeBypass, Dir: rc.Dir, By: reporterParty, At: watchApp(w.Host).now.UTC()}
+		reg, err := watchApp(w.Host).recordStart(st, s, briefTask(brief), "", live)
 		if err != nil {
 			return nil, err
 		}
-		st.Report = &state.Report{Party: p, Unit: unit, Slot: slot, Started: w.now.UTC()}
+		st.Report = &state.Report{Party: p, Unit: unit, Slot: slot, Started: watchApp(w.Host).now.UTC()}
 		started = true
 		evs := []state.Event{event(reporterParty, "reporter.start", "%s: session %s for %s, busy with %q", p.Name, id, rc.Person, reg.task)}
 		if final {
@@ -180,36 +110,16 @@ func (w *watcher) startReport(ctx context.Context, sessions []*claude.Session, a
 	if err != nil || !started {
 		return err
 	}
-	run := w.runReport
+	run := w.RunReport
 	if run == nil {
-		run = w.launchReport
+		run = w.LaunchReport
 	}
 	if err := run(unit, id, p.Name, reportPrompt(rc, from, to, zone, final, brief)); err != nil {
-		w.endReport(ctx, "failed", err.Error())
+		w.EndReport(ctx, "failed", err.Error())
 		return err
 	}
-	w.emitNow("reporter", "REPORTER %s started: session %s (journalctl --user -u %s)", p.Name, id, unit)
+	w.EmitNow("reporter", "REPORTER %s started: session %s (journalctl --user -u %s)", p.Name, id, unit)
 	return nil
-}
-
-// launchReport runs the reporter's turn in its transient user unit, with no
-// ExecStopPost: nothing reopens it in the desktop. Its settings add the
-// report check as a PreToolUse hook on the post, for this session only.
-func (w *watcher) launchReport(unit, id, name, prompt string) error {
-	if err := w.requireClaudeLogin(); err != nil {
-		return err
-	}
-
-	bin, err := proc.LookPath("claude")
-	if err != nil {
-		return err
-	}
-	self, err := os.Executable()
-	if err != nil {
-		return err
-	}
-	return launch(unit, w.cfg.Reporter.Dir, w.explicitConfig(), nil,
-		agentArgv(bin, id, name, w.cfg.Reporter.Model, prompt, "--settings", reportSettings(self)))
 }
 
 // hookTypeCommand is a settings hook that runs a command; hooksKey holds a
@@ -218,16 +128,6 @@ const (
 	hookTypeCommand = "command"
 	hooksKey        = "hooks"
 )
-
-// reportSettings are the reporter session's added settings: the PreToolUse
-// hook that denies a post failing the report check.
-func reportSettings(self string) string {
-	hook := map[string]any{"type": hookTypeCommand, "command": guard.ShellQuote(self) + " hook reportcheck", "timeout": 10}
-	raw, _ := json.Marshal(map[string]any{hooksKey: map[string]any{
-		"PreToolUse": []any{map[string]any{"matcher": ".*" + guard.PostTool, hooksKey: []any{hook}}},
-	}})
-	return string(raw)
-}
 
 // reportPrompt is the reporter's first prompt: who the report is for, the
 // beekeeper report command that renders it for the interval, in the
@@ -248,83 +148,6 @@ func reportPrompt(rc config.Reporter, from, to time.Time, zone *time.Location, f
 		"a beekeeper note is \"note <n>\". A post that fails the check is refused with what to fix. Once the post has gone out, "+
 		"end your turn: beekeeper sees the post, takes you off the roster and stops this session.\n\n%s",
 		last, span, rc.Person, render, span, zone, to.In(zone).Format("MST"), brief)
-}
-
-// skipReport records, once per slot, that the slot's reporter was not
-// started because the last one still runs.
-func (w *watcher) skipReport() {
-	var line string
-	_ = w.store.Update(func(st *state.State) ([]state.Event, error) {
-		r := st.Report
-		slot := reportSlot(w.cfg.Reporter.Every.Duration, w.now)
-		if !r.Running() || r.Skipped.Equal(slot) {
-			return nil, nil
-		}
-		r.Skipped = slot
-		line = fmt.Sprintf("%s still runs (since %s): the %s report is skipped", r.Name, clock(w.now, r.Started), slot.Local().Format("15:04"))
-		return []state.Event{event(reporterParty, "reporter.skip", "%s", line)}, nil
-	})
-	if line != "" {
-		w.emitNow("reporter", "REPORTER %s", line)
-	}
-}
-
-// endReport ends the running reporter with outcome: it takes it off the
-// roster, then stops what still runs of its turn by PID.
-func (w *watcher) endReport(ctx context.Context, outcome, detail string) {
-	var r state.Report
-	err := w.store.Update(func(st *state.State) ([]state.Event, error) {
-		if !st.Report.Running() {
-			return nil, nil
-		}
-		st.Report.Ended, st.Report.Outcome = w.now.UTC(), outcome
-		r = *st.Report
-		st.Agents = slices.DeleteFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(r.Party) })
-		return []state.Event{event(reporterParty, "reporter."+outcome, "%s: %s", r.Name, detail)}, nil
-	})
-	if err != nil || r.Session == "" {
-		return
-	}
-	n, err := stopTurn(ctx, r.Session)
-	line := fmt.Sprintf("REPORTER %s %s: %s, off the roster", r.Name, outcome, detail)
-	switch {
-	case err != nil:
-		line += fmt.Sprintf("; stopping it: %v", err)
-	case n > 0:
-		line += fmt.Sprintf(", %d processes stopped", n)
-	}
-	w.emitNow("reporter", "%s", line)
-}
-
-// stopTurn stops the turn of session id and every process under it, by
-// PID; 0 when none runs.
-func stopTurn(ctx context.Context, id string) (int, error) {
-	t, err := plat.Machine.Processes()
-	if err != nil {
-		return 0, err
-	}
-	total := 0
-	for _, pid := range turnPIDs(t, id) {
-		n, err := endSession(ctx, &claude.Session{PID: pid})
-		if err != nil {
-			return total, err
-		}
-		total += n
-	}
-	return total, nil
-}
-
-// turnPIDs are the claude processes that run session id: its first turn
-// (--session-id) and any CLI resuming it.
-func turnPIDs(t *proc.Table, id string) []int {
-	var out []int
-	for _, p := range t.ByPID {
-		if startsSession(p, id) || p.Comm == claudeComm && resumes(p.Args, id) {
-			out = append(out, p.PID)
-		}
-	}
-	slices.Sort(out)
-	return out
 }
 
 func (a *app) reporterCmd() *cobra.Command {

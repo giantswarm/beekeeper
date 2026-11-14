@@ -494,10 +494,13 @@ func TestShowBrieflyHeldByFocus(t *testing.T) {
 // desktop warms the CLI of the session its window shows, which the watch
 // stops as revived, so a window sent back there would revive it on every
 // start, reopen and wake (the doctor's archive asks among them).
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestShowBrieflyLeavesASupersededSession(t *testing.T) {
 	taken := time.Now().Add(-time.Hour)
-	guide38 := state.Party{Session: "guide-38", HostSession: "local_guide-38", Name: guideRole.runName(38)}
-	guide39 := state.Party{Session: "guide-39", HostSession: "local_guide-39", Name: guideRole.runName(39)}
+	guide38 := state.Party{Session: "guide-38", HostSession: "local_guide-38", Name: guideRole.RunName(38)}
+	guide39 := state.Party{Session: "guide-39", HostSession: "local_guide-39", Name: guideRole.RunName(39)}
 	handedOff := state.Party{Session: "ws-old", HostSession: "local_ws-old", Name: "WS 1 workspaces"}
 	followUp := state.Party{Session: "ws-new", HostSession: "local_ws-new", Name: "WS 1 workspaces"}
 	person := state.Party{Session: "own-1", HostSession: "local_own-1", Name: "a session of its own"}
@@ -519,7 +522,7 @@ func TestShowBrieflyLeavesASupersededSession(t *testing.T) {
 					{Party: handedOff, At: taken.Add(-time.Hour)}, {Party: followUp, At: taken},
 				}
 				st.Agents = []state.Agent{{Party: followUp, Task: "workspaces"}}
-				guideRole.set(st, state.Role{
+				guideRole.Set(st, state.Role{
 					Holder:   &state.Supervisor{Party: guide39, Since: taken},
 					Relieved: []state.Relief{{Party: guide38, By: guide39, At: taken.Add(-time.Minute), Taken: taken}},
 				})

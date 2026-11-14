@@ -19,7 +19,7 @@ func (a *app) relayCmd(rl role, long string) *cobra.Command {
 	var cancel bool
 	c := &cobra.Command{
 		Use:   "relay [--cancel]",
-		Short: "Start the next " + rl.title + " run as a fresh session: its `" + rl.name + " start` takes the role",
+		Short: "Start the next " + rl.Title + " run as a fresh session: its `" + rl.Name + " start` takes the role",
 		Long:  long,
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -38,11 +38,11 @@ func (a *app) relayCmd(rl role, long string) *cobra.Command {
 			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 				var evs []state.Event
 				var err error
-				msg, evs, err = rl.cancelRelay(st, me, a.now)
+				msg, evs, err = rl.CancelRelay(st, me, a.now)
 				if err != nil {
 					return nil, err
 				}
-				_, cli := rl.observeCLI(st, sessions, a.now)
+				_, cli := rl.ObserveCLI(st, sessions, a.now)
 				return append(evs, cli...), nil
 			})
 			if err != nil {
@@ -52,7 +52,7 @@ func (a *app) relayCmd(rl role, long string) *cobra.Command {
 			return err
 		},
 	}
-	c.Flags().BoolVar(&cancel, "cancel", false, "withdraw the open relay: you keep "+rl.ing)
+	c.Flags().BoolVar(&cancel, "cancel", false, "withdraw the open relay: you keep "+rl.Ing)
 	return c
 }
 
@@ -62,7 +62,7 @@ func (a *app) relayToSuccessor(ctx context.Context, rl role, me state.Party) err
 	if err != nil {
 		return err
 	}
-	if err := rl.mustHold(rl.get(st), me); err != nil {
+	if err := rl.MustHold(rl.Get(st), me); err != nil {
 		return err
 	}
 	to, msg, err := a.startSuccessor(ctx, rl, me, me, "")
@@ -72,10 +72,10 @@ func (a *app) relayToSuccessor(ctx context.Context, rl role, me state.Party) err
 	if to.HostSession == "" {
 		// a background successor's one session takes the role and goes on
 		// with it: no desktop turn to hand it
-		_, err := fmt.Fprintf(a.out, "started %q (background session %s): it runs `beekeeper %s start`, then `%s`, in its own turn; send it nothing\n%s\n", to.Name, to.Session, rl.name, rl.handover, msg)
+		_, err := fmt.Fprintf(a.out, "started %q (background session %s): it runs `beekeeper %s start`, then `%s`, in its own turn; send it nothing\n%s\n", to.Name, to.Session, rl.Name, rl.Handover, msg)
 		return err
 	}
-	if _, err := fmt.Fprintf(a.out, "started %q (session %s, desktop %s): its first turn runs `beekeeper %s start`\n%s\n", to.Name, to.Session, to.HostSession, rl.name, msg); err != nil {
+	if _, err := fmt.Fprintf(a.out, "started %q (session %s, desktop %s): its first turn runs `beekeeper %s start`\n%s\n", to.Name, to.Session, to.HostSession, rl.Name, msg); err != nil {
 		return err
 	}
 	return a.handTurn(ctx, rl, me, to)
@@ -98,7 +98,7 @@ func (a *app) handTurn(ctx context.Context, rl role, me, to state.Party) error {
 	if err := a.makeRoom(ctx, to.HostSession, me.HostSession); err != nil {
 		return fmt.Errorf("%q gets no desktop turn now: %w", to.Name, err)
 	}
-	turn := rl.resumeMessage("the desktop runs your CLI now, started by this message: this desktop turn keeps " + rl.duty)
+	turn := rl.ResumeMessage("the desktop runs your CLI now, started by this message: this desktop turn keeps " + rl.Duty)
 	_, err := fmt.Fprintf(a.out, "%q's first turn ended. Give it its desktop turn now: call SendMessage once with to %q and the message %q. "+
 		"The desktop starts its CLI for it (room is made under its cap); never resume it headless.\n", to.Name, to.HostSession, turn)
 	return err
@@ -130,7 +130,7 @@ func (a *app) runStart(ctx context.Context, rl role, takeOver bool) error {
 		return err
 	}
 	if me.Session == "" {
-		return refused("the %s is a Claude Code session: run this inside one, without --as", rl.name)
+		return refused("the %s is a Claude Code session: run this inside one, without --as", rl.Name)
 	}
 	sessions, _, err := a.sessions()
 	if err != nil {
@@ -143,22 +143,22 @@ func (a *app) runStart(ctx context.Context, rl role, takeOver bool) error {
 	var run int
 	var waiting []string
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
-		if err := rl.mayTake(st, me); err != nil {
+		if err := rl.MayTake(st, me); err != nil {
 			return nil, err
 		}
 		// The recorded holder's CLI is read as the watch reads it: gone
 		// since it was first seen gone, never since now.
-		_, before := rl.observeCLI(st, sessions, a.now)
+		_, before := rl.ObserveCLI(st, sessions, a.now)
 		// A holder restarting its CLI still holds the role.
-		sv := readHolder(rl.get(st), sessions, a.now, rl.cfg(a.cfg).RestartGrace.Duration)
+		sv := readHolder(rl.Get(st), sessions, a.now, rl.Cfg(a.cfg).RestartGrace.Duration)
 		var evs []state.Event
-		prev := rl.get(st).Holder
-		msg, evs, err = rl.start(st, me, sv.live || sv.restarting(), takeOver, a.now)
+		prev := rl.Get(st).Holder
+		msg, evs, err = rl.Take(st, me, sv.Live || sv.Restarting(), takeOver, a.now)
 		if err != nil {
 			return nil, err
 		}
 		if prev != nil && !prev.Is(me) {
-			handed, err := handClaims(st, lease.Dir(a.cfg.LeaseDir), prev.Party, rl.get(st).Holder.Party)
+			handed, err := handClaims(st, lease.Dir(a.cfg.LeaseDir), prev.Party, rl.Get(st).Holder.Party)
 			if err != nil {
 				return nil, err
 			}
@@ -169,12 +169,12 @@ func (a *app) runStart(ctx context.Context, rl role, takeOver bool) error {
 		evs = append(before, evs...)
 		// The start titles me with the run's name: never one another live
 		// session carries.
-		if err := titleTaken(sessions, rl.runName(rl.get(st).Run), me); err != nil {
+		if err := titleTaken(sessions, rl.RunName(rl.Get(st).Run), me); err != nil {
 			return nil, err
 		}
-		run = rl.get(st).Run
+		run = rl.Get(st).Run
 		waiting = takeRoleLines(st, rl)
-		_, cli := rl.observeCLI(st, sessions, a.now)
+		_, cli := rl.ObserveCLI(st, sessions, a.now)
 		return append(evs, cli...), nil
 	})
 	if err != nil {
@@ -184,11 +184,11 @@ func (a *app) runStart(ctx context.Context, rl role, takeOver bool) error {
 		return err
 	}
 	for _, line := range waiting {
-		if _, err := fmt.Fprintf(a.out, "waiting for the %s: %s\n", rl.name, line); err != nil {
+		if _, err := fmt.Fprintf(a.out, "waiting for the %s: %s\n", rl.Name, line); err != nil {
 			return err
 		}
 	}
-	if rl.name == guideRole.name {
+	if rl.Name == guideRole.Name {
 		st, _ := a.store.Read()
 		for _, line := range a.guideSubscriptionLines(ctx, st, sessions) {
 			if _, err := fmt.Fprintf(a.out, "subscription: %s\n", line); err != nil {
@@ -196,7 +196,7 @@ func (a *app) runStart(ctx context.Context, rl role, takeOver bool) error {
 			}
 		}
 	}
-	if line := a.titleRun(ctx, me, rl.runName(run)); line != "" {
+	if line := a.titleRun(ctx, me, rl.RunName(run)); line != "" {
 		_, err := fmt.Fprintln(a.out, line)
 		return err
 	}
@@ -240,21 +240,21 @@ func (a *app) runStop(rl role, force bool) error {
 	}
 	var msg string
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
-		r := rl.get(st)
+		r := rl.Get(st)
 		if r.Holder == nil {
-			msg = fmt.Sprintf("no %s was recorded", rl.name)
+			msg = fmt.Sprintf("no %s was recorded", rl.Name)
 			return nil, nil
 		}
 		if !r.Holder.Is(me) && !force {
-			return nil, refused("%q %s, not you: --force ends another session's watch", r.Holder.Name, rl.verb)
+			return nil, refused("%q %s, not you: --force ends another session's watch", r.Holder.Name, rl.Verb)
 		}
-		msg = fmt.Sprintf("%q no longer %s", r.Holder.Name, rl.verb)
+		msg = fmt.Sprintf("%q no longer %s", r.Holder.Name, rl.Verb)
 		if r.Relay.Open(a.now) {
 			msg += fmt.Sprintf("; the relay to %q is cancelled", r.Relay.To.Name)
 		}
 		r.Holder, r.Relay, r.CLI = nil, nil, nil
-		rl.set(st, r)
-		return []state.Event{event(me, rl.name+".stop", "%s", msg)}, nil
+		rl.Set(st, r)
+		return []state.Event{event(me, rl.Name+".stop", "%s", msg)}, nil
 	})
 	if err != nil {
 		return err
@@ -277,20 +277,20 @@ func (a *app) roleStatus(rl role) error {
 	if err != nil {
 		return err
 	}
-	r := rl.get(st)
+	r := rl.Get(st)
 	if goneUnrecorded(r, sessions) {
 		// The grace runs from the first read that saw the CLI gone: with no
 		// watch recording it, every read would start it anew.
 		if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-			_, evs := rl.observeCLI(st, sessions, a.now)
-			r = rl.get(st)
+			_, evs := rl.ObserveCLI(st, sessions, a.now)
+			r = rl.Get(st)
 			return evs, nil
 		}); err != nil {
 			return err
 		}
 	}
 	renameHolder(r.Holder, sessions)
-	sv := readHolder(r, sessions, a.now, rl.cfg(a.cfg).RestartGrace.Duration)
+	sv := readHolder(r, sessions, a.now, rl.Cfg(a.cfg).RestartGrace.Duration)
 	v := a.viewRole(rl, r, sessions, sv)
 	if v == nil {
 		v = &roleView{}
@@ -304,40 +304,40 @@ func (a *app) roleStatus(rl role) error {
 			now := ""
 			switch {
 			case r.Holder == nil:
-				now = fmt.Sprintf("; no %s is recorded now", rl.name)
+				now = fmt.Sprintf("; no %s is recorded now", rl.Name)
 			case !r.Holder.Is(rf.By):
-				now = fmt.Sprintf("; %q %s now", r.Holder.Name, rl.verb)
+				now = fmt.Sprintf("; %q %s now", r.Holder.Name, rl.Verb)
 			}
 			return &exitError{code: ExitRelieved, msg: fmt.Sprintf("you have been relieved: %q took the role at %s (relayed at %s)%s",
 				rf.By.Name, clock(a.now, rf.Taken), clock(a.now, rf.At), now)}
 		}
 	}
 	if r.Holder == nil {
-		return refused("no %s runs", rl.name)
+		return refused("no %s runs", rl.Name)
 	}
 	if a.json {
 		_ = a.printJSON(v)
 	}
-	if sv.down() {
+	if sv.Down() {
 		return refused("no %s runs: %q (since %s) is gone since %s; %s",
-			rl.name, r.Holder.Name, clock(a.now, r.Holder.Since), clock(a.now, sv.gone), rl.gone)
+			rl.Name, r.Holder.Name, clock(a.now, r.Holder.Since), clock(a.now, sv.Gone), rl.Gone)
 	}
 	if a.json {
 		return nil
 	}
 	restart := ""
-	if sv.restarting() {
-		restart = fmt.Sprintf("; its session runs no CLI since %s: it keeps the role if its CLI is back by %s, else it is gone", stamp(sv.gone), stamp(sv.until))
+	if sv.Restarting() {
+		restart = fmt.Sprintf("; its session runs no CLI since %s: it keeps the role if its CLI is back by %s, else it is gone", stamp(sv.Gone), stamp(sv.Until))
 	}
 	relay := ""
 	if r.Relay.Open(a.now) {
 		relay = fmt.Sprintf(", relaying to %q until %s", r.Relay.To.Name, clock(a.now, r.Relay.Expires))
 	}
 	as := ""
-	if run := rl.runName(r.Run); r.Run > 0 && run != r.Holder.Name {
+	if run := rl.RunName(r.Run); r.Run > 0 && run != r.Holder.Name {
 		as = " as " + run
 	}
-	_, err = fmt.Fprintf(a.out, "%q %s%s since %s%s%s%s\n", r.Holder.Name, rl.verb, as, clock(a.now, r.Holder.Since), v.contextText(), relay, restart)
+	_, err = fmt.Fprintf(a.out, "%q %s%s since %s%s%s%s\n", r.Holder.Name, rl.Verb, as, clock(a.now, r.Holder.Since), v.contextText(), relay, restart)
 	return err
 }
 

@@ -33,11 +33,3 @@ func gttLine(gpus []machine.GPU, models []machine.HostModel) string {
 	}
 	return line + "; the model servers hold " + strings.Join(ms, ", ")
 }
-
-// because appends a named cause to a memory line.
-func because(cause string) string {
-	if cause == "" {
-		return ""
-	}
-	return "; cause: " + cause
-}

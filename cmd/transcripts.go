@@ -654,7 +654,7 @@ func (a *app) readTranscriptForCaller(ctx context.Context, st *state.State, call
 		// Check whether the target exists in all transcripts but was filtered out by access rules.
 		if blocked, err := transcripts.Resolve(all, req.Target); err == nil {
 			scopeFlag := fmt.Sprintf("--session %s", blocked.DisplayName())
-			if blocked.Repo != "" && blocked.Role != guideRole.name {
+			if blocked.Repo != "" && blocked.Role != guideRole.Name {
 				scopeFlag = fmt.Sprintf("--repo %s", blocked.Repo)
 			}
 			return remoteTranscriptReadResp{}, refused("transcript %q (%s) is outside your default repository access (%s); request access with `beekeeper transcripts request %s --reason <why>`",
@@ -732,13 +732,13 @@ func (a *app) resolveTranscriptCaller(st *state.State) (transcripts.Caller, stat
 	envP := envParty(os.Getenv)
 	if a.as != "" && envP.Session == "" && envP.HostSession == "" {
 		me := state.Party{Name: a.as, Person: a.cfg.Identity.Person, Team: a.cfg.Identity.Team, Host: a.cfg.Identity.Host}
-		if strings.EqualFold(a.as, guideRole.name) || (a.cfg.Identity.Person != "" && strings.EqualFold(a.as, a.cfg.Identity.Person)) {
-			return transcripts.Caller{Party: me, RosterName: a.as, Role: guideRole.name, IsGuide: true}, me
+		if strings.EqualFold(a.as, guideRole.Name) || (a.cfg.Identity.Person != "" && strings.EqualFold(a.as, a.cfg.Identity.Person)) {
+			return transcripts.Caller{Party: me, RosterName: a.as, Role: guideRole.Name, IsGuide: true}, me
 		}
 		if idx, err := findAgent(st, a.as); err == nil {
 			ag := st.Agents[idx]
 			if h := st.GuideRole().Holder; h != nil && h.Is(ag.Party) {
-				return transcripts.Caller{Party: ag.Party, RosterName: ag.Name, Role: guideRole.name, IsGuide: true}, ag.Party
+				return transcripts.Caller{Party: ag.Party, RosterName: ag.Name, Role: guideRole.Name, IsGuide: true}, ag.Party
 			}
 			return a.workerCallerForParty(st, ag.Party, ag.Name), ag.Party
 		}
@@ -747,19 +747,19 @@ func (a *app) resolveTranscriptCaller(st *state.State) (transcripts.Caller, stat
 				return a.workerCallerForParty(st, s.Party, s.Name), s.Party
 			}
 		}
-		return transcripts.Caller{Party: me, RosterName: a.as, Role: guideRole.name, IsGuide: true}, me
+		return transcripts.Caller{Party: me, RosterName: a.as, Role: guideRole.Name, IsGuide: true}, me
 	}
 	if envP.Session != "" || envP.HostSession != "" {
 		me, _ := a.caller()
 		if h := st.GuideRole().Holder; h != nil && h.Is(envP) {
-			return transcripts.Caller{Party: me, RosterName: cmp.Or(h.Name, guideRole.name), Role: guideRole.name, IsGuide: true}, me
+			return transcripts.Caller{Party: me, RosterName: cmp.Or(h.Name, guideRole.Name), Role: guideRole.Name, IsGuide: true}, me
 		}
 		// An unregistered or retired harness session is still a worker.
 		// Only the current guide holder above has unrestricted access.
 		return a.workerCallerForParty(st, envP, me.Name), me
 	}
 	me := state.Party{Name: cmp.Or(a.cfg.Identity.Person, "operator"), Person: a.cfg.Identity.Person, Team: a.cfg.Identity.Team, Host: a.cfg.Identity.Host}
-	return transcripts.Caller{Party: me, RosterName: me.Name, Role: guideRole.name, IsGuide: true}, me
+	return transcripts.Caller{Party: me, RosterName: me.Name, Role: guideRole.Name, IsGuide: true}, me
 }
 
 func (a *app) workerCallerForParty(st *state.State, p state.Party, fallbackName string) transcripts.Caller {
@@ -1004,14 +1004,14 @@ func (a *app) enrichMetaFromState(st *state.State, meta *transcripts.Meta, p sta
 	}
 
 	if h := st.GuideRole().Holder; h != nil && h.Is(p) {
-		meta.Role = guideRole.name
-		meta.RosterName = cmp.Or(h.Name, guideRole.name)
+		meta.Role = guideRole.Name
+		meta.RosterName = cmp.Or(h.Name, guideRole.Name)
 	}
 	for _, rel := range st.GuideRole().Relieved {
 		if rel.Party.Is(p) {
-			meta.Role = guideRole.name
+			meta.Role = guideRole.Name
 			if meta.RosterName == "" {
-				meta.RosterName = cmp.Or(rel.Party.Name, guideRole.name)
+				meta.RosterName = cmp.Or(rel.Party.Name, guideRole.Name)
 			}
 		}
 	}

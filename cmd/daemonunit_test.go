@@ -14,6 +14,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 	"github.com/giantswarm/beekeeper/pkg/project"
 )
 
@@ -140,6 +141,9 @@ func TestDaemonsInUnits(t *testing.T) {
 // own and logs it; a dry run only says it; a process that left the unit
 // meanwhile stays where it is, a daemon that left it is not moved; a move
 // that fails says the daemon stays, with why.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestDoctorMovesADaemonOutOfItsUnit(t *testing.T) {
 	dir := t.TempDir()
 	cfg, err := config.Load(filepath.Join(dir, "missing.yaml"))
@@ -166,12 +170,12 @@ func TestDoctorMovesADaemonOutOfItsUnit(t *testing.T) {
 		}
 	}}
 	useLauncher(t, l)
-	dry := a.daemonsOutOfUnits(found, cgroupOf, true, watchParty, relayNow)
+	dry := a.daemonsOutOfUnits(found, cgroupOf, true, watch.WatchParty, relayNow)
 	if len(dry) != 1 || !strings.HasPrefix(dry[0], "would move the claude daemon (pid 10) and the 2 processes under it in beekeeper-notify.service (MemoryMax 256M)") || len(l.moved) != 0 {
 		t.Fatalf("dry run = %q, moved %v; want a would-move line and no move", dry, l.moved)
 	}
 
-	lines := a.daemonsOutOfUnits(found, cgroupOf, false, watchParty, relayNow)
+	lines := a.daemonsOutOfUnits(found, cgroupOf, false, watch.WatchParty, relayNow)
 	if len(l.moved) != 1 || !slices.Equal(l.moved[0], []int{10, 11, 12}) || !strings.HasPrefix(l.scopes[0], daemonScope) || !strings.HasSuffix(l.scopes[0], "-10-beekeeper-notify.service-0") {
 		t.Fatalf("moved %v into %q, want 10, 11 and 12 into a %s*-10 scope", l.moved, l.scopes, daemonScope)
 	}
@@ -184,18 +188,18 @@ func TestDoctorMovesADaemonOutOfItsUnit(t *testing.T) {
 
 	cgroups[10], cgroups[11] = daemonNotifyCgroup, daemonNotifyCgroup
 	cgroups[12] = daemonOwnScope // ended, its PID reused elsewhere
-	a.daemonsOutOfUnits(found, cgroupOf, false, watchParty, relayNow)
+	a.daemonsOutOfUnits(found, cgroupOf, false, watch.WatchParty, relayNow)
 	if len(l.moved) != 2 || !slices.Equal(l.moved[1], []int{10, 11}) {
 		t.Errorf("moved %v, want 10 and 11 only: 12 left the unit", l.moved)
 	}
 	delete(cgroups, 10) // the daemon ended
-	if gone := a.daemonsOutOfUnits(found, cgroupOf, false, watchParty, relayNow); len(gone) != 0 || len(l.moved) != 2 {
+	if gone := a.daemonsOutOfUnits(found, cgroupOf, false, watch.WatchParty, relayNow); len(gone) != 0 || len(l.moved) != 2 {
 		t.Errorf("a daemon that left the unit: lines %q, moved %v; want neither", gone, l.moved)
 	}
 
 	cgroups[10] = daemonNotifyCgroup
 	l.err = errors.New("access denied")
-	failed := a.daemonsOutOfUnits(found, cgroupOf, false, watchParty, relayNow)
+	failed := a.daemonsOutOfUnits(found, cgroupOf, false, watch.WatchParty, relayNow)
 	if len(failed) != 1 || !strings.Contains(failed[0], "stay there: access denied") {
 		t.Errorf("failed move = %q, want the daemon staying with why", failed)
 	}
@@ -209,6 +213,8 @@ type daemonSnapshotMachine struct {
 
 func (m daemonSnapshotMachine) Processes() (*proc.Table, error) { return m.snapshot() }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestDoctorRecoversChildrenBornDuringMigration(t *testing.T) {
 	for _, failRecovery := range []bool{false, true} {
 		t.Run(map[bool]string{false: "same tick", true: "subsequent tick"}[failRecovery], func(t *testing.T) {
@@ -244,7 +250,7 @@ func TestDoctorRecoversChildrenBornDuringMigration(t *testing.T) {
 				}
 			}
 			useLauncher(t, l)
-			lines := a.daemonsOutOfUnits(found, cg, false, watchParty, relayNow)
+			lines := a.daemonsOutOfUnits(found, cg, false, watch.WatchParty, relayNow)
 			if len(l.moved) != 2 || !slices.Equal(l.moved[0], []int{10, 11, 12, 14}) || !slices.Equal(l.moved[1], []int{15}) {
 				t.Fatalf("moves = %v, want late children discovered and recovered", l.moved)
 			}
@@ -264,7 +270,7 @@ func TestDoctorRecoversChildrenBornDuringMigration(t *testing.T) {
 				if len(found) != 1 || !slices.Equal(found[0].pids, []int{15}) {
 					t.Fatalf("next tick = %+v", found)
 				}
-				lines = a.daemonsOutOfUnits(found, cg, false, watchParty, relayNow.Add(time.Second))
+				lines = a.daemonsOutOfUnits(found, cg, false, watch.WatchParty, relayNow.Add(time.Second))
 			}
 			if len(lines) != 1 || !strings.HasPrefix(lines[0], "moved ") || len(daemonsInUnits(table, cg, func(string) []string { return nil })) != 0 {
 				t.Fatalf("migration incomplete: %v, cgroups %v", lines, cgroups)
@@ -274,6 +280,9 @@ func TestDoctorRecoversChildrenBornDuringMigration(t *testing.T) {
 }
 
 // Incomplete or unreadable verification never records a successful migration.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestDoctorRequiresVerifiedDaemonMigration(t *testing.T) {
 	for _, unreadable := range []bool{false, true} {
 		t.Run(map[bool]string{false: "bounded retries", true: "unreadable snapshot"}[unreadable], func(t *testing.T) {
@@ -291,7 +300,7 @@ func TestDoctorRequiresVerifiedDaemonMigration(t *testing.T) {
 			cg := func(pid int) string { return cgroups[pid] }
 			found := daemonsInUnits(table, cg, func(string) []string { return nil })
 			a := &app{} // no store: only verified successes may record an event
-			lines := a.daemonsOutOfUnits(found, cg, false, watchParty, relayNow)
+			lines := a.daemonsOutOfUnits(found, cg, false, watch.WatchParty, relayNow)
 			want, moves := "will retry next tick", 3
 			if unreadable {
 				want, moves = "process table unreadable", 0
@@ -303,6 +312,8 @@ func TestDoctorRequiresVerifiedDaemonMigration(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestDaemonMigrationIncludesForeignServicesAndScopes(t *testing.T) {
 	for _, unit := range []string{"claude-bg-daemon.service", "other-agent.service", "app-desktop.scope", "session-42.scope", "claude-daemon-old.service"} {
 		t.Run(unit, func(t *testing.T) {
@@ -330,7 +341,7 @@ func TestDaemonMigrationIncludesForeignServicesAndScopes(t *testing.T) {
 			}}
 			useLauncher(t, l)
 			a := &app{store: store}
-			lines := a.daemonsOutOfUnits(found, cg, false, watchParty, relayNow)
+			lines := a.daemonsOutOfUnits(found, cg, false, watch.WatchParty, relayNow)
 			if len(lines) != 1 || !strings.HasPrefix(lines[0], "moved ") || len(l.moved) != 1 {
 				t.Fatalf("migration: %v, moves %v", lines, l.moved)
 			}

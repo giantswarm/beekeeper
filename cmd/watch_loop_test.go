@@ -17,6 +17,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // The lane and repository of the merge a loop test's watch settles.
@@ -43,7 +44,7 @@ func (s *syncBuffer) String() string {
 // loopWatcher is a standby watch polling every interval, with a merge
 // settling on a lane whose HelmReleases readHRs reads, none when nil (never
 // kubectl): extra is appended to the watch configuration.
-func loopWatcher(t *testing.T, interval, extra string, readHRs func(context.Context, config.Lane) ([]merge.HelmRelease, error)) (*watcher, *syncBuffer) {
+func loopWatcher(t *testing.T, interval, extra string, readHRs func(context.Context, config.Lane) ([]merge.HelmRelease, error)) (*watch.Watcher, *syncBuffer) {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
@@ -76,29 +77,29 @@ func loopWatcher(t *testing.T, interval, extra string, readHRs func(context.Cont
 	if readHRs == nil {
 		readHRs = func(context.Context, config.Lane) ([]merge.HelmRelease, error) { return nil, nil }
 	}
-	w.readHRs = readHRs
-	w.stand.send = func(context.Context, string, string) error {
+	w.ReadHRs = readHRs
+	w.Stand.Send = func(context.Context, string, string) error {
 		t.Error("the test watch sent a message")
 		return nil
 	}
-	w.stand.succeed = func(context.Context, role, state.Party) (state.Party, error) {
+	w.Stand.Succeed = func(context.Context, role, state.Party) (state.Party, error) {
 		t.Error("the test watch started a successor")
 		return state.Party{}, errors.New("no successor in a test")
 	}
-	w.stand.turning = nil
+	w.Stand.Turning = nil
 	// The budget probe is due at once and would ask GitHub.
-	w.lastBudget = now
+	w.LastBudget = now
 	return w, out
 }
 
 // runWatch runs the watch until the test ends.
-func runWatch(t *testing.T, w *watcher) {
+func runWatch(t *testing.T, w *watch.Watcher) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_ = w.run(ctx, false)
+		_ = w.Run(ctx, false)
 	}()
 	t.Cleanup(func() {
 		cancel()
@@ -223,6 +224,9 @@ func eventually(within time.Duration, cond func() bool) bool {
 // neither the machine's lines nor the next poll: the memory breach is said
 // before the first interval ends, the polls go on, and the hung read is not
 // started a second time while it runs.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchSamplesTheMachineWhileALaneReadHangs(t *testing.T) {
 	needsPlatform(t)
 	release := make(chan struct{})
@@ -235,7 +239,7 @@ func TestWatchSamplesTheMachineWhileALaneReadHangs(t *testing.T) {
 		return nil, nil
 	})
 	clk := newFakeClock(t)
-	w.clock = clk
+	w.Clock = clk
 	runWatch(t, w)
 	// Release the context-ignoring fixture before shutdown waits for it,
 	// and before the state directory is removed.
@@ -245,22 +249,25 @@ func TestWatchSamplesTheMachineWhileALaneReadHangs(t *testing.T) {
 		t.Fatalf("no LOW RAM line within one watch.interval while a lane read hangs:\n%s", out.String())
 	}
 	start := clk.Now()
-	for w.polls.Load() < 4 {
+	for w.Polls.Load() < 4 {
 		clk.step(loopTimers)
 		clk.settle(loopTimers)
 	}
 	// The hung read holds its poll up for at most one interval of the wall
 	// clock, inside the poll's own: the polls at 0 to 3 intervals.
 	if took := clk.Now().Sub(start); took != 3*200*time.Millisecond {
-		t.Fatalf("%d polls in %s while a lane read hangs", w.polls.Load(), took)
+		t.Fatalf("%d polls in %s while a lane read hangs", w.Polls.Load(), took)
 	}
 	if n := reads.Load(); n != 1 {
 		t.Fatalf("the hung lane read was started %d times, want once", n)
 	}
 }
 
-// While the CPU is under pressure the installation reads run slowReads
+// While the CPU is under pressure the installation reads run watch.SlowReads
 // times less often and at nice 10, said once as READS SLOWED.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchSlowsInstallationReadsUnderCPUPressure(t *testing.T) {
 	needsPlatform(t)
 	const intervals = 12
@@ -274,7 +281,7 @@ func TestWatchSlowsInstallationReadsUnderCPUPressure(t *testing.T) {
 			return nil, nil
 		})
 		clk := newFakeClock(t)
-		w.clock = clk
+		w.Clock = clk
 		runWatch(t, w)
 		for end := clk.Now().Add(intervals * 250 * time.Millisecond); clk.Now().Before(end); {
 			clk.step(loopTimers)
@@ -285,10 +292,10 @@ func TestWatchSlowsInstallationReadsUnderCPUPressure(t *testing.T) {
 	}
 	idle, idleNiced, _ := count(", loadMax: 1000000, cpuPSIMax: 1000")
 	strained, strainedNiced, out := count(", loadMax: 1000000, cpuPSIMax: -1")
-	// A read every poll, at 0 to 12 intervals, against one every slowReads.
-	if idle != intervals+1 || strained != intervals/slowReads+1 {
+	// A read every poll, at 0 to 12 intervals, against one every watch.SlowReads.
+	if idle != intervals+1 || strained != intervals/watch.SlowReads+1 {
 		t.Errorf("%d lane reads under CPU pressure against %d idle in %d intervals, want %d and %d",
-			strained, idle, intervals, intervals/slowReads+1, intervals+1)
+			strained, idle, intervals, intervals/watch.SlowReads+1, intervals+1)
 	}
 	if idleNiced != 0 || strainedNiced != strained {
 		t.Errorf("%d of %d reads niced under CPU pressure, %d of %d idle", strainedNiced, strained, idleNiced, idle)
@@ -299,9 +306,12 @@ func TestWatchSlowsInstallationReadsUnderCPUPressure(t *testing.T) {
 }
 
 // A loop whose run overruns its interval skips the ticks it missed.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLoopSkipsMissedTicks(t *testing.T) {
 	clk := newFakeClock(t)
-	w := &watcher{clock: clk}
+	w := &watch.Watcher{Clock: clk}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	start := clk.Now()
@@ -309,7 +319,7 @@ func TestLoopSkipsMissedTicks(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		w.loop(ctx, 100*time.Millisecond, false, func(context.Context) {
+		w.Loop(ctx, 100*time.Millisecond, false, func(context.Context) {
 			runs = append(runs, clk.Now().Sub(start))
 			switch len(runs) {
 			case 1:

@@ -16,6 +16,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // servingModesRawCfg is a desk with one self-hosted provider served in two
@@ -571,6 +572,9 @@ func TestServingModesSwitchBackAndRaise(t *testing.T) {
 // command reports it — a failing switch keeps the old mode and is retried;
 // a reader disagreeing with the recorded mode re-bases the state on what it
 // reports, never on what was recorded.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestServingModesFailureLeavesMode(t *testing.T) {
 	s := newServingModesTest(t)
 	// The fake switcher: a switch into the tiny mode fails while the tries
@@ -667,7 +671,7 @@ echo "switched to $1"
 	// switches it again.
 	for range 4 {
 		w := s.app(&bytes.Buffer{}).newWatcher(false, false)
-		if err := w.reconcileServeModes(context.Background()); err != nil {
+		if err := watchApp(w.Host).reconcileServeModes(context.Background()); err != nil {
 			t.Fatalf("reconcile: %v", err)
 		}
 		s.fresh()
@@ -775,6 +779,8 @@ sleep 2
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestServingModesStatusAndWatch(t *testing.T) {
 	s := newServingModesTest(t)
 
@@ -784,7 +790,7 @@ func TestServingModesStatusAndWatch(t *testing.T) {
 
 	// The watch reads the mode and says nothing while it is settled.
 	w := s.app(&bytes.Buffer{}).newWatcher(false, false)
-	if err := w.reconcileServeModes(context.Background()); err != nil {
+	if err := watchApp(w.Host).reconcileServeModes(context.Background()); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 	if conds := openConditions(w); conds != "" {
@@ -813,13 +819,13 @@ func TestServingModesStatusAndWatch(t *testing.T) {
 }
 
 // openConditions returns the watch's open condition lines and clears them.
-func openConditions(w *watcher) string {
-	w.mu.Lock()
-	defer w.mu.Unlock()
+func openConditions(w *watch.Watcher) string {
+	w.Mu.Lock()
+	defer w.Mu.Unlock()
 	var lines []string
-	for k, c := range w.active {
+	for k, c := range w.Active {
 		lines = append(lines, k+": "+c.Label)
-		delete(w.active, k)
+		delete(w.Active, k)
 	}
 	return strings.Join(lines, "\n")
 }

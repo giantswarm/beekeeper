@@ -33,6 +33,9 @@ const (
 // The screen's collector maps the state, the leases and the alerts
 // baseline into one refresh without touching the network: the budget
 // probe and the upgrade read are off.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestUICollectorReadsTheMachineState(t *testing.T) {
 	if _, err := plat.Machine.Processes(); platform.Missing(err) {
 		t.Skip(err)
@@ -110,7 +113,7 @@ func TestUICollectorReadsTheMachineState(t *testing.T) {
 	}
 	var supRole bool
 	for _, r := range d.Roles {
-		if r.Name == guideRole.name {
+		if r.Name == guideRole.Name {
 			supRole = r.Holder == uiSupName && !r.Live && !r.Gone.IsZero()
 		}
 	}

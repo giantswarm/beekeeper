@@ -12,6 +12,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/alerts"
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 const (
@@ -40,11 +41,11 @@ func pageApp(t *testing.T, start time.Time) (*app, *bytes.Buffer) {
 
 // pollPages runs the watch's page check at start plus each minute offset
 // and returns the PAGE UNOWNED lines.
-func pollPages(w *watcher, out *bytes.Buffer, start time.Time, sessions []*claude.Session, minutes ...int) []string {
+func pollPages(w *watch.Watcher, out *bytes.Buffer, start time.Time, sessions []*claude.Session, minutes ...int) []string {
 	out.Reset()
 	for _, m := range minutes {
-		w.now = start.Add(time.Duration(m) * time.Minute)
-		w.unownedPages(context.Background(), sessions)
+		watchApp(w.Host).now = start.Add(time.Duration(m) * time.Minute)
+		w.UnownedPages(context.Background(), sessions)
 	}
 	var lines []string
 	for l := range strings.Lines(out.String()) {
@@ -313,6 +314,8 @@ func TestAlertOwnershipSeparatesInstallations(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestAlertsOwnershipMatchers(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -358,7 +361,7 @@ func TestAlertsOwnershipMatchers(t *testing.T) {
 			if len(st.AlertOwners) != tc.want {
 				t.Fatalf("owners = %d, want %d", len(st.AlertOwners), tc.want)
 			}
-			until := ownedUntil(st.AlertOwners, nil, a.now)
+			until := watch.OwnedUntil(st.AlertOwners, nil, a.now)
 			for _, f := range base.Firing("") {
 				wantOwned := (tc.name == "alertname only" || tc.name == "namespace" || f.Cluster == "cluster-a") && (tc.name == "alertname only" || tc.name == "cluster" || f.Labels["namespace"] == litNamespaceA)
 				_, owned := until(f.Key)

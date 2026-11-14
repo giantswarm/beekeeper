@@ -15,9 +15,11 @@ import (
 	"github.com/giantswarm/beekeeper/plugin"
 )
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestProfileName(t *testing.T) {
 	cfg := &config.Config{Agents: config.Agents{Profile: "minimal"}, Guide: config.Guide{Role: config.Role{Profile: "lean"}}}
-	for role, want := range map[string]string{workerRole: "minimal", guideRole.name: "lean", "steward": "", "": ""} {
+	for role, want := range map[string]string{workerRole: "minimal", guideRole.Name: "lean", "steward": "", "": ""} {
 		if got := profileName(cfg, role); got != want {
 			t.Errorf("profileName(%q) = %q, want %q", role, got, want)
 		}
@@ -25,7 +27,7 @@ func TestProfileName(t *testing.T) {
 	guide, worker := state.Party{Session: "g"}, state.Party{Session: "w"}
 	st := &state.State{}
 	st.SetGuideRole(state.Role{Holder: &state.Supervisor{Party: guide}})
-	for p, want := range map[state.Party]string{guide: guideRole.name, worker: workerRole} {
+	for p, want := range map[state.Party]string{guide: guideRole.Name, worker: workerRole} {
 		if got := agentRole(st, p); got != want {
 			t.Errorf("agentRole(%s) = %q, want %q", p.Session, got, want)
 		}

@@ -11,6 +11,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // The team and management cluster of the quiet tests.
@@ -48,12 +49,15 @@ func quietLog(t *testing.T, a *app) []string {
 
 // Recorded wake-ups: a test session started and ended within a poll, next
 // to a worker's start.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestShortLivedSessionsAreQuiet(t *testing.T) {
 	var out bytes.Buffer
 	a := quietApp(t, &out)
-	w := &watcher{app: a}
-	w.sessions = map[string]*claude.Session{"local_1": {ID: "s1", HostID: "local_1", Name: "test: wake-target"}}
-	w.sessionChanges([]*claude.Session{
+	w := &watch.Watcher{Host: a}
+	w.Sessions = map[string]*claude.Session{"local_1": {ID: "s1", HostID: "local_1", Name: "test: wake-target"}}
+	w.SessionChanges([]*claude.Session{
 		{ID: "s2", HostID: "local_2", Name: "test: beekeeper#54 probe sender 3"},
 		{ID: "s3", HostID: "local_3", Name: agentEleven},
 	})

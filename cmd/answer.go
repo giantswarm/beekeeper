@@ -153,7 +153,7 @@ func (a *app) recordAnswerWithOptions(ctx context.Context, about string, noteID,
 	} else if text == "" {
 		return usageErr("an answer is the person's words")
 	} else if st, err := a.store.Read(); err == nil {
-		if asking, _ := answerable(st, guideRole.get(st).LocalAsking(), a.now); asking != nil && len(asking.Refs) > 0 && strings.EqualFold(asking.Refs[0], about) {
+		if asking, _ := answerable(st, guideRole.Get(st).LocalAsking(), a.now); asking != nil && len(asking.Refs) > 0 && strings.EqualFold(asking.Refs[0], about) {
 			if err := a.refuseOptionLabelOnly(st, me, asking, 0, verbatim); err != nil {
 				return err
 			}

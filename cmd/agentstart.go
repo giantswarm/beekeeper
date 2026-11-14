@@ -1797,7 +1797,7 @@ func (a *app) awaitRestartable(ctx context.Context, d desk, onHeld func(error)) 
 				case <-done:
 					return
 				case <-tick.C:
-					if req := rw.due(); req != nil {
+					if req := rw.Due(); req != nil {
 						cancel(restartCause{req})
 						return
 					}
@@ -1812,7 +1812,7 @@ func (a *app) awaitRestartable(ctx context.Context, d desk, onHeld func(error)) 
 			return err
 		}
 		_, _ = fmt.Fprintf(a.out, "reopen: %s asked this reopen onto the installed %s; re-executing it\n", r.req.Binary, project.Name)
-		if err := rw.exec(r.req); err != nil {
+		if err := rw.Exec(r.req); err != nil {
 			_, _ = fmt.Fprintf(a.out, "reopen: the installed %s does not start (%v): waiting on under %s\n", r.req.Binary, err, project.Version())
 		}
 	}

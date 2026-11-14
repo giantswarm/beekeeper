@@ -13,6 +13,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/identity"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 const (
@@ -162,6 +163,8 @@ func TestAnswerEventsParse(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestDueDecisionsCloseWithTheirDefault(t *testing.T) {
 	now := relayNow
 	past, later := now.Add(-time.Minute), now.Add(time.Hour)
@@ -173,7 +176,7 @@ func TestDueDecisionsCloseWithTheirDefault(t *testing.T) {
 		{ID: 5, Kind: noteDecision, For: notePerson, Due: past, Default: "the older decision's default"},
 		{ID: 6, For: notePerson, Kind: noteDecision, Due: past, Default: "waits; nothing is closed"},
 	}}
-	lines, evs, closed := closeDefaulted(st, notePerson, watchParty, now)
+	lines, evs, closed := closeDefaulted(st, notePerson, watch.WatchParty, now)
 	if want := []string{"NOTE DEFAULTED #1: " + dfltOK, "NOTE DEFAULTED #5: the older decision's default", "NOTE DEFAULTED #6: waits; nothing is closed"}; !slices.Equal(lines, want) {
 		t.Fatalf("lines %q, want %q", lines, want)
 	}
@@ -189,23 +192,25 @@ func TestDueDecisionsCloseWithTheirDefault(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestPassiveDefaultsCloseOnceAndStayAnswerable(t *testing.T) {
 	for _, dflt := range []string{choiceWaitWord, ghNone, "nothing happens", "", "ask again"} {
 		t.Run(dflt, func(t *testing.T) {
 			n := state.Note{ID: 1, Kind: noteDecision, For: notePerson, Default: dflt, Due: relayNow.Add(-time.Minute)}
 			st := &state.State{Notes: []state.Note{n}}
-			lines, events, closed := closeDefaulted(st, notePerson, watchParty, relayNow)
+			lines, events, closed := closeDefaulted(st, notePerson, watch.WatchParty, relayNow)
 			if len(lines) != 1 || len(events) != 1 || events[0].Verb != noteDefaulted || len(closed) != 1 || len(st.Notes) != 0 {
 				t.Fatalf("default not applied: %q %+v %+v %+v", lines, events, closed, st)
 			}
 			if got, defaulted := answerable(st, n.ID, relayNow); got == nil || !defaulted || got.Default != dflt {
 				t.Fatal("default is not retained for a late answer")
 			}
-			lines, events, closed = closeDefaulted(st, notePerson, watchParty, relayNow)
+			lines, events, closed = closeDefaulted(st, notePerson, watch.WatchParty, relayNow)
 			if len(lines)+len(events)+len(closed) != 0 || len(st.Defaulted) != 1 {
 				t.Fatal("default applied twice")
 			}
-			closeDefaulted(st, notePerson, watchParty, relayNow.Add(defaultedKeep))
+			closeDefaulted(st, notePerson, watch.WatchParty, relayNow.Add(defaultedKeep))
 			if len(st.Defaulted) != 0 {
 				t.Fatal("expired default remains answerable")
 			}
@@ -361,6 +366,9 @@ func TestNoteAnswerReachesTheRolesHolderNow(t *testing.T) {
 
 // Every decision its default closed longer than defaultedKeep ago leaves in
 // the same call that closes the due ones; a younger one stays answerable.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestCloseDefaultedDropsEveryExpiredDefault(t *testing.T) {
 	now := relayNow
 	old := now.Add(-defaultedKeep - time.Minute)
@@ -368,7 +376,7 @@ func TestCloseDefaultedDropsEveryExpiredDefault(t *testing.T) {
 		Notes:     []state.Note{{ID: 4, For: notePerson, Kind: noteDecision, Due: now.Add(-time.Minute), Default: dfltOK}},
 		Defaulted: []state.Note{{ID: 1, Due: old}, {ID: 2, Due: old}, {ID: 3, Due: now.Add(-time.Hour)}},
 	}
-	closeDefaulted(st, notePerson, watchParty, now)
+	closeDefaulted(st, notePerson, watch.WatchParty, now)
 	var kept []int
 	for _, n := range st.Defaulted {
 		kept = append(kept, n.ID)

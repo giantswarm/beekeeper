@@ -13,14 +13,15 @@ import (
 	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // cutWatch is a watch whose state holds merge m of the registered agent
 // four, its wakes recorded.
-func cutWatch(t *testing.T, m state.Merge) (*watcher, *[]string) {
+func cutWatch(t *testing.T, m state.Merge) (*watch.Watcher, *[]string) {
 	t.Helper()
 	w, _, _ := notifyingWatch(t, t.TempDir(), false)
-	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+	if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Agents = []state.Agent{{Party: four}}
 		st.Merges = []state.Merge{m}
 		return nil, nil
@@ -38,18 +39,18 @@ func cutWatch(t *testing.T, m state.Merge) (*watcher, *[]string) {
 }
 
 // polls runs the watch's merge and owed-outcome steps n times.
-func polls(w *watcher, n int) {
+func polls(w *watch.Watcher, n int) {
 	for range n {
-		w.lostMerges(context.Background())
-		w.owedOutcomes(context.Background())
+		w.LostMerges(context.Background())
+		w.OwedOutcomes(context.Background())
 	}
 }
 
 // cutQueuedRun leaves the files of a queued run's merge-child cut with the
 // machine: its pid, dead, and no exit code. It returns their base.
-func cutQueuedRun(t *testing.T, w *watcher) string {
+func cutQueuedRun(t *testing.T, w *watch.Watcher) string {
 	t.Helper()
-	base := filepath.Join(w.store.Dir(), ownedRuns, "pr-merge-o_r-7-4242")
+	base := filepath.Join(watchApp(w.Host).store.Dir(), ownedRuns, "pr-merge-o_r-7-4242")
 	if err := os.MkdirAll(filepath.Dir(base), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -62,6 +63,9 @@ func cutQueuedRun(t *testing.T, w *watcher) string {
 // A merge whose gate and devctl were killed with the machine before devctl
 // wrote its exit code is recorded as cut, and the watch wakes its owner
 // with what GitHub says, once.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTheWatchWakesTheOwnerOfACutMerge(t *testing.T) {
 	stubGitHub(t, github.Merged, "")
 	stubPull(t, github.Pull{State: github.Merged, MergedAt: mergedAt}, nil)
@@ -72,23 +76,26 @@ func TestTheWatchWakesTheOwnerOfACutMerge(t *testing.T) {
 		!strings.Contains((*woke)[0], "GitHub says o/r#7 merged at 2026-10-14T19:47:02Z") || !strings.Contains((*woke)[0], "`devctl release wait o/r --pr 7`") {
 		t.Fatalf("woke %q", *woke)
 	}
-	evs, _ := w.store.Events(0, func(e state.Event) bool { return e.Verb == "merge.cut" })
+	evs, _ := watchApp(w.Host).store.Events(0, func(e state.Event) bool { return e.Verb == "merge.cut" })
 	if len(evs) != 1 || !strings.HasSuffix(evs[0].Detail, `its outcome is owed to "Agent four"`) {
 		t.Errorf("merge.cut events %+v", evs)
 	}
-	if st, _ := w.store.Read(); len(st.Owed) != 0 || len(st.Merges) != 1 || st.Merges[0].Phase != state.Settling {
+	if st, _ := watchApp(w.Host).store.Read(); len(st.Owed) != 0 || len(st.Merges) != 1 || st.Merges[0].Phase != state.Settling {
 		t.Errorf("owed %+v, merges %+v", st.Owed, st.Merges)
 	}
 }
 
 // A queued merge's own run cut while it waited for its turn wakes its owner
 // with the pull request still open, once; the place stays for a rerun.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTheWatchWakesTheOwnerOfACutQueuedRun(t *testing.T) {
 	stubGitHub(t, github.Open, "")
 	w, woke := cutWatch(t, state.Merge{Repo: scratchRepo, PR: 7, Lane: hungLane, By: four, PID: deadPID(t), Phase: state.Waiting,
 		Joined: relayNow, Seen: relayNow})
 	base := cutQueuedRun(t, w)
-	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+	if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Merges[0].Run = base
 		return nil, nil
 	}); err != nil {
@@ -98,7 +105,7 @@ func TestTheWatchWakesTheOwnerOfACutQueuedRun(t *testing.T) {
 	if len(*woke) != 1 || !strings.HasSuffix((*woke)[0], "GitHub says o/r#7 is open, not merged: run the same command again") {
 		t.Fatalf("woke %q", *woke)
 	}
-	if st, _ := w.store.Read(); len(st.Merges) != 1 || st.Merges[0].Phase != state.Waiting || st.Merges[0].Run != "" {
+	if st, _ := watchApp(w.Host).store.Read(); len(st.Merges) != 1 || st.Merges[0].Phase != state.Waiting || st.Merges[0].Run != "" {
 		t.Errorf("merges %+v", st.Merges)
 	}
 	if _, err := os.Stat(base + ".pid"); err == nil {
@@ -108,13 +115,16 @@ func TestTheWatchWakesTheOwnerOfACutQueuedRun(t *testing.T) {
 
 // A queued run whose merge-child ended owed its outcome itself and removed
 // its files: nobody is woken a second time.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestAFinishedQueuedRunIsNoCut(t *testing.T) {
 	stubGitHub(t, github.Open, "")
 	run := filepath.Join(t.TempDir(), ownedRuns, "pr-merge-o_r-7-4242")
 	w, woke := cutWatch(t, state.Merge{Repo: scratchRepo, PR: 7, Lane: hungLane, By: four, PID: deadPID(t), Phase: state.Waiting,
 		Joined: relayNow, Seen: relayNow, Seeded: true, Run: run})
 	polls(w, 2)
-	if st, _ := w.store.Read(); len(*woke) != 0 || len(st.Owed) != 0 {
+	if st, _ := watchApp(w.Host).store.Read(); len(*woke) != 0 || len(st.Owed) != 0 {
 		t.Errorf("woke %q, owed %+v", *woke, st.Owed)
 	}
 }
@@ -133,13 +143,13 @@ func TestADevctlEndedBySignalSaysWhatGitHubSays(t *testing.T) {
 
 // A requested cancellation recovered by the watch must not invite a retry.
 //
-// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
-// The merge base has no internal/gate package, so these tests cannot build there.
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTheWatchDoesNotRetryARequestedCancellation(t *testing.T) {
 	stubGitHub(t, github.Open, "")
 	stubPull(t, github.Pull{State: github.Open}, nil)
 	w, woke := cutWatch(t, state.Merge{Repo: scratchRepo, PR: 7, Lane: hungLane, By: four, PID: deadPID(t), Child: deadPID(t), Phase: state.Running, Started: relayNow})
-	base := gate.MergeBase(w.store.Dir(), scratchRepo, 7)
+	base := gate.MergeBase(watchApp(w.Host).store.Dir(), scratchRepo, 7)
 	if err := os.MkdirAll(filepath.Dir(base), 0o700); err != nil {
 		t.Fatal(err)
 	}

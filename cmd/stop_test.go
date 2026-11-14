@@ -22,6 +22,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // The sessions of the stop's tests: a worker beekeeper started, a session
@@ -174,6 +175,9 @@ func stopDesk(t *testing.T) (*app, *haltLauncher, *[]string) {
 // and ends the worker's session; it spares the supervisor's, the guide's
 // and the person's sessions and their units. Resume lifts the holds and
 // starts the installed units again, and names the session that waits.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestStopAndResume(t *testing.T) {
 	a, l, ended := stopDesk(t)
 	out := a.out.(interface{ String() string })
@@ -224,7 +228,7 @@ func TestStopAndResume(t *testing.T) {
 		t.Errorf("a forced start's gate while stopped: %v", err)
 	}
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
-		_, _, fires, _ := settleTimers(st, nil, a.now)
+		_, _, fires, _ := watch.SettleTimers(st, nil, a.now)
 		if len(fires) != 0 || len(st.Timers) != 1 {
 			t.Errorf("a wake timer fired while stopped: %+v", fires)
 		}
@@ -251,7 +255,7 @@ func TestStopAndResume(t *testing.T) {
 	if s := out.String(); !strings.Contains(s, "resume: lifted the hold on github") || !strings.Contains(s, "wait for a wake (beekeeper agents wake): ") {
 		t.Errorf("resume's output:\n%s", s)
 	}
-	_, _, fires, _ := settleTimers(st, nil, a.now)
+	_, _, fires, _ := watch.SettleTimers(st, nil, a.now)
 	if len(fires) != 1 {
 		t.Errorf("the wake timer did not fire after the resume: %+v", fires)
 	}
@@ -347,27 +351,30 @@ func refusedStop(err error) bool {
 // While stopped, a pending reopen leaves its session closed and starts no
 // unit, and the standby watch starts no successor for a gone supervisor,
 // revives none and reopens nothing: nothing starts.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestNothingStartsWhileStopped(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), true)
 	l := &haltLauncher{active: []string{"beekeeper-reopen-4579230b-11111111.service"}, installed: map[string]string{}}
 	useLauncher(t, l)
 	var calls atomic.Int32
-	w.stand = standbyWatch{
-		turning:   func(context.Context, string) bool { return false },
-		reopening: func(context.Context, string) bool { return false },
-		send:      func(context.Context, string, string) error { calls.Add(1); return nil },
-		revive:    func(context.Context, role, state.Party, string) error { calls.Add(1); return nil },
-		succeed: func(context.Context, role, state.Party) (state.Party, error) {
+	w.Stand = standbyWatch{
+		Turning:   func(context.Context, string) bool { return false },
+		Reopening: func(context.Context, string) bool { return false },
+		Send:      func(context.Context, string, string) error { calls.Add(1); return nil },
+		Revive:    func(context.Context, role, state.Party, string) error { calls.Add(1); return nil },
+		Succeed: func(context.Context, role, state.Party) (state.Party, error) {
 			calls.Add(1)
 			return state.Party{}, nil
 		},
-		importRow: func(context.Context, string, string) (string, error) { calls.Add(1); return "", nil },
+		ImportRow: func(context.Context, string, string) (string, error) { calls.Add(1); return "", nil },
 	}
-	t.Cleanup(w.stand.inflight.Wait)
-	w.now = relayNow
-	gone := state.Party{Session: "sS9", HostSession: "local_sS9", Name: guideRole.runName(9)}
+	t.Cleanup(w.Stand.Inflight.Wait)
+	watchApp(w.Host).now = relayNow
+	gone := state.Party{Session: "sS9", HostSession: "local_sS9", Name: guideRole.RunName(9)}
 	worker := state.Party{Session: runSixtySeven, HostSession: "local_" + runSixtySeven, Name: agentSeven}
-	err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+	err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 		// A guide gone past its restart grace, no start of beekeeper's:
 		// its successor is due.
 		st.Guide = &state.Role{Holder: &state.Supervisor{Party: gone, Since: relayNow.Add(-time.Hour)}}
@@ -381,9 +388,9 @@ func TestNothingStartsWhileStopped(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, at := range []time.Duration{0, time.Minute, 10 * time.Minute} {
-		w.now = relayNow.Add(at)
-		w.pending(context.Background(), nil)
-		w.stand.inflight.Wait()
+		watchApp(w.Host).now = relayNow.Add(at)
+		w.Pending(context.Background(), nil)
+		w.Stand.Inflight.Wait()
 	}
 	if n := calls.Load(); n != 0 {
 		t.Errorf("%d starts, revives, sends or imports while stopped:\n%s", n, out)
@@ -393,7 +400,7 @@ func TestNothingStartsWhileStopped(t *testing.T) {
 	}
 
 	// The pending reopen's run, and its detach, leave the session closed.
-	a := w.app
+	a := watchApp(w.Host)
 	var buf strings.Builder
 	a.out = &buf
 	if err := a.reopenSession(context.Background(), runSixtySeven, "beekeeper-agent-4579230b.service"); err != nil {
@@ -407,11 +414,11 @@ func TestNothingStartsWhileStopped(t *testing.T) {
 	}
 
 	// The resume lifts it: the watch says it ended.
-	if err := w.store.Update(func(st *state.State) ([]state.Event, error) { st.Stop = nil; return nil, nil }); err != nil {
+	if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) { st.Stop = nil; return nil, nil }); err != nil {
 		t.Fatal(err)
 	}
 	a.out = out
-	w.sayStop(&state.State{})
+	w.SayStop(&state.State{})
 	if !strings.Contains(out.String(), "ENDED STOPPED") {
 		t.Errorf("no ENDED line after the resume:\n%s", out)
 	}

@@ -33,11 +33,13 @@ func noteCommand(a *app, args ...string) (string, error) {
 	return errOut.String(), err
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestSplitNotesLeavesTheGuidesNotesToALine(t *testing.T) {
 	a := &app{cfg: &config.Config{Guide: config.Guide{Person: pat}}}
 	s := a.splitNotes([]state.Note{
 		{ID: 1, Kind: noteDecision, For: "pat", Text: "approve"},
-		{ID: 2, Kind: noteDecision, For: guideRole.title, Text: "archive the test sessions"},
+		{ID: 2, Kind: noteDecision, For: guideRole.Title, Text: "archive the test sessions"},
 		{ID: 3, Kind: noteDecision, For: "Guide run 2: Pat's open decisions", Text: "relay"},
 		{ID: 4, Kind: noteDecision, Text: "[for Pat] an older note"},
 		{ID: 5, Kind: noteDecision, For: claimSupervisor, Text: "check the lane"},

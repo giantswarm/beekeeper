@@ -15,6 +15,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 	"github.com/giantswarm/beekeeper/pkg/project"
 )
 
@@ -63,6 +64,8 @@ func TestAgentProblemCanonicalFindings(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestAgentProblemReregisterAssignment(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -95,7 +98,7 @@ func TestAgentProblemReregisterAssignment(t *testing.T) {
 				live = func(p state.Party) bool { return !p.Is(original) }
 			}
 			if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-				firePending(st, nil, a.now)
+				watch.FirePending(st, nil, a.now)
 				_, err := registerAgent(st, nextParty, live, a.now)
 				return nil, err
 			}); err != nil {
@@ -120,6 +123,8 @@ func TestAgentProblemReregisterAssignment(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestAgentProblemLogsAndDeliversOnce(t *testing.T) {
 	a, out := noteApp(t)
 	run := func(args ...string) error {
@@ -159,7 +164,7 @@ func TestAgentProblemLogsAndDeliversOnce(t *testing.T) {
 		if !st.Agents[0].ActivityAt.Equal(a.now.UTC()) {
 			t.Fatal("finding did not refresh explicit roster activity")
 		}
-		lines, events := firePending(st, nil, a.now)
+		lines, events := watch.FirePending(st, nil, a.now)
 		if len(lines) != 1 || !strings.Contains(lines[0], "PROBLEM FOUND") {
 			t.Fatalf("delivery: %q", lines)
 		}
@@ -188,7 +193,7 @@ func TestAgentProblemLogsAndDeliversOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	lines, _ := firePending(st, nil, a.now)
+	lines, _ := watch.FirePending(st, nil, a.now)
 	if len(lines) != 1 || !strings.Contains(lines[0], "WORKER REPORT") {
 		t.Fatalf("final delivery: %q", lines)
 	}
@@ -208,6 +213,8 @@ func TestAgentProblemLogsAndDeliversOnce(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestAgentProblemRemoteCoordinator(t *testing.T) {
 	a, request := executionTestApp(t)
 	s := hostUpdateServer(t, a, hostNewRelease)
@@ -264,7 +271,7 @@ func TestAgentProblemRemoteCoordinator(t *testing.T) {
 		t.Fatalf("remote CLI problem failed: %v, out=%q", err, out)
 	}
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-		lines, events := firePending(st, nil, a.now)
+		lines, events := watch.FirePending(st, nil, a.now)
 		if len(lines) == 0 {
 			t.Fatal("remote finding was not delivered")
 		}

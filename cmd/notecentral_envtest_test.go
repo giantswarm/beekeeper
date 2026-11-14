@@ -209,6 +209,9 @@ func TestEnvtestCentralAnswerLong(t *testing.T) {
 // unknown central note is refused, a second decision folds into the first
 // by lab#<n> and by its bare number, and once bo answers, ana's watch
 // settles the park with bo's answer word for word, read from the feed.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestEnvtestCentralParkAndFold(t *testing.T) {
 	e := newServeEnv(t)
 	decisionsVia(t, e, &fakeGateway{})
@@ -257,19 +260,19 @@ func TestEnvtestCentralParkAndFold(t *testing.T) {
 
 	var watched bytes.Buffer
 	w := ana.watcher(&watched)
-	st, err := w.store.Read()
+	st, err := watchApp(w.Host).store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if parks := w.settledParks(context.Background(), st); len(parks) != 0 {
+	if parks := w.SettledParks(context.Background(), st); len(parks) != 0 {
 		t.Fatalf("parks settled while the note is open: %+v", parks)
 	}
 	if out, code = bo.run("note", "answer", laneRef, "--choice", "2", "until Friday"); code != 0 {
 		t.Fatalf("bo's answer: exit %d: %s", code, out)
 	}
-	parks := w.settledParks(context.Background(), st)
-	if len(parks) != 1 || parks[0].on != laneRef || !strings.HasPrefix(parks[0].answer, "note "+laneRef+" answered by ") ||
-		!strings.HasSuffix(parks[0].answer, ": own — until Friday") {
+	parks := w.SettledParks(context.Background(), st)
+	if len(parks) != 1 || parks[0].On != laneRef || !strings.HasPrefix(parks[0].Answer, "note "+laneRef+" answered by ") ||
+		!strings.HasSuffix(parks[0].Answer, ": own — until Friday") {
 		t.Fatalf("parks settled after bo's answer: %+v (watch: %s)", parks, watched.String())
 	}
 }
