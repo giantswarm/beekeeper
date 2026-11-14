@@ -93,7 +93,7 @@ var BeekeeperRun = func(ctx context.Context, args ...string) (string, int, error
 	if err != nil {
 		return "", 0, err
 	}
-	out, errOut, code, err := RunArgv(ctx, "", append([]string{bin}, args...))
+	out, errOut, code, err := RunArgv(ctx, "", append([]string{bin}, progressArgs(ctx, args)...))
 	return out + errOut, code, err
 }
 
@@ -222,6 +222,7 @@ func ApplyLoopWorkflowRuns(p *superloop.Pull, raw []byte, rollup []LoopCheck) er
 		return errors.New("read workflow runs: empty response")
 	}
 	for _, run := range latest {
+		p.CheckStates = append(p.CheckStates, fmt.Sprintf("workflow %d/%d/%d:%s:%s", run.WorkflowID, run.ID, run.Attempt, run.Status, run.Conclusion))
 		// An old job absent from the newest suite is not evidence of a
 		// passing check, even when the jobs that did run all succeeded.
 		for _, check := range rollup {
@@ -441,6 +442,7 @@ func ParseLoopPull(ref string, out []byte) (superloop.Pull, error) {
 			continue
 		}
 		p.Checks = append(p.Checks, cmp.Or(c.Name, c.Context))
+		p.CheckStates = append(p.CheckStates, fmt.Sprintf("%s:%s:%s:%s", cmp.Or(c.Name, c.Context), c.Status, c.Conclusion, c.State))
 		if !c.green() {
 			p.Green = false
 		}
@@ -1957,6 +1959,15 @@ func (l *Loop) Pass(ctx context.Context) (result error) {
 			}
 			in.Taken = append(in.Taken, superloop.Taken{Key: key, Kind: superloop.KindGo, Ref: ref, Agent: c.Target, At: a.TimeNow()})
 			delete(claims, key)
+		}
+	}
+	if !l.DryRun && !l.RestartWaits() && Cmd.LoopBoardProgress != nil {
+		if acted, err := Cmd.LoopBoardProgress(l, ctx, st, in, unread); err != nil {
+			l.SayOnce("board progress", "SUPERVISOR PROGRESS FAILED: %v", err)
+		} else if acted {
+			return nil // re-read workers and claims before planning another action
+		} else {
+			l.ClearSaid("board progress")
 		}
 	}
 	l.LifecyclePhase("observe releases and plan")

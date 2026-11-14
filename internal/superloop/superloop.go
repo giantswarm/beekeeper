@@ -133,8 +133,9 @@ type Pull struct {
 	// failure or error), by name. Superseded cancellations are excluded.
 	Red []Check
 	// Checks are the names of the non-superseded checks on Head.
-	Checks  []string
-	Reviews []Review // oldest first
+	CheckStates []string // per-check and workflow conclusions, for progress observation
+	Checks      []string
+	Reviews     []Review // oldest first
 	// Author is the login that opened it; Title, Body, Branch (its head branch)
 	// and Files describe the change. ChangedFiles is the total count; gh
 	// may list only some paths. Ownership exclusions use Ref alone.

@@ -802,6 +802,7 @@ func ReadTranscript(path string, now time.Time, sessionCwd ...string) (claude.Wo
 				}
 				pendingIDs = append(pendingIDs, id)
 				acts.Call(id, tc.Name, norm, cwd)
+				a.LastTool = id
 				gh := (tc.Name == "run_command" || tc.Name == "bash" || tc.Name == "Bash") && invokesGitHub(norm)
 				for _, c := range counts {
 					c.ToolCalls++
