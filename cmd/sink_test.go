@@ -15,6 +15,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // sinkApp is an app on a scratch state whose configuration dispatches o/site's
@@ -42,9 +43,9 @@ func sinkApp(t *testing.T, sinkYAML string) (*app, *bytes.Buffer) {
 func fakeSinkGH(t *testing.T, fail *bool) *[]string {
 	t.Helper()
 	var calls []string
-	prev := SinkGH
-	t.Cleanup(func() { SinkGH = prev })
-	SinkGH = func(_ context.Context, args ...string) ([]byte, error) {
+	prev := watch.SinkGH
+	t.Cleanup(func() { watch.SinkGH = prev })
+	watch.SinkGH = func(_ context.Context, args ...string) ([]byte, error) {
 		calls = append(calls, strings.Join(args, " "))
 		if *fail {
 			return nil, errors.New("HTTP 422: Unexpected inputs provided")
@@ -55,7 +56,7 @@ func fakeSinkGH(t *testing.T, fail *bool) *[]string {
 }
 
 // poll runs one poll's sink of w and waits for its dispatch.
-func sinkPoll(w *Watcher) {
+func sinkPoll(w *watch.Watcher) {
 	watchApp(w.Host).now = time.Now()
 	w.Sink(context.Background())
 	w.Bg.Wait()
@@ -143,10 +144,10 @@ func TestTheSinkReleasesFailedClaimsAfterCancellation(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	previous := SinkGH
-	t.Cleanup(func() { SinkGH = previous })
+	previous := watch.SinkGH
+	t.Cleanup(func() { watch.SinkGH = previous })
 	var failed []string
-	SinkGH = func(ctx context.Context, args ...string) ([]byte, error) {
+	watch.SinkGH = func(ctx context.Context, args ...string) ([]byte, error) {
 		failed = append(failed, strings.Join(args, " "))
 		cancel() // shutdown interrupts the first dispatch and the rest of its batch
 		return nil, ctx.Err()
@@ -166,7 +167,7 @@ func TestTheSinkReleasesFailedClaimsAfterCancellation(t *testing.T) {
 	}
 	replacement := other.newWatcher(false, true)
 	var retried []string
-	SinkGH = func(_ context.Context, args ...string) ([]byte, error) {
+	watch.SinkGH = func(_ context.Context, args ...string) ([]byte, error) {
 		retried = append(retried, strings.Join(args, " "))
 		return nil, nil
 	}

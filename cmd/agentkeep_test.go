@@ -11,6 +11,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 var keepNow = time.Date(2026, 10, 2, 9, 0, 0, 0, time.UTC)
@@ -78,7 +79,7 @@ func TestRemoveAgentsHonoursAKeepSetSincePlan(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	removed, err := a.removeAgents(chores, WatchParty)
+	removed, err := a.removeAgents(chores, watch.WatchParty)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -8,6 +8,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 const sshMessageSender = "sender"
@@ -138,7 +139,7 @@ func TestExecutionWakeNoteAnswerAndTimerShareDurableDelivery(t *testing.T) {
 	}
 	n := &state.Note{ID: 1, By: state.Party{Session: r.ConversationID, Name: r.Name}}
 	a.tellFiler(ctx, by, n, "the note answer")
-	w := &Watcher{Host: a}
+	w := &watch.Watcher{Host: a}
 	w.WakeTimer(ctx, timerFire{T: state.Timer{ID: 1, Wake: r.Name, What: "the timer"}, Reason: paramDue})
 	st, _ := a.store.Read()
 	if len(st.Starts[0].Execution.Messages) != 3 {
@@ -172,7 +173,7 @@ func TestExecutionDistinctIdenticalSendsAreNotDeduplicated(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	w := &Watcher{Host: a}
+	w := &watch.Watcher{Host: a}
 	timer := state.Timer{ID: 7, Repeat: "daily", Wake: r.Name, What: "continue", Due: a.now}
 	w.WakeTimer(ctx, timerFire{T: timer, Reason: paramDue})
 	// Retrying this particular fire must reuse its receipt.

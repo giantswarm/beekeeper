@@ -24,6 +24,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/update"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 const (
@@ -591,7 +592,7 @@ func (c *recoveryController) restart(ctx context.Context, attempt int) bool {
 			settled = false
 			continue
 		}
-		if UnitComingUp(status) {
+		if watch.UnitComingUp(status) {
 			if attempt < recoveryRestartTicks || !matched {
 				continue
 			}

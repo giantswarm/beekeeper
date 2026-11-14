@@ -11,6 +11,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 func TestIdleRelayDue(t *testing.T) {
@@ -200,11 +201,11 @@ func TestGuideFeedRelayDueCrossesMidTurnAndRepeats(t *testing.T) {
 	appendRequest(401_000)
 	poll(true)
 	first := a.now
-	a.now = first.Add(RelayDueRepeat - time.Second)
+	a.now = first.Add(watch.RelayDueRepeat - time.Second)
 	poll(false)
-	a.now = first.Add(RelayDueRepeat)
+	a.now = first.Add(watch.RelayDueRepeat)
 	poll(true)
-	a.now = a.now.Add(RelayDueRepeat)
+	a.now = a.now.Add(watch.RelayDueRepeat)
 	poll(true)
 	st, err := a.store.Read()
 	if err != nil {
@@ -219,6 +220,6 @@ func TestGuideFeedRelayDueCrossesMidTurnAndRepeats(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	a.now = a.now.Add(RelayDueRepeat)
+	a.now = a.now.Add(watch.RelayDueRepeat)
 	poll(false)
 }

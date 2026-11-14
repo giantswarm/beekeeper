@@ -10,6 +10,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 const sshTestInspect = "inspect"
@@ -67,7 +68,7 @@ func TestExecutionWatchReconcilesWithBoundedDeadlineAndThrottle(t *testing.T) {
 		return execution.Observation{Handle: handle, ProcessState: execution.Running, Ready: true}, nil
 	}}
 	a.executionTransport = func(execution.Host) execution.Transport { return fake }
-	w := &Watcher{Host: a}
+	w := &watch.Watcher{Host: a}
 	st = w.SyncExecutions(context.Background(), st)
 	if calls != 1 || st.Starts[0].Execution.Observation.Reachability != execution.Reachable {
 		t.Fatal("watch did not reconcile the owned execution")
@@ -137,7 +138,7 @@ func TestExecutionWatchDeadlineBackoffAndSingleUnconfirmedReport(t *testing.T) {
 		},
 	}
 	a.executionTransport = func(execution.Host) execution.Transport { return fake }
-	w := &Watcher{Host: a}
+	w := &watch.Watcher{Host: a}
 
 	// First tick hits the deadline: reported once as deadline exceeded, not
 	// unreachable, and does not keep calling inspect on the timed-out host or
@@ -272,7 +273,7 @@ func TestExecutionWatchEndedRunSettlesAndMultiHostRotationDoesNotFlap(t *testing
 		}
 		return fakeA
 	}
-	w := &Watcher{Host: a}
+	w := &watch.Watcher{Host: a}
 
 	// Minute 0: host-a observes its ended run (sync + inspect + final post-exit sync)
 	// and settles; host-b hits its deadline and emits EXECUTION UNCONFIRMED once.

@@ -9,6 +9,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 func TestLeaseWakeReservesFullWindow(t *testing.T) {
@@ -22,7 +23,7 @@ func TestLeaseWakeReservesFullWindow(t *testing.T) {
 		t.Fatalf("wake: %q, %v", answer, ready)
 	}
 	st.Agents = []state.Agent{{Party: claimMe, Park: &state.Park{On: leaseParkOn(labTwo)}}}
-	MarkResumable(st, []settledPark{{Party: claimMe, On: leaseParkOn(labTwo), Answer: answer}}, true, a.now)
+	watch.MarkResumable(st, []settledPark{{Party: claimMe, On: leaseParkOn(labTwo), Answer: answer}}, true, a.now)
 	later := a.now.Add(29 * time.Minute)
 	gate := lease.Gate{Resource: labTwo, Caller: claimOther, Now: later, TTL: 30 * time.Minute}
 	if _, err := lease.Check(st, gate); err == nil {

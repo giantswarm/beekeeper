@@ -7,11 +7,12 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // watchTellDefaulted batches a pass by its current recipients. Each note still
 // follows the usual mailbox, role fallback and delivery-status handling.
-func watchTellDefaulted(w *Watcher, ctx context.Context, notes []state.Note) {
+func watchTellDefaulted(w *watch.Watcher, ctx context.Context, notes []state.Note) {
 	st, err := watchApp(w.Host).store.Read()
 	if err != nil {
 		w.Fail("state-read", "cannot read the state: %v", err)
@@ -53,6 +54,6 @@ func watchTellDefaulted(w *Watcher, ctx context.Context, notes []state.Note) {
 		return err
 	}
 	for _, n := range notes {
-		watchApp(w.Host).tellFilerWithWake(ctx, WatchParty, &n, defaultedLine(&n), wake)
+		watchApp(w.Host).tellFilerWithWake(ctx, watch.WatchParty, &n, defaultedLine(&n), wake)
 	}
 }

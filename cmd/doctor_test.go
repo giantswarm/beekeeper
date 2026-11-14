@@ -20,6 +20,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 	"github.com/giantswarm/beekeeper/pkg/project"
 )
 
@@ -48,7 +49,7 @@ func TestRemoveAgentsHonoursAParkSetSincePlan(t *testing.T) {
 			}); err != nil {
 				t.Fatal(err)
 			}
-			removed, err := a.removeAgents(chores, WatchParty)
+			removed, err := a.removeAgents(chores, watch.WatchParty)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -215,7 +216,7 @@ func TestDoctorRetiresStoppedSSHExecutions(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Fatalf("planChores:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
-	removed, err := a.removeAgents(chores, WatchParty)
+	removed, err := a.removeAgents(chores, watch.WatchParty)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -423,12 +424,12 @@ func TestIdleDoneProblemsFound(t *testing.T) {
 	if rs := st.WorkerReports; len(rs) != 1 || rs[0].Text != reportText || len(rs[0].Problems) != 2 || rs[0].Problems[0] != found[0] || rs[0].Task != task || rs[0].By.Name != agentOne {
 		t.Fatalf("reports = %+v", st.WorkerReports)
 	}
-	lines, _ := FirePending(st, nil, time.Now())
+	lines, _ := watch.FirePending(st, nil, time.Now())
 	if len(lines) != 3 || !strings.HasPrefix(lines[0], `WORKER REPORT by "`+agentOne+`" (task: the task): `+merged) ||
 		!strings.HasPrefix(lines[1], `PROBLEM FOUND by "`+agentOne+`": `+found[0]) {
 		t.Errorf("lines = %q", lines)
 	}
-	if lines, _ := FirePending(st, nil, time.Now()); len(lines) != 0 || len(st.WorkerReports) != 0 {
+	if lines, _ := watch.FirePending(st, nil, time.Now()); len(lines) != 0 || len(st.WorkerReports) != 0 {
 		t.Errorf("printed again: %q", lines)
 	}
 }
@@ -454,7 +455,7 @@ func TestParkedOnPersonIsSaidOnce(t *testing.T) {
 			{Party: state.Party{Name: "on a probe"}, Task: "t", Park: &state.Park{Waits: "the rollout probe the supervisor set"}},
 		},
 	}
-	lines, evs := ParkedNews(st, "operator", now)
+	lines, evs := watch.ParkedNews(st, "operator", now)
 	if len(lines) != 4 || len(evs) != 4 ||
 		!strings.HasPrefix(lines[0], `PARKED ON A PERSON: "on a note" parked on #12`) ||
 		!strings.HasPrefix(lines[1], `PARKED ON A PERSON: "on operator"`) || !strings.Contains(lines[1], "tells operator") ||
@@ -463,7 +464,7 @@ func TestParkedOnPersonIsSaidOnce(t *testing.T) {
 		!strings.Contains(lines[3], `number 2 in the queue of agentlab-1 behind "first"`) {
 		t.Fatalf("lines = %q", lines)
 	}
-	if lines, _ := ParkedNews(st, "operator", now); len(lines) != 0 {
+	if lines, _ := watch.ParkedNews(st, "operator", now); len(lines) != 0 {
 		t.Errorf("said again: %q", lines)
 	}
 }
@@ -493,7 +494,7 @@ func TestParkOnPersonOperationalHandoffs(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			p := &state.Park{On: tc.on, Waits: tc.waits}
-			if got := WatchParkOnPerson(p, "operator"); got != tc.want {
+			if got := watch.WatchParkOnPerson(p, "operator"); got != tc.want {
 				t.Errorf("parkOnPerson(%+v) = %v, want %v", p, got, tc.want)
 			}
 		})
@@ -773,7 +774,7 @@ func TestDoctorStopsFinishedBackgroundSessionsNotRelievedGuides(t *testing.T) {
 		bgSession{ID: activeGuide.Session[:8], SessionID: activeGuide.Session, Kind: bgKind},
 		bgSession{ID: personSession.Session[:8], SessionID: personSession.Session, Kind: bgKind},
 	)
-	if _, err := a.doctor(t.Context(), doctorRun{by: WatchParty}); err != nil {
+	if _, err := a.doctor(t.Context(), doctorRun{by: watch.WatchParty}); err != nil {
 		t.Fatal(err)
 	}
 	var stopped []string
@@ -821,7 +822,7 @@ func TestDoctorFlagsStaleSupervisorLoop(t *testing.T) {
 	if err := a.store.WriteFile(loop.LoopVersionFile, loop.LoopVersionRecord{PID: pid, Version: testLoopOldVer}); err != nil {
 		t.Fatal(err)
 	}
-	rep, err := a.doctor(t.Context(), doctorRun{by: WatchParty})
+	rep, err := a.doctor(t.Context(), doctorRun{by: watch.WatchParty})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -833,7 +834,7 @@ func TestDoctorFlagsStaleSupervisorLoop(t *testing.T) {
 		t.Fatal(err)
 	}
 	installedLoopBinary = os.Executable
-	rep, err = a.doctor(t.Context(), doctorRun{by: WatchParty})
+	rep, err = a.doctor(t.Context(), doctorRun{by: watch.WatchParty})
 	if err != nil {
 		t.Fatal(err)
 	}

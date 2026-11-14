@@ -16,6 +16,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 func TestGoneAgentBoundaryAndProtections(t *testing.T) {
@@ -148,7 +149,7 @@ func TestGoneRetirementReleasesBoardAndPreservesHandover(t *testing.T) {
 		t.Fatal("precondition: item unowned")
 	}
 	chores := planChores(st, nil, func(string) (*claude.Record, bool) { return nil, false }, func(state.Party) bool { return false }, 24*time.Hour, a.now, a.cfg)
-	removed, err := a.removeAgents(chores, WatchParty)
+	removed, err := a.removeAgents(chores, watch.WatchParty)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +193,7 @@ func TestGoneRetirementRechecksActivity(t *testing.T) {
 					}
 				})
 			}
-			removed, err := a.removeAgents(chores, WatchParty)
+			removed, err := a.removeAgents(chores, watch.WatchParty)
 			if err != nil || len(removed) != 0 {
 				t.Fatalf("removed=%+v err=%v", removed, err)
 			}

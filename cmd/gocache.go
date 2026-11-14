@@ -14,6 +14,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/gocache"
 	"github.com/giantswarm/beekeeper/internal/proc"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // The Go build cache every session's builds share grows without bound on a
@@ -206,7 +207,7 @@ func (a *app) trimGoCache(dryRun bool, builds func() []int) goCacheRun {
 		}
 	}
 	if r.removed > 0 {
-		_ = a.store.Log(event(WatchParty, goCacheVerb, "%s", r))
+		_ = a.store.Log(event(watch.WatchParty, goCacheVerb, "%s", r))
 	}
 	return r
 }
@@ -235,7 +236,7 @@ func (r *goCacheRun) holdForRuns(parent context.Context) (release func(), ok boo
 // across two intervals, the watch says GO CACHE with its size, its cap and
 // how long the trim has waited, until it is under the cap. A failed read or
 // trim is GO CACHE too.
-func watchGoCacheLook(w *Watcher, now time.Time, builds func() []int) {
+func watchGoCacheLook(w *watch.Watcher, now time.Time, builds func() []int) {
 	every := watchApp(w.Host).cfg.Doctor.GoCacheEvery.Duration
 	var m goCacheMark
 	_, _ = watchApp(w.Host).store.ReadFile(goCacheFile, &m)

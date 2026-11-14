@@ -14,6 +14,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // fakeRead answers the timers' check commands with read for the test.
@@ -387,11 +388,11 @@ func TestTimerProbeTimeoutWatchLine(t *testing.T) {
 	}
 	r := (timerCheck{cmd: "exec sleep 30"}).result(nil, err)
 	st := state.State{Timers: []state.Timer{{ID: 1, Due: relayNow, Probe: "exec sleep 30", What: appCheck}}}
-	lines, _, fires, _ := SettleTimers(&st, map[int]checkResult{1: r}, relayNow)
+	lines, _, fires, _ := watch.SettleTimers(&st, map[int]checkResult{1: r}, relayNow)
 	if len(lines) != 1 || !strings.Contains(lines[0], "probe timed out after 10 s") || len(fires) != 0 {
 		t.Fatalf("lines %v, fires %v", lines, fires)
 	}
-	lines, _, _, _ = SettleTimers(&st, map[int]checkResult{1: r}, relayNow.Add(time.Minute))
+	lines, _, _, _ = watch.SettleTimers(&st, map[int]checkResult{1: r}, relayNow.Add(time.Minute))
 	if len(lines) != 0 {
 		t.Fatalf("repeated unchanged timeout: %v", lines)
 	}

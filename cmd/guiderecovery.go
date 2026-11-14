@@ -5,11 +5,12 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/proc"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // recoveryOutput shares the parent watch's output lock without sharing its
 // poll clock, process snapshot or successor chain.
-type recoveryOutput struct{ watch *Watcher }
+type recoveryOutput struct{ watch *watch.Watcher }
 
 func (o recoveryOutput) Write(p []byte) (int, error) {
 	o.watch.Mu.Lock()
@@ -17,7 +18,7 @@ func (o recoveryOutput) Write(p []byte) (int, error) {
 	return watchApp(o.watch.Host).out.Write(p)
 }
 
-func watchNewGuideRecovery(w *Watcher) *Watcher {
+func watchNewGuideRecovery(w *watch.Watcher) *watch.Watcher {
 	a := *watchApp(w.Host)
 	a.out = recoveryOutput{w}
 	g := a.newWatcher(true, false)
@@ -30,7 +31,7 @@ const guideRecoveryKey = "guide-recovery"
 // watchRecoverGuide is independent of the main watch's network reads, event replay,
 // accounting and maintenance. It needs only process identities and role state.
 // Unknown process/state observations never mean that the guide is dead.
-func watchRecoverGuide(w *Watcher, ctx context.Context) {
+func watchRecoverGuide(w *watch.Watcher, ctx context.Context) {
 	if ctx.Err() != nil || w.Stand.Starting.Load() || w.Stand.Busy.Load() {
 		return
 	}
@@ -53,7 +54,7 @@ func watchRecoverGuide(w *Watcher, ctx context.Context) {
 	sessions := claude.DiscoverLiveness(watchApp(w.Host).cfg, t, watchApp(w.Host).now)
 	w.ResumeRestarted(ctx, guideRole, st, sessions)
 	w.GuideGone(ctx, st, sessions)
-	for _, line := range watchApp(w.Host).daemonsOutOfUnits(liveDaemonsInUnits(t), proc.Cgroup, false, WatchParty, watchApp(w.Host).now) {
+	for _, line := range watchApp(w.Host).daemonsOutOfUnits(liveDaemonsInUnits(t), proc.Cgroup, false, watch.WatchParty, watchApp(w.Host).now) {
 		w.Emit("guide-daemon "+line, "DOCTOR %s", line)
 	}
 }

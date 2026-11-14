@@ -11,6 +11,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 func TestUsageRefreshSharedByCommandsAndWatch(t *testing.T) {
@@ -60,14 +61,14 @@ func TestUsageRefreshSharedByCommandsAndWatch(t *testing.T) {
 		if i%2 == 0 {
 			r, err = caller.resolveReading(ctx, file, u)
 		} else {
-			w := &Watcher{Host: caller}
+			w := &watch.Watcher{Host: caller}
 			r, err = w.ExecUsageNow(ctx, file, u)
 		}
 		if err != nil || r.FiveHour == nil || r.FiveHour.UsedPercent != 99 || r.Fallback == "" {
 			t.Fatalf("contender lost existing quota limit: %+v %v", r, err)
 		}
 	}
-	w := &Watcher{Host: &app{store: store, now: now, readUsage: probe}, Chores: true}
+	w := &watch.Watcher{Host: &app{store: store, now: now, readUsage: probe}, Chores: true}
 	w.RefreshUsage(ctx, config.Capacity{Providers: map[string]config.Provider{probeProvider: {Usage: u}}})
 	if w.ProviderUsageErr[probeProvider] != "" {
 		t.Fatalf("contended probe recorded as provider usage failure: %q", w.ProviderUsageErr[probeProvider])

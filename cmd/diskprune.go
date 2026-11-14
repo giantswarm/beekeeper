@@ -18,6 +18,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/gocache"
 	"github.com/giantswarm/beekeeper/internal/machine"
 	"github.com/giantswarm/beekeeper/internal/proc"
+	"github.com/giantswarm/beekeeper/internal/watch"
 	"github.com/giantswarm/beekeeper/internal/worktrees"
 )
 
@@ -349,7 +350,7 @@ func (a *app) pruneDisk(dry, pressure bool, read func() (diskMachine, error)) di
 		r.uncovered = uncoveredCaches(m.cacheHome, m.entries, diskHoldingMin, 5)
 	}
 	if !dry && a.context().Err() == nil {
-		_ = a.store.Log(event(WatchParty, "disk.prune", "%s", r))
+		_ = a.store.Log(event(watch.WatchParty, "disk.prune", "%s", r))
 		if pressure {
 			_ = a.store.WriteFile(diskHoldingFile, diskHolding{At: a.now, Text: r.holdingText()})
 		}
@@ -463,7 +464,7 @@ func diskCacheTarget(size, capBytes int64, pressure bool) (int64, bool) {
 
 // watchDiskPrune runs on schedule and under pressure. All watches share the mark
 // and lock; pressure retries are bounded to once per five minutes.
-func watchDiskPrune(w *Watcher, now time.Time, pressure bool) {
+func watchDiskPrune(w *watch.Watcher, now time.Time, pressure bool) {
 	if !w.DiskPruneOn || !watchApp(w.Host).cfg.Disk.Auto() || !w.DiskPruning.CompareAndSwap(false, true) {
 		return
 	}

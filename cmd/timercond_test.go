@@ -12,6 +12,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // The probes that hold and fail, and a condition the tests wait on.
@@ -196,7 +197,7 @@ func TestTimersTimeOutExpireAndFireAtTheirTime(t *testing.T) {
 		{ID: 5, Due: past, Probe: probeFails, Until: relayNow.Add(time.Hour), What: "waits"},
 		{ID: 6, Due: relayNow.Add(time.Hour), Wake: "a", What: "later"},
 	}}
-	lines, evs, fires, changed := SettleTimers(st, map[int]checkResult{5: {}}, relayNow)
+	lines, evs, fires, changed := watch.SettleTimers(st, map[int]checkResult{5: {}}, relayNow)
 	if !changed || len(fires) != 2 || !fires[0].TimedOut || fires[0].T.ID != 1 || fires[1].T.ID != 4 || fires[1].TimedOut {
 		t.Fatalf("fires %+v", fires)
 	}
@@ -213,7 +214,7 @@ func TestTimersTimeOutExpireAndFireAtTheirTime(t *testing.T) {
 	if len(open) != 3 || open[0] != 3 || open[1] != 5 || open[2] != 6 || !st.Timers[1].Checked.Equal(relayNow.UTC()) {
 		t.Fatalf("open %v, %+v", open, st.Timers)
 	}
-	if lines, _ := FirePending(st, nil, relayNow); len(lines) != 1 || !strings.HasPrefix(lines[0], "TIMER: #3 due") {
+	if lines, _ := watch.FirePending(st, nil, relayNow); len(lines) != 1 || !strings.HasPrefix(lines[0], "TIMER: #3 due") {
 		t.Fatalf("firePending %q", lines)
 	}
 }
@@ -266,7 +267,7 @@ func TestRepeatingTimerReArmsAtItsLocalTime(t *testing.T) {
 		{ID: 2, Due: past, Run: probeHolds, Repeat: state.RepeatWeekdays, What: "daily summary"},
 		{ID: 3, Due: past, Wake: "a", Repeat: state.RepeatWeekly, What: "weekly summary"},
 	}}
-	lines, _, fires, changed := SettleTimers(st, nil, relayNow)
+	lines, _, fires, changed := watch.SettleTimers(st, nil, relayNow)
 	if !changed || len(fires) != 3 || len(st.Timers) != 3 {
 		t.Fatalf("fires %+v, open %+v", fires, st.Timers)
 	}
@@ -313,7 +314,7 @@ func TestTimerAddRefusesARepeatThatCannotFire(t *testing.T) {
 func TestTimerNotHoldingForADayIsOneWatchLine(t *testing.T) {
 	st := &state.State{Timers: []state.Timer{{ID: 7, Due: relayNow.Add(-time.Hour), Probe: probeFails, What: "check the rollout"}}}
 	settle := func(at time.Time) []string {
-		lines, _, fires, _ := SettleTimers(st, map[int]checkResult{7: {Reason: "exit status 1"}}, at)
+		lines, _, fires, _ := watch.SettleTimers(st, map[int]checkResult{7: {Reason: "exit status 1"}}, at)
 		if len(fires) != 0 || len(st.Timers) != 1 {
 			t.Fatalf("fires %+v, open %+v", fires, st.Timers)
 		}
@@ -326,7 +327,7 @@ func TestTimerNotHoldingForADayIsOneWatchLine(t *testing.T) {
 		t.Fatalf("under a day: %q", lines)
 	}
 	day := relayNow.Add(timerStuckAfter)
-	lines, evs, _, _ := SettleTimers(st, map[int]checkResult{7: {Reason: "exit status 1"}}, day)
+	lines, evs, _, _ := watch.SettleTimers(st, map[int]checkResult{7: {Reason: "exit status 1"}}, day)
 	want := "TIMER STUCK: #7, probe `false` has not held since Sep 25 02:00 (exit status 1); it keeps waiting: check the rollout"
 	if len(lines) != 1 || lines[0] != want || len(evs) != 1 || evs[0].Verb != "timer.stuck" || !st.Timers[0].Stuck {
 		t.Fatalf("after a day: %q, %+v", lines, evs)
@@ -353,7 +354,7 @@ func TestTimerFiredLateSaysHowLateAndWhy(t *testing.T) {
 			{ID: 3, Due: relayNow.Add(-timerTick), Run: probeHolds, What: "on time"},
 		},
 	}
-	_, _, fires, changed := SettleTimers(st, nil, relayNow)
+	_, _, fires, changed := watch.SettleTimers(st, nil, relayNow)
 	if !changed || len(fires) != 2 || len(st.Timers) != 1 {
 		t.Fatalf("while stopped: fires %+v, open %+v", fires, st.Timers)
 	}
@@ -368,7 +369,7 @@ func TestTimerFiredLateSaysHowLateAndWhy(t *testing.T) {
 		t.Fatalf("the stop's hold was not recorded: %+v", held)
 	}
 	st.Stop = nil
-	lines, _, fires, _ := SettleTimers(st, nil, relayNow.Add(10*time.Minute))
+	lines, _, fires, _ := watch.SettleTimers(st, nil, relayNow.Add(10*time.Minute))
 	if len(fires) != 1 || !strings.Contains(fires[0].Message(), "24m late: held by the beekeeper stop since 01:45 "+z) || !strings.Contains(lines[0], "fired 02:10 "+z) {
 		t.Fatalf("after the resume: fires %+v, lines %q", fires, lines)
 	}
@@ -412,7 +413,7 @@ func TestTimerRunInterruptedByWatchRestart(t *testing.T) {
 			}
 			var fires []timerFire
 			if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
-				_, evs, f, _ := SettleTimers(st, nil, watchApp(w.Host).now)
+				_, evs, f, _ := watch.SettleTimers(st, nil, watchApp(w.Host).now)
 				fires = f
 				return evs, nil
 			}); err != nil {
@@ -444,7 +445,7 @@ func TestTimerRunInterruptedByWatchRestart(t *testing.T) {
 					t.Fatalf("missing %q in %q", want, out.String())
 				}
 			}
-			_, _, retried, _ := SettleTimers(st, nil, watchApp(w.Host).now)
+			_, _, retried, _ := watch.SettleTimers(st, nil, watchApp(w.Host).now)
 			if len(retried) != 1 || retried[0].T.ID != timer.ID {
 				t.Fatalf("replacement watch did not retry: %+v", retried)
 			}

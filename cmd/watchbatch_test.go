@@ -11,9 +11,10 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/proc"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
-func batchWatcher(t *testing.T) (*Watcher, *strings.Builder, *fakeClock) {
+func batchWatcher(t *testing.T) (*watch.Watcher, *strings.Builder, *fakeClock) {
 	t.Helper()
 	w, out := onceWatch(t, nil)
 	clk := newFakeClock(t)

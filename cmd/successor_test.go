@@ -15,6 +15,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 const (
@@ -288,7 +289,7 @@ func TestSuccessorDir(t *testing.T) {
 
 // supervisedBy makes p, one of beekeeper's starts, the supervisor since
 // since, its CLI gone two minutes before w.now.
-func supervisedBy(t *testing.T, w *Watcher, p state.Party, since time.Time) {
+func supervisedBy(t *testing.T, w *watch.Watcher, p state.Party, since time.Time) {
 	t.Helper()
 	err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Guide = &state.Role{Holder: &state.Supervisor{Party: p, Since: since}}

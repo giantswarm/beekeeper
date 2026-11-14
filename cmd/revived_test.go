@@ -10,6 +10,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // stopLauncher has no unit of any session running and records the stops.
@@ -108,7 +109,7 @@ func TestTheWatchStopsARevivedPredecessor(t *testing.T) {
 }
 
 // The CLI of a handed-over session that the doctor warmed to archive its
-// own desktop session runs on for archiveWarmGrace: the watch neither stops
+// own desktop session runs on for watch.ArchiveWarmGrace: the watch neither stops
 // it as revived nor says SAME TITLE beside its follow-up, so its archive
 // call runs. Past the grace it is stopped like any revived CLI.
 func TestTheWatchLeavesACLIWarmedForItsArchive(t *testing.T) {
@@ -146,7 +147,7 @@ func TestTheWatchLeavesACLIWarmedForItsArchive(t *testing.T) {
 		t.Errorf("output:\n%s", s)
 	}
 
-	watchApp(w.Host).now = watchApp(w.Host).now.Add(ArchiveWarmGrace)
+	watchApp(w.Host).now = watchApp(w.Host).now.Add(watch.ArchiveWarmGrace)
 	w.StopRevived(t.Context(), []*claude.Session{oldCLI, nextCLI})
 	if len(*ended) != 1 || (*ended)[0] != oldCLI.PID {
 		t.Errorf("stopped %v past the grace, want the warmed CLI %d", *ended, oldCLI.PID)
@@ -203,9 +204,9 @@ func TestTheWatchStopsAnArchivedSessionsCLIQuietly(t *testing.T) {
 	ended := useEndRevived(t)
 	old := state.Party{Session: "16140721-old", HostSession: "local_16140721-old", Name: name}
 	next := state.Party{Session: "52b403dd-new", HostSession: "local_52b403dd-new", Name: name}
-	orig := DesktopArchived
-	t.Cleanup(func() { DesktopArchived = orig })
-	DesktopArchived = func(_ *config.Config, host string) bool { return host == old.HostSession }
+	orig := watch.DesktopArchived
+	t.Cleanup(func() { watch.DesktopArchived = orig })
+	watch.DesktopArchived = func(_ *config.Config, host string) bool { return host == old.HostSession }
 	if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Starts = []state.Start{{Party: old, At: watchApp(w.Host).now.Add(-3 * time.Hour)}, {Party: next, At: watchApp(w.Host).now.Add(-time.Minute)}}
 		st.Agents = []state.Agent{{Party: next, Task: "workspaces"}}

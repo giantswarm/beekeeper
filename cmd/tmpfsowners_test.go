@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/giantswarm/beekeeper/internal/proc"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 func TestTmpfsLargestNamesEntriesAndWorkerOwners(t *testing.T) {
@@ -22,7 +23,7 @@ func TestTmpfsLargestNamesEntriesAndWorkerOwners(t *testing.T) {
 		}
 		return nil, errors.New("process unavailable")
 	}
-	got := TmpfsLargest(root, table, map[int]string{10: "Build issue 797"}, refs)
+	got := watch.TmpfsLargest(root, table, map[int]string{10: "Build issue 797"}, refs)
 	for _, want := range []string{`"largest"`, `go pid 11 ("Build issue 797")`, `"large"`, `"medium"`, "owner unknown"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("%q missing %q", got, want)
@@ -45,14 +46,14 @@ func TestTmpfsLargestDoesNotFollowSymlinks(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(root, "link")); err != nil {
 		t.Fatal(err)
 	}
-	got := TmpfsLargest(root, nil, nil, nil)
+	got := watch.TmpfsLargest(root, nil, nil, nil)
 	if !strings.Contains(got, `"link"`) || !strings.Contains(got, "owner unknown") || !strings.Contains(got, "0 MiB") {
 		t.Fatal(got)
 	}
-	if got := TmpfsLargest(filepath.Join(root, "absent"), nil, nil, nil); got != "largest entries unavailable" {
+	if got := watch.TmpfsLargest(filepath.Join(root, "absent"), nil, nil, nil); got != "largest entries unavailable" {
 		t.Fatal(got)
 	}
-	if got := TmpfsLargest(t.TempDir(), nil, nil, nil); !strings.Contains(got, "deleted open files") {
+	if got := watch.TmpfsLargest(t.TempDir(), nil, nil, nil); !strings.Contains(got, "deleted open files") {
 		t.Fatal(got)
 	}
 }

@@ -10,6 +10,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // An upstream refusal is a hook.refused event, and the watch says each one
@@ -35,7 +36,7 @@ func TestWatchSaysUpstreamRefusals(t *testing.T) {
 	a := &app{cfg: cfg, store: store, out: &out}
 	a.recordRefusal("s0", "gh pr create -R o/before --fill", "o/before")
 	a.now = time.Now()
-	w := &Watcher{Host: a, Last: map[string]time.Time{}}
+	w := &watch.Watcher{Host: a, Last: map[string]time.Time{}}
 	w.Refusals() // the baseline
 	time.Sleep(time.Millisecond)
 	a.recordRefusal("s1", "gh pr create -R o/r --fill", "o/r")

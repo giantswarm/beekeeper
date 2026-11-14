@@ -21,6 +21,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/sandbox"
 	"github.com/giantswarm/beekeeper/internal/secret"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 const (
@@ -354,7 +355,7 @@ func TestWatchSaysTheVault(t *testing.T) {
 	a := vaultApp(t, time.Minute)
 	var out bytes.Buffer
 	a.out = &out
-	w := &Watcher{Host: a, Last: map[string]time.Time{}}
+	w := &watch.Watcher{Host: a, Last: map[string]time.Time{}}
 	statePath, _ := secret.StatePath()
 	waitsPath, _ := secret.WaitsPath()
 	since := time.Now().Add(-8 * time.Minute)
@@ -411,7 +412,7 @@ func TestWatchSaysAFailedSignin(t *testing.T) {
 	a := vaultApp(t, time.Minute)
 	var out bytes.Buffer
 	a.out = &out
-	w := &Watcher{Host: a, Last: map[string]time.Time{}}
+	w := &watch.Watcher{Host: a, Last: map[string]time.Time{}}
 	statePath, _ := secret.StatePath()
 	_ = secret.WriteState(statePath, secret.VaultState{Error: "op-unlock: exit status 2: no terminal to ask"})
 	w.VaultWaits()
@@ -685,7 +686,7 @@ func TestWatchSaysARetriedSignin(t *testing.T) {
 	a := vaultApp(t, time.Minute)
 	var out bytes.Buffer
 	a.out = &out
-	w := &Watcher{Host: a, Last: map[string]time.Time{}}
+	w := &watch.Watcher{Host: a, Last: map[string]time.Time{}}
 	statePath, _ := secret.StatePath()
 	_ = secret.WriteState(statePath, secret.VaultState{Retrying: "the network did not reach 1Password (no such host); try 2 at 14:25:51"})
 	w.VaultWaits()
@@ -703,7 +704,7 @@ func TestWatchSaysADroppedSession(t *testing.T) {
 	a := vaultApp(t, time.Minute)
 	var out bytes.Buffer
 	a.out = &out
-	w := &Watcher{Host: a, Last: map[string]time.Time{}}
+	w := &watch.Watcher{Host: a, Last: map[string]time.Time{}}
 	statePath, _ := secret.StatePath()
 	_ = secret.WriteState(statePath, secret.VaultState{Dropped: "op: exit 1 (You are not currently signed in)", DroppedAt: time.Now()})
 	w.VaultWaits()

@@ -9,6 +9,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/proc"
+	"github.com/giantswarm/beekeeper/internal/watch"
 	"github.com/giantswarm/beekeeper/pkg/project"
 )
 
@@ -26,16 +27,16 @@ func TestStormLineNamesTheFreshCommandsAndSessions(t *testing.T) {
 		&proc.Process{PID: 22, PPID: 11, Args: strings.Fields("kubectl get ns"), StartTicks: 5, CPU: time.Millisecond},
 		&proc.Process{PID: 23, PPID: 1, Args: strings.Fields("helm list"), StartTicks: 5, CPU: time.Millisecond},
 	))
-	started := Fresh(prev, cur)
+	started := watch.Fresh(prev, cur)
 	if len(started) != 3 {
 		t.Fatalf("fresh = %d processes, want 3 (the probe folded)", len(started))
 	}
-	got := StormLine(220, 100, started, cur, map[int]string{10: "Board pull 5"})
+	got := watch.StormLine(220, 100, started, cur, map[int]string{10: "Board pull 5"})
 	want := `PROCESS STORM: 220 forks/s (usual 100/s), top: kubectl 66 %, helm 33 %; sessions: "Board pull 5" 66 %`
 	if got != want {
 		t.Errorf("stormLine =\n %q\nwant\n %q", got, want)
 	}
-	if got := StormLine(180, 100, nil, cur, nil); !strings.HasSuffix(got, "none of them still running at the sample") {
+	if got := watch.StormLine(180, 100, nil, cur, nil); !strings.HasSuffix(got, "none of them still running at the sample") {
 		t.Errorf("stormLine with none seen = %q", got)
 	}
 }
@@ -75,7 +76,7 @@ func TestStacks(t *testing.T) {
 	for i := range 4 {
 		ps = append(ps, old(600+i, 2, 10*time.Second, "sleep 1"))
 	}
-	got := Stacks(table(ps...), now, 3, map[int]string{100: "A"})
+	got := watch.Stacks(table(ps...), now, 3, map[int]string{100: "A"})
 	if len(got) != 1 {
 		t.Fatalf("stacks = %+v, want one", got)
 	}
@@ -92,11 +93,11 @@ func TestStacks(t *testing.T) {
 	for i := range 4 {
 		ps = append(ps, old(700+i, 110, time.Duration(2+i)*time.Minute, "sleep 300"))
 	}
-	got = Stacks(table(ps...), now, 3, map[int]string{100: "Board pull 9"})
+	got = watch.Stacks(table(ps...), now, 3, map[int]string{100: "Board pull 9"})
 	if len(got) != 1 || got[0].Line() != `STACKED 4 × sleep 300: oldest 5m0s, parent sh -c, session "Board pull 9"` {
 		t.Errorf("stacks = %+v", got)
 	}
-	if Stacks(table(ps...), now, 4, nil) != nil {
+	if watch.Stacks(table(ps...), now, 4, nil) != nil {
 		t.Error("four copies make a stack at stackMax 4")
 	}
 }
@@ -133,7 +134,7 @@ func TestInteractiveShell(t *testing.T) {
 		"/usr/bin/fish -i -l": true,
 	} {
 		p := &proc.Process{Args: strings.Fields(args)}
-		if got := InteractiveShell(p); got != want {
+		if got := watch.InteractiveShell(p); got != want {
 			t.Errorf("interactiveShell(%q) = %v", args, got)
 		}
 	}
@@ -154,7 +155,7 @@ func TestSampleProcsSaysAStormAndAStackOnce(t *testing.T) {
 	cfg.Watch.Repeat.Duration = 10 * time.Minute
 	cfg.Watch.ForkRateMax, cfg.Watch.StackMax = 50, 3
 	var forks uint64 = 1000
-	w := &Watcher{Host: &app{out: &out, cfg: cfg}, Last: map[string]time.Time{}, Self: outsideTable}
+	w := &watch.Watcher{Host: &app{out: &out, cfg: cfg}, Last: map[string]time.Time{}, Self: outsideTable}
 	w.ReadForks = func() (uint64, error) { return forks, nil }
 
 	now := time.Now()
@@ -213,7 +214,7 @@ func TestSampleProcsSaysLoadOnce(t *testing.T) {
 	cfg.Watch.Repeat.Duration = 10 * time.Minute
 	cfg.Watch.ForkRateMax, cfg.Watch.StackMax, cfg.Watch.ToolProcsMax = -1, -1, 1000
 	cfg.Watch.Tools = []string{"tsh", "helm"}
-	w := &Watcher{Host: &app{out: &out, cfg: cfg}, Last: map[string]time.Time{}, Self: outsideTable}
+	w := &watch.Watcher{Host: &app{out: &out, cfg: cfg}, Last: map[string]time.Time{}, Self: outsideTable}
 	w.ReadForks = func() (uint64, error) { return 0, nil }
 	owners := map[int]string{1: agentOne, 2: agentFour}
 	w.Owners.Store(&owners)
@@ -264,7 +265,7 @@ func TestSampleProcsNamesTheWatchsOwnReads(t *testing.T) {
 	cfg.Watch.Repeat.Duration = 10 * time.Minute
 	cfg.Watch.ForkRateMax = 50
 	var forks uint64 = 1000
-	w := &Watcher{Host: &app{out: &out, cfg: cfg}, Last: map[string]time.Time{}, Self: 11}
+	w := &watch.Watcher{Host: &app{out: &out, cfg: cfg}, Last: map[string]time.Time{}, Self: 11}
 	w.ReadForks = func() (uint64, error) { return forks, nil }
 	w.Owners.Store(&map[int]string{10: "Run 7"})
 	prev := named(table(
@@ -304,7 +305,7 @@ func TestToolLoadNamesRecursion(t *testing.T) {
 			for i, parent := range tc.parents {
 				ps = append(ps, &proc.Process{PID: i + 1, PPID: parent, Comm: "gh"})
 			}
-			line := ToolLoadLine(proc.NewTable(ps...), []string{"gh"}, tc.max, nil)
+			line := watch.ToolLoadLine(proc.NewTable(ps...), []string{"gh"}, tc.max, nil)
 			if got := strings.Contains(line, "possible recursion: gh"); got != tc.want {
 				t.Fatalf("LOAD = %q, recursion = %v, want %v", line, got, tc.want)
 			}

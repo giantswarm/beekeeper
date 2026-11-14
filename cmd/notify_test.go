@@ -15,6 +15,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/machine"
 	"github.com/giantswarm/beekeeper/internal/notify"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // desktop records what a watch sends.
@@ -30,7 +31,7 @@ func (d *desktop) Send(_ context.Context, m notify.Message) (uint32, error) {
 }
 
 // notifyingWatch is a watch --notify on the state in dir.
-func notifyingWatch(t *testing.T, dir string, standby bool) (*Watcher, *desktop, *bytes.Buffer) {
+func notifyingWatch(t *testing.T, dir string, standby bool) (*watch.Watcher, *desktop, *bytes.Buffer) {
 	t.Helper()
 	cfg, err := config.Load(filepath.Join(dir, "missing.yaml"))
 	if err != nil {
@@ -159,8 +160,8 @@ func TestMachineLinesNeverNotify(t *testing.T) {
 		}
 	}
 	m := machine.Mem{SwapTotalMiB: 16383, SwapUsedMiB: 15000}
-	oomd, grow := &machine.OOMDSwap{LimitPercent: 90, Monitored: []string{swapCgroup}}, SwapTrend{DiskPerHourMiB: 100, AvailFalling: true, Rated: true}
-	w.Check("oomd", w.OomdImminent(m, oomd, grow), "OOMD IMMINENT: %s", SwapLine(m, oomd, grow))
+	oomd, grow := &machine.OOMDSwap{LimitPercent: 90, Monitored: []string{swapCgroup}}, watch.SwapTrend{DiskPerHourMiB: 100, AvailFalling: true, Rated: true}
+	w.Check("oomd", w.OomdImminent(m, oomd, grow), "OOMD IMMINENT: %s", watch.SwapLine(m, oomd, grow))
 	if !strings.Contains(out.String(), "OOMD IMMINENT") {
 		t.Errorf("no OOMD IMMINENT line:\n%s", out)
 	}
@@ -172,17 +173,17 @@ func TestMachineLinesNeverNotify(t *testing.T) {
 func TestSwapLineSaysDiskZswapAndOomdRule(t *testing.T) {
 	m := machine.Mem{SwapTotalMiB: 16383, SwapUsedMiB: 10627, ZswappedMiB: 8000, ZswapPoolMiB: 2500}
 	unwatched := &machine.OOMDSwap{LimitPercent: 90}
-	if got, want := SwapLine(m, unwatched, SwapTrend{}), "SWAP: 10627 of 16383 MiB used, disk 2627 MiB + zswap 8000 MiB in a 2500 MiB pool, systemd-oomd watches no cgroup for swap, growth not yet measured"; got != want {
+	if got, want := watch.SwapLine(m, unwatched, watch.SwapTrend{}), "SWAP: 10627 of 16383 MiB used, disk 2627 MiB + zswap 8000 MiB in a 2500 MiB pool, systemd-oomd watches no cgroup for swap, growth not yet measured"; got != want {
 		t.Errorf("unwatched:\n got %q\nwant %q", got, want)
 	}
-	if got := SwapLine(m, unwatched, SwapTrend{DiskPerHourMiB: 250, UsedPerHourMiB: 250, AvailFalling: true, Rated: true}); strings.Contains(got, "trigger") {
+	if got := watch.SwapLine(m, unwatched, watch.SwapTrend{DiskPerHourMiB: 250, UsedPerHourMiB: 250, AvailFalling: true, Rated: true}); strings.Contains(got, "trigger") {
 		t.Errorf("a trigger without a swap-monitored cgroup: %q", got)
 	}
 	watched := &machine.OOMDSwap{LimitPercent: 90, Monitored: []string{swapCgroup}}
-	if got, want := SwapLine(m, watched, SwapTrend{DiskPerHourMiB: 250, UsedPerHourMiB: 250, AvailFalling: true, Rated: true, Window: 10 * time.Minute}), "SWAP: 10627 of 16383 MiB used, disk 2627 MiB + zswap 8000 MiB in a 2500 MiB pool, 4117 MiB before systemd-oomd's 90 % swap trigger (1 swap-monitored cgroups), disk +250 MiB/h, zswap writeback 0 MiB/h over the last 10m while MemAvailable falls, trigger in 16h28m0s"; got != want {
+	if got, want := watch.SwapLine(m, watched, watch.SwapTrend{DiskPerHourMiB: 250, UsedPerHourMiB: 250, AvailFalling: true, Rated: true, Window: 10 * time.Minute}), "SWAP: 10627 of 16383 MiB used, disk 2627 MiB + zswap 8000 MiB in a 2500 MiB pool, 4117 MiB before systemd-oomd's 90 % swap trigger (1 swap-monitored cgroups), disk +250 MiB/h, zswap writeback 0 MiB/h over the last 10m while MemAvailable falls, trigger in 16h28m0s"; got != want {
 		t.Errorf("watched, growing:\n got %q\nwant %q", got, want)
 	}
-	if got := SwapLine(m, nil, SwapTrend{DiskPerHourMiB: -80, Rated: true, Window: time.Hour}); !strings.HasSuffix(got, "systemd-oomd swap rule unknown, disk -80 MiB/h, zswap writeback 0 MiB/h over the last 1h00m") {
+	if got := watch.SwapLine(m, nil, watch.SwapTrend{DiskPerHourMiB: -80, Rated: true, Window: time.Hour}); !strings.HasSuffix(got, "systemd-oomd swap rule unknown, disk -80 MiB/h, zswap writeback 0 MiB/h over the last 1h00m") {
 		t.Errorf("shrinking: %q", got)
 	}
 }
@@ -194,7 +195,7 @@ func TestSwapTrendOverTheWindow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w := &Watcher{Host: &app{cfg: cfg}}
+	w := &watch.Watcher{Host: &app{cfg: cfg}}
 	at := func(used, zswapped, avail int) machine.Mem {
 		return machine.Mem{SwapUsedMiB: used, ZswappedMiB: zswapped, AvailableMiB: avail}
 	}
@@ -206,7 +207,7 @@ func TestSwapTrendOverTheWindow(t *testing.T) {
 		t.Fatal("a minute is too short a span")
 	}
 	// 500 MiB more in use in 6 minutes, 400 of it into zswap.
-	if tr := w.SwapTrend(relayNow.Add(6*time.Minute), at(1500, 400, 39000)); tr != (SwapTrend{DiskPerHourMiB: 1000, UsedPerHourMiB: 5000, AvailFalling: true, Rated: true, Window: window}) {
+	if tr := w.SwapTrend(relayNow.Add(6*time.Minute), at(1500, 400, 39000)); tr != (watch.SwapTrend{DiskPerHourMiB: 1000, UsedPerHourMiB: 5000, AvailFalling: true, Rated: true, Window: window}) {
 		t.Fatalf("6 minutes: %+v", tr)
 	}
 	if tr := w.SwapTrend(relayNow.Add(25*time.Minute), at(1500, 400, 41000)); tr.DiskPerHourMiB != 0 || tr.Rated || len(w.SwapSamples) != 1 {
@@ -225,14 +226,14 @@ func TestSwapTrendCountsZswapWritebackApart(t *testing.T) {
 	at := func(used, zswapped, writtenBack int) machine.Mem {
 		return machine.Mem{SwapUsedMiB: used, ZswappedMiB: zswapped, ZswapWrittenBackMiB: writtenBack, AvailableMiB: 30000}
 	}
-	w := &Watcher{Host: &app{cfg: cfg}}
+	w := &watch.Watcher{Host: &app{cfg: cfg}}
 	w.SwapTrend(relayNow, at(10000, 4000, 50000))
 	// 300 MiB written back in 6 minutes, swap in use flat: disk 6000 → 6300.
 	tr := w.SwapTrend(relayNow.Add(6*time.Minute), at(10000, 3700, 50300))
 	if tr.DiskPerHourMiB != 0 || tr.WritebackPerHourMiB != 3000 || tr.UsedPerHourMiB != 0 || tr.Pressing() {
 		t.Fatalf("writeback with swap flat is no disk growth: %+v", tr)
 	}
-	if line := SwapLine(at(10000, 3700, 50300), nil, tr); !strings.Contains(line, "disk +0 MiB/h, zswap writeback 3000 MiB/h") {
+	if line := watch.SwapLine(at(10000, 3700, 50300), nil, tr); !strings.Contains(line, "disk +0 MiB/h, zswap writeback 3000 MiB/h") {
 		t.Errorf("the line does not say the two apart: %s", line)
 	}
 	h := &capacity.Headroom{SwapGrowthMaxMiB: 256, Swap: &capacity.SwapReading{Rated: true, PerHourMiB: tr.DiskPerHourMiB, WritebackPerHourMiB: tr.WritebackPerHourMiB}}
@@ -240,7 +241,7 @@ func TestSwapTrendCountsZswapWritebackApart(t *testing.T) {
 		t.Errorf("the guard reacts to writeback: %q %v", line, blocks)
 	}
 	// The same writeback and 100 MiB swapped out to disk past zswap.
-	w = &Watcher{Host: &app{cfg: cfg}}
+	w = &watch.Watcher{Host: &app{cfg: cfg}}
 	w.SwapTrend(relayNow, at(10000, 4000, 50000))
 	tr = w.SwapTrend(relayNow.Add(6*time.Minute), at(10100, 3700, 50300))
 	if tr.DiskPerHourMiB != 1000 || tr.WritebackPerHourMiB != 3000 {
@@ -259,21 +260,21 @@ func TestOomdImminentNeedsAWatchedCgroupAndDiskGrowth(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w := &Watcher{Host: &app{cfg: cfg}}
+	w := &watch.Watcher{Host: &app{cfg: cfg}}
 	full := machine.Mem{SwapTotalMiB: 16383, SwapUsedMiB: 16383, ZswappedMiB: 14000}
-	grow := SwapTrend{DiskPerHourMiB: 100, UsedPerHourMiB: 100, AvailFalling: true, Rated: true}
+	grow := watch.SwapTrend{DiskPerHourMiB: 100, UsedPerHourMiB: 100, AvailFalling: true, Rated: true}
 	watched := &machine.OOMDSwap{LimitPercent: 90, Monitored: []string{swapCgroup}}
 	for name, c := range map[string]struct {
 		oomd *machine.OOMDSwap
-		t    SwapTrend
+		t    watch.SwapTrend
 		want bool
 	}{
 		"watched, growing":      {watched, grow, true},
 		"unwatched":             {&machine.OOMDSwap{LimitPercent: 90}, grow, false},
 		"unknown":               {nil, grow, false},
-		"full, flat":            {watched, SwapTrend{Rated: true, AvailFalling: true}, false},
-		"growing, RAM recovers": {watched, SwapTrend{DiskPerHourMiB: 100, Rated: true}, false},
-		"growth not yet rated":  {watched, SwapTrend{}, false},
+		"full, flat":            {watched, watch.SwapTrend{Rated: true, AvailFalling: true}, false},
+		"growing, RAM recovers": {watched, watch.SwapTrend{DiskPerHourMiB: 100, Rated: true}, false},
+		"growth not yet rated":  {watched, watch.SwapTrend{}, false},
 	} {
 		if got := w.OomdImminent(full, c.oomd, c.t); got != c.want {
 			t.Errorf("%s: imminent %v, want %v", name, got, c.want)
@@ -283,16 +284,16 @@ func TestOomdImminentNeedsAWatchedCgroupAndDiskGrowth(t *testing.T) {
 
 // The swap check keys on disk swap: zswap's share sits in RAM.
 func TestSwapOverIgnoresZswap(t *testing.T) {
-	grow := SwapTrend{DiskPerHourMiB: 100, AvailFalling: true, Rated: true}
+	grow := watch.SwapTrend{DiskPerHourMiB: 100, AvailFalling: true, Rated: true}
 	zswapped := machine.Mem{SwapTotalMiB: 16383, SwapUsedMiB: 16383, ZswappedMiB: 14000}
-	if SwapOver(zswapped, grow, 10000) {
+	if watch.SwapOver(zswapped, grow, 10000) {
 		t.Error("swap over its max with 2383 MiB on disk")
 	}
 	onDisk := machine.Mem{SwapTotalMiB: 16383, SwapUsedMiB: 16383, ZswappedMiB: 1000}
-	if !SwapOver(onDisk, grow, 10000) {
+	if !watch.SwapOver(onDisk, grow, 10000) {
 		t.Error("15383 MiB on disk and growing is not over its max")
 	}
-	if SwapOver(onDisk, SwapTrend{Rated: true, AvailFalling: true}, 10000) {
+	if watch.SwapOver(onDisk, watch.SwapTrend{Rated: true, AvailFalling: true}, 10000) {
 		t.Error("disk swap that does not grow is over its max")
 	}
 }

@@ -21,6 +21,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 const (
@@ -704,7 +705,7 @@ func stubFresh(t *testing.T, live *[]*claude.Session) {
 }
 
 // pollStop runs the watch's stop step on the state read now and live.
-func pollStop(t *testing.T, w *Watcher, live []*claude.Session) {
+func pollStop(t *testing.T, w *watch.Watcher, live []*claude.Session) {
 	t.Helper()
 	st, err := watchApp(w.Host).store.Read()
 	if err != nil {
@@ -722,7 +723,7 @@ func TestParkedBackgroundSessionStopsAndResumes(t *testing.T) {
 	dir := t.TempDir()
 	p := state.Party{Session: bgID, Name: bgName}
 	parkedBackground(t, a, p, dir)
-	w := &Watcher{Host: a, Last: map[string]time.Time{}, Reported: map[string]bool{}}
+	w := &watch.Watcher{Host: a, Last: map[string]time.Time{}, Reported: map[string]bool{}}
 	live := []*claude.Session{{ID: bgID, Name: bgName, Background: true, LastActive: a.now}}
 	stubFresh(t, &live)
 	calls := stubBackground(t, "")
@@ -767,7 +768,7 @@ func TestParkedBackgroundStopAfterAResume(t *testing.T) {
 	p := state.Party{Session: bgID, Name: bgName}
 	parkedBackground(t, a, p, t.TempDir())
 	a.now = a.now.Add(time.Minute)
-	w := &Watcher{Host: a, Last: map[string]time.Time{}, Reported: map[string]bool{}}
+	w := &watch.Watcher{Host: a, Last: map[string]time.Time{}, Reported: map[string]bool{}}
 	live := []*claude.Session{{ID: bgID, Name: bgName, Background: true, PID: 4242, LastActive: a.now.Add(-time.Hour)}}
 	stubFresh(t, &live)
 	calls := stubBackground(t, "")
@@ -805,7 +806,7 @@ func TestParkedBackgroundWakeDuringTheStop(t *testing.T) {
 	plat.Machine = tableMachine{plat.Machine}
 	p := state.Party{Session: bgID, Name: bgName}
 	parkedBackground(t, a, p, t.TempDir())
-	w := &Watcher{Host: a, Last: map[string]time.Time{}, Reported: map[string]bool{}}
+	w := &watch.Watcher{Host: a, Last: map[string]time.Time{}, Reported: map[string]bool{}}
 	live := []*claude.Session{{ID: bgID, Name: bgName, Background: true, LastActive: a.now.Add(-time.Hour)}}
 	stubFresh(t, &live)
 	stubBackground(t, "")
@@ -881,7 +882,7 @@ func TestParkedBackgroundStopFails(t *testing.T) {
 		tries++
 		return "no such session", errors.New("exit status 1")
 	}
-	w := &Watcher{Host: a, Last: map[string]time.Time{}, Reported: map[string]bool{}}
+	w := &watch.Watcher{Host: a, Last: map[string]time.Time{}, Reported: map[string]bool{}}
 	live := []*claude.Session{{ID: bgID, Name: bgName, Background: true, LastActive: a.now.Add(-time.Hour)}}
 	stubFresh(t, &live)
 	for range 2 {
@@ -900,7 +901,7 @@ func TestParkedBackgroundWakeIsNotUndone(t *testing.T) {
 	dir := t.TempDir()
 	p := state.Party{Session: bgID, Name: bgName}
 	parkedBackground(t, a, p, dir)
-	w := &Watcher{Host: a, Last: map[string]time.Time{}, Reported: map[string]bool{}}
+	w := &watch.Watcher{Host: a, Last: map[string]time.Time{}, Reported: map[string]bool{}}
 	transcript := filepath.Join(a.cfg.Claude.ProjectsDir, "-w", bgID+".jsonl")
 	parkedTurn := `{"type":"user","cwd":"` + dir + `"}` + "\n" +
 		`{"type":"assistant","message":{"stop_reason":"end_turn","content":[{"type":"text","text":"parked"}]}}` + "\n"

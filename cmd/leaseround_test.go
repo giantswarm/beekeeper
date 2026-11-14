@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/lease"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 func TestLeaseClaimWaitNamesTheOverrun(t *testing.T) {
@@ -40,7 +41,7 @@ func TestWatchLeaseRound(t *testing.T) {
 	}
 	var out strings.Builder
 	a.out = &out
-	w := &Watcher{Host: a, Reported: map[string]bool{}, Last: map[string]time.Time{}}
+	w := &watch.Watcher{Host: a, Reported: map[string]bool{}, Last: map[string]time.Time{}}
 	w.StaleLeases(context.Background(), nil)
 	if out.Len() != 0 {
 		t.Fatalf("not past round: %q", out.String())

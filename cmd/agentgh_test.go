@@ -14,6 +14,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // The watch says each agent whose shell resolves a gh other than the agent's
@@ -52,7 +53,7 @@ func TestTheWatchSaysAnUnbrokeredGH(t *testing.T) {
 	}
 	set(map[string]string{own: filepath.Join(link, "gh"), plain: "/usr/bin/gh", missing: ghNone})
 	var out bytes.Buffer
-	w := &Watcher{Host: &app{cfg: cfg, store: store, now: now, out: &out}, Last: map[string]time.Time{}}
+	w := &watch.Watcher{Host: &app{cfg: cfg, store: store, now: now, out: &out}, Last: map[string]time.Time{}}
 	w.Unbrokered()
 	w.Unbrokered()
 	s := out.String()

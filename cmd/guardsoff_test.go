@@ -16,6 +16,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/merge"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 func TestPreToolUseGuardsOff(t *testing.T) {
@@ -162,7 +163,7 @@ func TestGuardsOffDevctlVersionGatePropagation(t *testing.T) {
 	if raw, err := waitReviewedRelease(ctx, repo, 1); err != nil || strings.TrimSpace(string(raw)) != wantSkip {
 		t.Fatalf("waitReviewedRelease with guards=false got %q, %v", raw, err)
 	}
-	if raw, err := ReadParkRelease(ctx, repo, ver); err != nil || strings.TrimSpace(string(raw)) != wantSkip {
+	if raw, err := watch.ReadParkRelease(ctx, repo, ver); err != nil || strings.TrimSpace(string(raw)) != wantSkip {
 		t.Fatalf("readParkRelease with guards=false got %q, %v", raw, err)
 	}
 	if res, err := runExecutionCIRerun(ctx, fakeDevctl, repo, 1); err != nil || strings.TrimSpace(res.Output) != wantSkip {

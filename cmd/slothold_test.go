@@ -11,6 +11,7 @@ import (
 	"github.com/gofrs/flock"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // A run holding a build slot past memcap.holdBound is one SLOT HELD LONG
@@ -45,7 +46,7 @@ func TestWatchSaysASlotHeldLong(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	w := &Watcher{Host: &app{cfg: cfg, out: &out}, Last: map[string]time.Time{}}
+	w := &watch.Watcher{Host: &app{cfg: cfg, out: &out}, Last: map[string]time.Time{}}
 
 	watchApp(w.Host).now = time.Date(2026, 10, 9, 20, 50, 0, 0, time.UTC)
 	w.SlotHolds()

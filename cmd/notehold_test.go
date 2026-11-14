@@ -14,6 +14,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // The board's statuses as the fake board names them.
@@ -352,7 +353,7 @@ func TestWatchReleasesTheHoldOfADefaultedOrOvertakenDecision(t *testing.T) {
 		name, ref, how string
 		due            time.Duration
 	}{
-		{paramDefault, github.Open, ClosedDefaulted, -time.Minute},
+		{paramDefault, github.Open, watch.ClosedDefaulted, -time.Minute},
 		{"overtaken", github.Merged, closedOvertaken, time.Hour},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

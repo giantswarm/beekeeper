@@ -18,6 +18,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/central/centraltest"
 	"github.com/giantswarm/beekeeper/internal/mailbox"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // The person, machine, agent and central server of the mailbox tests.
@@ -88,14 +89,14 @@ func slackReply(t *testing.T, seq int64, to, text string) mailbox.Delivery {
 // mailboxWatch is a standby watch on host desk whose central instance is
 // the stand-in mb behind a test muster; sent collects the deliveries, a
 // target in refuse does not take them.
-func mailboxWatch(t *testing.T, mb *mailboxStandIn, refuse ...string) (*Watcher, *[]string, func() string) {
+func mailboxWatch(t *testing.T, mb *mailboxStandIn, refuse ...string) (*watch.Watcher, *[]string, func() string) {
 	t.Helper()
 	w, sent, out, _ := mailboxWatchVia(t, mb, refuse...)
 	return w, sent, out
 }
 
 // mailboxWatchVia is mailboxWatch with its muster.
-func mailboxWatchVia(t *testing.T, mb *mailboxStandIn, refuse ...string) (*Watcher, *[]string, func() string, *centraltest.Muster) {
+func mailboxWatchVia(t *testing.T, mb *mailboxStandIn, refuse ...string) (*watch.Watcher, *[]string, func() string, *centraltest.Muster) {
 	t.Helper()
 	w, _, out := notifyingWatch(t, t.TempDir(), true)
 	w.Notifier = nil

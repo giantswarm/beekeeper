@@ -14,6 +14,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // The events of a configuration override, from its set to its end.
@@ -326,7 +327,7 @@ func loopSettleOverrides(l *loop.Loop, ctx context.Context, st *state.State) {
 		return a.loopTimerChecks(ctx, ts, a.now, held)
 	})
 	snapshot := *a
-	w := &Watcher{Host: &snapshot}
+	w := &watch.Watcher{Host: &snapshot}
 	for _, line := range lines {
 		w.EmitNow("timer", "%s", line)
 	}

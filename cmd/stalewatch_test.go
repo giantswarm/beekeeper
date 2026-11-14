@@ -12,6 +12,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/proc"
+	"github.com/giantswarm/beekeeper/internal/watch"
 	"github.com/giantswarm/beekeeper/pkg/project"
 )
 
@@ -34,7 +35,7 @@ func TestStaleWatches(t *testing.T) {
 
 	var out bytes.Buffer
 	replaced := map[int]bool{}
-	w := &Watcher{Host: &app{out: &out, cfg: &config.Config{}}, Last: map[string]time.Time{}}
+	w := &watch.Watcher{Host: &app{out: &out, cfg: &config.Config{}}, Last: map[string]time.Time{}}
 	w.Owners.Store(&map[int]string{10: "Supervisor 3"})
 	w.Replaced = func(pid int) (string, bool) { return path, replaced[pid] }
 	w.VersionOf = func(_ context.Context, file string) string {
@@ -82,7 +83,7 @@ func TestStaleWatches(t *testing.T) {
 func TestWatchReportsFailedGateAfterInstall(t *testing.T) {
 	const path = "/home/u/.go/bin/beekeeper"
 	var out bytes.Buffer
-	w := &Watcher{Host: &app{out: &out, cfg: &config.Config{}}, Last: map[string]time.Time{}}
+	w := &watch.Watcher{Host: &app{out: &out, cfg: &config.Config{}}, Last: map[string]time.Time{}}
 	w.Replaced = func(int) (string, bool) { return path, true }
 	w.VersionOf = func(context.Context, string) string { return "v8.8.8" }
 	w.GateOf = func(context.Context, string) error {

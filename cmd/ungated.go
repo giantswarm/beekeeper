@@ -10,6 +10,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/proc"
+	"github.com/giantswarm/beekeeper/internal/watch"
 	"github.com/giantswarm/beekeeper/pkg/project"
 )
 
@@ -159,7 +160,7 @@ func ungatedLine(t *proc.Table, p *proc.Process, session string) string {
 
 // watchUngated says each devctl merge or promotion that runs outside the gate,
 // one UNGATED MERGE line when it is found and one ENDED line when it ends.
-func watchUngated(w *Watcher, sessions []*claude.Session, t *proc.Table) {
+func watchUngated(w *watch.Watcher, sessions []*claude.Session, t *proc.Table) {
 	found := map[string]bool{}
 	for _, m := range ungatedMerges(sessions, t) {
 		key := fmt.Sprintf("%s%d", ungatedKey, m.PID)

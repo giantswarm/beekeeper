@@ -17,6 +17,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 func sessionReportFixture(t *testing.T) *app {
@@ -254,7 +255,7 @@ func TestDoctorKeepsSessionUntilItsQueuedReportApplies(t *testing.T) {
 		t.Fatal("precondition: the session is not gone")
 	}
 
-	rep, err := a.doctor(t.Context(), doctorRun{by: WatchParty, dryRun: true})
+	rep, err := a.doctor(t.Context(), doctorRun{by: watch.WatchParty, dryRun: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,7 +264,7 @@ func TestDoctorKeepsSessionUntilItsQueuedReportApplies(t *testing.T) {
 	}) {
 		t.Fatalf("dry run does not name the waiting report: %q", rep.chores)
 	}
-	if _, err := a.doctor(t.Context(), doctorRun{by: WatchParty}); err != nil {
+	if _, err := a.doctor(t.Context(), doctorRun{by: watch.WatchParty}); err != nil {
 		t.Fatal(err)
 	}
 	// The loop's own roster tidy removes through the same path.
@@ -286,7 +287,7 @@ func TestDoctorKeepsSessionUntilItsQueuedReportApplies(t *testing.T) {
 	if r, ok := st.ReportReceipts[id]; !ok || r.Error != "" || len(st.Agents) != 1 || !st.Agents[0].Done {
 		t.Fatalf("report not applied: receipt %+v, roster %+v", st.ReportReceipts, st.Agents)
 	}
-	rep, err = a.doctor(t.Context(), doctorRun{by: WatchParty})
+	rep, err = a.doctor(t.Context(), doctorRun{by: watch.WatchParty})
 	if err != nil {
 		t.Fatal(err)
 	}

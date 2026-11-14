@@ -22,6 +22,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // The sessions of the stop's tests: a worker beekeeper started, a session
@@ -224,7 +225,7 @@ func TestStopAndResume(t *testing.T) {
 		t.Errorf("a forced start's gate while stopped: %v", err)
 	}
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
-		_, _, fires, _ := SettleTimers(st, nil, a.now)
+		_, _, fires, _ := watch.SettleTimers(st, nil, a.now)
 		if len(fires) != 0 || len(st.Timers) != 1 {
 			t.Errorf("a wake timer fired while stopped: %+v", fires)
 		}
@@ -251,7 +252,7 @@ func TestStopAndResume(t *testing.T) {
 	if s := out.String(); !strings.Contains(s, "resume: lifted the hold on github") || !strings.Contains(s, "wait for a wake (beekeeper agents wake): ") {
 		t.Errorf("resume's output:\n%s", s)
 	}
-	_, _, fires, _ := SettleTimers(st, nil, a.now)
+	_, _, fires, _ := watch.SettleTimers(st, nil, a.now)
 	if len(fires) != 1 {
 		t.Errorf("the wake timer did not fire after the resume: %+v", fires)
 	}

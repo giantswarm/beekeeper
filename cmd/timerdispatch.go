@@ -21,6 +21,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 func (a *app) timerDispatchCmd() *cobra.Command {
@@ -141,7 +142,7 @@ func (d *timerDispatchSession) close() {
 	d.batches.Wait()
 }
 
-func (d *timerDispatchSession) pass(a *app) (*Watcher, error) {
+func (d *timerDispatchSession) pass(a *app) (*watch.Watcher, error) {
 	// Stop intent is read from the atomic snapshot: a locked read would queue
 	// this pass behind every writer before any due timer is even looked at.
 	stopped, err := timerStopRequested(a.store)
@@ -151,7 +152,7 @@ func (d *timerDispatchSession) pass(a *app) (*Watcher, error) {
 	if stopped {
 		d.close()
 		d.ctx, d.cancel = context.WithCancel(d.parent)
-		return &Watcher{Host: a.snapshotAtNow()}, nil
+		return &watch.Watcher{Host: a.snapshotAtNow()}, nil
 	}
 	w, err := a.dispatchTimerPass(d.ctx)
 	if err != nil {
@@ -177,13 +178,13 @@ func (d *timerDispatchSession) pass(a *app) (*Watcher, error) {
 // the dispatcher was ticking. Only the settlement below takes the lock, and it
 // settles against the current state, so a snapshot that a writer has just
 // superseded costs at most a repeated check, never a double claim.
-func (a *app) dispatchTimerPass(ctx context.Context) (*Watcher, error) {
+func (a *app) dispatchTimerPass(ctx context.Context) (*watch.Watcher, error) {
 	st, err := a.store.Peek()
 	if err != nil {
 		return nil, err
 	}
 	batch := a.snapshotAtNow()
-	w := &Watcher{Host: batch, Clock: WallClock{}}
+	w := &watch.Watcher{Host: batch, Clock: watch.WallClock{}}
 	if st.Stop != nil {
 		return w, nil
 	}
@@ -232,7 +233,7 @@ func (a *app) dispatchTimerPass(ctx context.Context) (*Watcher, error) {
 		var events []state.Event
 		lines, events, fires, _ = settleTimersMatching(current, found, now, timerTick, nil)
 		for _, line := range lines {
-			events = append(events, event(WatchParty, "watch.timer", "%s", line))
+			events = append(events, event(watch.WatchParty, "watch.timer", "%s", line))
 		}
 		return events, nil
 	})

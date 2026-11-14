@@ -14,6 +14,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // loopBroker puts the sandbox's broker onto the binary installed at the
@@ -244,14 +245,14 @@ func loopFireTimers(l *loop.Loop, ctx context.Context, st *state.State) error {
 		var evs []state.Event
 		lines, evs, fires, _ = settleTimersMatching(current, found, a.timeNow(), a.cfg.Supervisor.LoopInterval.Duration, timerActs)
 		for _, line := range lines {
-			evs = append(evs, event(WatchParty, "watch.timer", "%s", line))
+			evs = append(evs, event(watch.WatchParty, "watch.timer", "%s", line))
 		}
 		return evs, nil
 	}); err != nil {
 		return err
 	}
 	// Each batch keeps its own time while later passes advance the clock.
-	w := &Watcher{Host: a.snapshotAtNow()}
+	w := &watch.Watcher{Host: a.snapshotAtNow()}
 	for _, line := range lines {
 		w.OutputEvent(line)
 	}

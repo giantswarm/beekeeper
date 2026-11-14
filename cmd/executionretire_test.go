@@ -12,6 +12,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 const (
@@ -35,7 +36,7 @@ func (f *retireTransport) Retire(_ context.Context, ref execution.Ref, q executi
 
 // retireFixture is an ended execution whose log reached the transcript store,
 // shaped by change, and the watcher and transport that retire it.
-func retireFixture(t *testing.T, change func(*state.State, *state.ExecutionRecord)) (*app, *Watcher, *retireTransport, execution.Ref) {
+func retireFixture(t *testing.T, change func(*state.State, *state.ExecutionRecord)) (*app, *watch.Watcher, *retireTransport, execution.Ref) {
 	t.Helper()
 	a, r := executionTestApp(t)
 	fake := &retireTransport{testExecutionTransport: &testExecutionTransport{}}
@@ -51,7 +52,7 @@ func retireFixture(t *testing.T, change func(*state.State, *state.ExecutionRecor
 	}); err != nil {
 		t.Fatal(err)
 	}
-	return a, &Watcher{Host: a}, fake, r.Ref
+	return a, &watch.Watcher{Host: a}, fake, r.Ref
 }
 
 func retirementOf(t *testing.T, a *app, ref execution.Ref) *state.ExecutionRetirement {
@@ -64,7 +65,7 @@ func retirementOf(t *testing.T, a *app, ref execution.Ref) *state.ExecutionRetir
 	return rec.Retirement
 }
 
-func tick(t *testing.T, a *app, w *Watcher) {
+func tick(t *testing.T, a *app, w *watch.Watcher) {
 	t.Helper()
 	st, err := a.store.Read()
 	if err != nil {
@@ -117,7 +118,7 @@ func TestExecutionRetirementTriggers(t *testing.T) {
 				if tc.change != nil {
 					tc.change(st, r)
 				}
-				got = ExecutionRetirementTrigger(st, r)
+				got = watch.ExecutionRetirementTrigger(st, r)
 			})
 			if got != tc.want {
 				t.Fatalf("trigger = %q, want %q", got, tc.want)
@@ -282,7 +283,7 @@ func TestExecutionRetirementWaitsForAnOlderHost(t *testing.T) {
 	if !x.RetiredAt.IsZero() || x.HostError == "" || !x.NextAttempt.After(watchApp(w.Host).now) {
 		t.Fatalf("retirement = %+v", x)
 	}
-	if w.IsActive(ExecutionRetireEmitKey) {
+	if w.IsActive(watch.ExecutionRetireEmitKey) {
 		t.Fatal("an older host was raised as a failure")
 	}
 }
@@ -292,7 +293,7 @@ func TestExecutionRetirementBoundsATick(t *testing.T) {
 	a, w, fake, _ := retireFixture(t, func(st *state.State, _ *state.ExecutionRecord) {
 		first := st.Starts[0]
 		st.Agents = nil
-		for range ExecutionRetireBatch {
+		for range watch.ExecutionRetireBatch {
 			next := first
 			copied := *first.Execution
 			copied.Handle.Ref.Execution = execution.ExecutionID(uuid.NewString())
@@ -301,11 +302,11 @@ func TestExecutionRetirementBoundsATick(t *testing.T) {
 		}
 	})
 	tick(t, a, w)
-	if len(fake.requests) != ExecutionRetireBatch {
+	if len(fake.requests) != watch.ExecutionRetireBatch {
 		t.Fatalf("first tick retired %d", len(fake.requests))
 	}
 	tick(t, a, w)
-	if len(fake.requests) != ExecutionRetireBatch+1 {
+	if len(fake.requests) != watch.ExecutionRetireBatch+1 {
 		t.Fatalf("second tick left a total of %d", len(fake.requests))
 	}
 }

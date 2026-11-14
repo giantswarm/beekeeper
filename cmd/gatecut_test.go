@@ -13,11 +13,12 @@ import (
 	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // cutWatch is a watch whose state holds merge m of the registered agent
 // four, its wakes recorded.
-func cutWatch(t *testing.T, m state.Merge) (*Watcher, *[]string) {
+func cutWatch(t *testing.T, m state.Merge) (*watch.Watcher, *[]string) {
 	t.Helper()
 	w, _, _ := notifyingWatch(t, t.TempDir(), false)
 	if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
@@ -38,7 +39,7 @@ func cutWatch(t *testing.T, m state.Merge) (*Watcher, *[]string) {
 }
 
 // polls runs the watch's merge and owed-outcome steps n times.
-func polls(w *Watcher, n int) {
+func polls(w *watch.Watcher, n int) {
 	for range n {
 		w.LostMerges(context.Background())
 		w.OwedOutcomes(context.Background())
@@ -47,7 +48,7 @@ func polls(w *Watcher, n int) {
 
 // cutQueuedRun leaves the files of a queued run's merge-child cut with the
 // machine: its pid, dead, and no exit code. It returns their base.
-func cutQueuedRun(t *testing.T, w *Watcher) string {
+func cutQueuedRun(t *testing.T, w *watch.Watcher) string {
 	t.Helper()
 	base := filepath.Join(watchApp(w.Host).store.Dir(), ownedRuns, "pr-merge-o_r-7-4242")
 	if err := os.MkdirAll(filepath.Dir(base), 0o700); err != nil {

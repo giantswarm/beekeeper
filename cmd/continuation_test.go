@@ -17,6 +17,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 const continuationOldSession = "continuation-old-session"
@@ -315,7 +316,7 @@ func TestContinuationOfOpenPullPassesRealStartGates(t *testing.T) {
 			}
 			const message = "Guide run 32: verify #888.\n```\nSee https://github.com/other/repo/issues/99\n```"
 			if fromTimer {
-				w := &Watcher{Host: r.a}
+				w := &watch.Watcher{Host: r.a}
 				w.WakeTimer(t.Context(), timerFire{T: state.Timer{ID: 42, By: party, Wake: party.Name, Due: r.a.now, What: message}, Reason: paramDue})
 			} else if err := r.a.queueContinuation(loop.LoopParty, old, message); err != nil {
 				t.Fatal(err)

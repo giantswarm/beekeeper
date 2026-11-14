@@ -16,6 +16,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // servingModesRawCfg is a desk with one self-hosted provider served in two
@@ -813,7 +814,7 @@ func TestServingModesStatusAndWatch(t *testing.T) {
 }
 
 // openConditions returns the watch's open condition lines and clears them.
-func openConditions(w *Watcher) string {
+func openConditions(w *watch.Watcher) string {
 	w.Mu.Lock()
 	defer w.Mu.Unlock()
 	var lines []string

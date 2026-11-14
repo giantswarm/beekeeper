@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 const diskGrowthTestPath = "/cache/b"
@@ -228,7 +229,7 @@ func TestDiskPathGrowthAndReports(t *testing.T) {
 	if !strings.Contains(lines, "disk paths by size:") || !strings.Contains(lines, "disk paths by growth: \"/cache/b\"") || !strings.Contains(lines, "growth unknown") {
 		t.Fatal(lines)
 	}
-	dw := DiskWatch{Paths: cur}
+	dw := watch.DiskWatch{Paths: cur}
 	if line := dw.WritersLine(time.Now(), 0, nil, nil); !strings.Contains(line, "fastest-growing path: \"/cache/b\"") {
 		t.Fatal(line)
 	}

@@ -16,6 +16,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/post"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // reporterParty is who the standby watch's reporter events are by.
@@ -33,28 +34,28 @@ func reportDue(r *state.Report, pause *state.ReportPause, rc config.Reporter, no
 	case !r.Running():
 		switch {
 		case pause.FinalDue(now):
-			return ReportFinal
+			return watch.ReportFinal
 		case pause.Paused():
 		case r == nil || slot.After(r.Slot):
-			return ReportStart
+			return watch.ReportStart
 		}
 	case posted:
-		return ReportPosted
+		return watch.ReportPosted
 	case ended:
-		return ReportUnposted
+		return watch.ReportUnposted
 	case now.Sub(r.Started) >= rc.Timeout.Duration:
-		return ReportTimeout
+		return watch.ReportTimeout
 	case slot.After(r.Slot) && !r.Skipped.Equal(slot) && !pause.Paused():
-		return ReportSkip
+		return watch.ReportSkip
 	}
-	return ReportNone
+	return watch.ReportNone
 }
 
 // watchStartReport starts the current slot's reporter: one headless turn in
 // bypassPermissions in a transient user unit, registered on the roster busy
 // with the brief's first line. It is not imported into the desktop: the
 // command-line turn has the connectors, and the person's window stays put.
-func watchStartReport(w *Watcher, ctx context.Context, sessions []*claude.Session, action reportAction) error {
+func watchStartReport(w *watch.Watcher, ctx context.Context, sessions []*claude.Session, action reportAction) error {
 	rc := watchApp(w.Host).cfg.Reporter
 	brief, err := readBrief(rc.Brief)
 	if err != nil {
@@ -65,7 +66,7 @@ func watchStartReport(w *Watcher, ctx context.Context, sessions []*claude.Sessio
 		return err
 	}
 	slot := reportSlot(rc.Every.Duration, watchApp(w.Host).now)
-	final := action == ReportFinal
+	final := action == watch.ReportFinal
 	// A scheduled report covers the interval before its slot; the final one
 	// the time since the last report started, up to now.
 	from, to := slot.Add(-rc.Every.Duration), slot

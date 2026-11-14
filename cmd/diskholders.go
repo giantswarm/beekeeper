@@ -16,6 +16,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/diskprune"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // The state home (~/.local/state) collects holders no lifecycle owns: a
@@ -269,7 +270,7 @@ type stateHoldersMark struct {
 // judge them (a process it cannot read). A watch that finds a fresh listing
 // another watch made says that listing's condition instead of walking
 // again.
-func watchStateHolders(w *Watcher, now time.Time) {
+func watchStateHolders(w *watch.Watcher, now time.Time) {
 	cfg := watchApp(w.Host).cfg.Disk.Holders
 	if !w.HoldersOn || cfg.WarnGiB < 0 || !w.Holdering.CompareAndSwap(false, true) {
 		return

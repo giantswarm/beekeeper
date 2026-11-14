@@ -14,6 +14,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // The limits a decision's message renders within (klaus-gateway's Slack
@@ -434,7 +435,7 @@ func (a *app) keepRoleLine(rl role, line string) error {
 func (a *app) quietWake(ctx context.Context, by state.Party, q, line string) error {
 	quiet := *a
 	quiet.out = io.Discard
-	if by.Name == WatchParty.Name {
+	if by.Name == watch.WatchParty.Name {
 		st, err := a.store.Read()
 		if err != nil {
 			return err

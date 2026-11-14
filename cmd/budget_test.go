@@ -20,6 +20,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // graphqlRefusedText is GitHub's refusal of a GraphQL call while its
@@ -179,7 +180,7 @@ func TestWatchSaysAGraphQLRefusalOnce(t *testing.T) {
 	a, out := budgetApp(t)
 	a.cfg.Merge.BudgetFresh.Duration = 0
 	a.cfg.Watch.Repeat.Duration = time.Hour
-	w := &Watcher{Host: a, Last: map[string]time.Time{}}
+	w := &watch.Watcher{Host: a, Last: map[string]time.Time{}}
 	for range 2 {
 		w.Budget(context.Background(), time.Now())
 	}

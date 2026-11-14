@@ -15,6 +15,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 const browser = "browser"
@@ -170,11 +171,11 @@ func TestRelievedSurvivesTheSuccessorsRelays(t *testing.T) {
 	if len(st.Guide.Relieved) != 2 {
 		t.Fatalf("one relief per party: %+v", st.Guide.Relieved)
 	}
-	// A relief nobody asked about for reliefTTL goes with the next start.
-	if err := relay(supA, supB, ReliefTTL+time.Hour); err != nil {
+	// A relief nobody asked about for watch.ReliefTTL goes with the next start.
+	if err := relay(supA, supB, watch.ReliefTTL+time.Hour); err != nil {
 		t.Fatal(err)
 	}
-	if err := start(supB, ReliefTTL+time.Hour+time.Minute); err != nil {
+	if err := start(supB, watch.ReliefTTL+time.Hour+time.Minute); err != nil {
 		t.Fatal(err)
 	}
 	if len(st.Guide.Relieved) != 1 || !st.Guide.Relieved[0].Party.Is(supA) {
@@ -308,8 +309,8 @@ type fakeLoopService struct {
 	refusal error
 }
 
-func (f *fakeLoopService) service() *LoopService {
-	return &LoopService{
+func (f *fakeLoopService) service() *watch.LoopService {
+	return &watch.LoopService{
 		State: func(context.Context) string { return f.state },
 		Start: func(context.Context) error {
 			f.starts++

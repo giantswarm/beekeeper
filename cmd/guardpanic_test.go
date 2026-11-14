@@ -12,6 +12,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 const panicCWDKey = "cwd"
@@ -111,7 +112,7 @@ func TestAnnotationHookPanicsLogAndStayOpen(t *testing.T) {
 			}
 			a.store = store
 			a.now = events[0].At.Add(-time.Second)
-			w := &Watcher{Host: a, Last: map[string]time.Time{}, RefusedSince: a.now}
+			w := &watch.Watcher{Host: a, Last: map[string]time.Time{}, RefusedSince: a.now}
 			w.Refusals()
 			w.Refusals()
 			if strings.Count(out.String(), "HOOK PANIC") != 1 || !strings.Contains(out.String(), hook) {

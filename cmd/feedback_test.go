@@ -17,6 +17,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/central/centraltest"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // reportTS is the report post's ts in the tests.
@@ -56,7 +57,7 @@ const feedbackThread = `{"messages":"=== THREAD PARENT MESSAGE ===\nFrom: Ada (U
 
 // feedbackWatch is a reporting standby watch whose feedback watch reads
 // slack through a test muster; sent collects the deliveries.
-func feedbackWatch(t *testing.T) (*Watcher, *slackStandIn, *[]string, *bytes.Buffer) {
+func feedbackWatch(t *testing.T) (*watch.Watcher, *slackStandIn, *[]string, *bytes.Buffer) {
 	t.Helper()
 	dir := t.TempDir()
 	w, _, out := reportingWatch(t, dir)

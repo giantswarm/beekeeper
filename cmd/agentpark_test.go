@@ -15,6 +15,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 const parkVerificationUnavailable = "verification unavailable"
@@ -27,7 +28,7 @@ const (
 
 // parkingWatch is a running watch over a roster of agentOne with a task and
 // note #3 open for Alex, the calling session agentOne; GitHub answers refs.
-func parkingWatch(t *testing.T, refs map[string]string) *Watcher {
+func parkingWatch(t *testing.T, refs map[string]string) *watch.Watcher {
 	t.Helper()
 	w, _ := overtakingWatch(t, refs)
 	beforeREST := readParkRefREST
@@ -46,7 +47,7 @@ func parkingWatch(t *testing.T, refs map[string]string) *Watcher {
 	return w
 }
 
-func park(t *testing.T, w *Watcher, args ...string) error {
+func park(t *testing.T, w *watch.Watcher, args ...string) error {
 	t.Helper()
 	c := watchApp(w.Host).agentParkCmd()
 	c.SetArgs(args)
@@ -55,7 +56,7 @@ func park(t *testing.T, w *Watcher, args ...string) error {
 	return c.Execute()
 }
 
-func agentOf(t *testing.T, w *Watcher) state.Agent {
+func agentOf(t *testing.T, w *watch.Watcher) state.Agent {
 	t.Helper()
 	st, err := watchApp(w.Host).store.Read()
 	if err != nil {
@@ -65,7 +66,7 @@ func agentOf(t *testing.T, w *Watcher) state.Agent {
 }
 
 // answer closes note #3 with Alex's answer, as note answer does.
-func answer(t *testing.T, w *Watcher) {
+func answer(t *testing.T, w *watch.Watcher) {
 	t.Helper()
 	if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 		n := st.Notes[0]
@@ -248,7 +249,7 @@ func TestResumeByHand(t *testing.T) {
 }
 
 // resume runs agents resume as the calling session (agentOne) with args.
-func resume(t *testing.T, w *Watcher, args ...string) error {
+func resume(t *testing.T, w *watch.Watcher, args ...string) error {
 	t.Helper()
 	c := watchApp(w.Host).agentResumeCmd()
 	c.SetArgs(args)
@@ -866,7 +867,7 @@ func TestDeskReviewParkSaysVerificationPending(t *testing.T) {
 
 // A settled wait is a durable event for the next fresh worker, never a turn
 // of the session that parked. Repeated settlement must not grow the brief.
-func assertFreshQueue(t *testing.T, w *Watcher, woke []string, contains string) {
+func assertFreshQueue(t *testing.T, w *watch.Watcher, woke []string, contains string) {
 	t.Helper()
 	ag := agentOf(t, w)
 	if len(woke) != 0 || ag.Park == nil || len(ag.Park.Continuation) != 1 || !strings.Contains(ag.Park.Continuation[0], contains) {

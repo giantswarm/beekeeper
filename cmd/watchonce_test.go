@@ -10,11 +10,12 @@ import (
 	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // onceWatch is a --once watch (it writes nothing) on a note linked to refOne
 // and refTwo, with GitHub answering read.
-func onceWatch(t *testing.T, read func(context.Context, []github.PR) (map[github.PR]github.RefState, error)) (*Watcher, *strings.Builder) {
+func onceWatch(t *testing.T, read func(context.Context, []github.PR) (map[github.PR]github.RefState, error)) (*watch.Watcher, *strings.Builder) {
 	t.Helper()
 	w, _ := overtakingWatch(t, nil)
 	w.Chores = false

@@ -10,6 +10,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // failedLauncher has failed units and records the ones it reset.
@@ -122,7 +123,7 @@ func TestDoctorStopsRunnerUnitsWithoutLiveSession(t *testing.T) {
 		l := &failedLauncher{running: running}
 		plat.Launcher = l
 		var a *app
-		line := a.doctorRunnerUnits(context.Background(), st, busy, WatchParty, tc.dryRun)
+		line := a.doctorRunnerUnits(context.Background(), st, busy, watch.WatchParty, tc.dryRun)
 		if line != tc.prefix || !slices.Equal(l.stopped, tc.stopped) {
 			t.Errorf("%s: line = %q (want %q), stopped = %v (want %v)", name, line, tc.prefix, l.stopped, tc.stopped)
 		}

@@ -15,6 +15,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 func TestGuideRelayDueFiresOncePerTerm(t *testing.T) {
@@ -330,9 +331,9 @@ func TestGuideCentralFeedLifecycle(t *testing.T) {
 		t.Run(verb, func(t *testing.T) {
 			a := &app{cfg: &config.Config{}}
 			a.cfg.Guide.Person = guideNoteReader
-			a.cfg.Central.Context = CentralKey
+			a.cfg.Central.Context = watch.CentralKey
 			st := &state.State{Notes: []state.Note{{ID: 1, For: guideNoteReader, Text: "local?"}}}
-			notes := []state.Note{{ID: 1, Central: CentralKey, For: guideNoteReader, Text: "central?"}, {ID: 2, Central: CentralKey, For: "Someone else", Text: "other?"}}
+			notes := []state.Note{{ID: 1, Central: watch.CentralKey, For: guideNoteReader, Text: "central?"}, {ID: 2, Central: watch.CentralKey, For: "Someone else", Text: "other?"}}
 			lines, changed := a.centralGuideLines(st, nil, notes, nil, true)
 			if !changed || len(lines) != 1 || !strings.Contains(lines[0], "GUIDE DECISION: central#1") {
 				t.Fatalf("first poll: %q, %v", lines, changed)

@@ -16,6 +16,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/central/centraltest"
 	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 const (
@@ -77,13 +78,13 @@ func (p *person) run(args ...string) (string, int) {
 }
 
 // watcher is the person's watch, its lines into out.
-func (p *person) watcher(out *bytes.Buffer) *Watcher {
+func (p *person) watcher(out *bytes.Buffer) *watch.Watcher {
 	p.t.Helper()
 	a := &app{cfgPath: p.cfg, out: out}
 	if err := a.load(); err != nil {
 		p.t.Fatal(err)
 	}
-	return &Watcher{Host: a, Last: map[string]time.Time{}}
+	return &watch.Watcher{Host: a, Last: map[string]time.Time{}}
 }
 
 // Two people's machines share an installation through the central instance:

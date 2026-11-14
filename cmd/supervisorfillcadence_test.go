@@ -10,6 +10,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/superloop"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // Given an observation pass blocked reading a pull, when the independent
@@ -233,7 +234,7 @@ func TestRefillCadenceRefreshesWatchWithoutPass(t *testing.T) {
 			case loop.LoopDiskKind:
 				w.PublishDisk(watchDiskReading{FreeMiB: 200, MinMiB: 100})
 			case kindStale:
-				e := event(WatchParty, "watch.budget-state", "false")
+				e := event(watch.WatchParty, "watch.budget-state", "false")
 				e.At = r.a.timeNow()
 				if err := r.a.store.Record(e); err != nil {
 					t.Fatal(err)

@@ -13,6 +13,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // A lane whose arrived merge waits behind a seed that has not arrived is
@@ -59,7 +60,7 @@ func TestLanesAndWatchSayAStall(t *testing.T) {
 	}
 
 	out.Reset()
-	w := &Watcher{Host: a, Last: map[string]time.Time{}}
+	w := &watch.Watcher{Host: a, Last: map[string]time.Time{}}
 	w.Stalls()
 	w.Stalls()
 	if lines := strings.Count(out.String(), "LANE STALLED ap: stalled for"); lines != 1 {
@@ -110,7 +111,7 @@ func TestWatchSettlesALaneReadyAfterTheSettleTimeout(t *testing.T) {
 	var out bytes.Buffer
 	a := &app{cfg: cfg, store: store, now: now, out: &out}
 	raw, readErr := gazelleHRs("4.78.0", "True"), error(nil)
-	w := &Watcher{Host: a, Last: map[string]time.Time{}, ReadHRs: func(context.Context, config.Lane) ([]merge.HelmRelease, error) {
+	w := &watch.Watcher{Host: a, Last: map[string]time.Time{}, ReadHRs: func(context.Context, config.Lane) ([]merge.HelmRelease, error) {
 		if readErr != nil {
 			return nil, readErr
 		}
@@ -169,7 +170,7 @@ func TestWatchUnknownReleaseNamesRecoveryAndRegistration(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	w := &Watcher{Host: &app{cfg: cfg, store: store, out: &out, now: now}, Last: map[string]time.Time{}, ReadHRs: func(context.Context, config.Lane) ([]merge.HelmRelease, error) { return nil, nil }}
+	w := &watch.Watcher{Host: &app{cfg: cfg, store: store, out: &out, now: now}, Last: map[string]time.Time{}, ReadHRs: func(context.Context, config.Lane) ([]merge.HelmRelease, error) { return nil, nil }}
 	w.Settled(context.Background(), now)
 	for _, want := range []string{"LANE STUCK", "devctl release wait o/r --pr 7", "beekeeper lanes settle o/r 7 --release <version>"} {
 		if !strings.Contains(out.String(), want) {

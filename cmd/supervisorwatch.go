@@ -8,11 +8,12 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // The installed loop owns a watch for its entire lifetime. Use a separate
 // app value: both loops update their clock and transcript cache.
-var runLoopWatch = func(ctx context.Context, w *Watcher) error { return w.Run(ctx, false) }
+var runLoopWatch = func(ctx context.Context, w *watch.Watcher) error { return w.Run(ctx, false) }
 
 func (a *app) startLoopWatch(ctx context.Context) func() {
 	ctx, cancel := context.WithCancel(ctx)

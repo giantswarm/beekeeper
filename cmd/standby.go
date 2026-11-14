@@ -11,6 +11,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/peer"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 func continueURL(host string) string { return "claude://code/continue?session=" + host }
@@ -35,7 +36,7 @@ func relayPending(st *state.State, r state.Role, now time.Time) bool {
 // succeedFromWatch starts rl's next run for the standby watch, in the gone
 // holder's folder.
 func (a *app) succeedFromWatch(ctx context.Context, rl role, from state.Party) (state.Party, error) {
-	to, _, err := a.startSuccessor(ctx, rl, from, WatchParty, "")
+	to, _, err := a.startSuccessor(ctx, rl, from, watch.WatchParty, "")
 	return to, err
 }
 
@@ -168,7 +169,7 @@ func sendRequest(host, msg string) string {
 
 // watchNoteFailedSuccessor files the one note for the person on rl's first
 // successor that did not come up, and returns its number (0: none filed).
-func watchNoteFailedSuccessor(w *Watcher, rl role, holder state.Party) int {
+func watchNoteFailedSuccessor(w *watch.Watcher, rl role, holder state.Party) int {
 	person := watchApp(w.Host).cfg.Guide.Person
 	if person == "" {
 		return 0
@@ -184,10 +185,10 @@ func watchNoteFailedSuccessor(w *Watcher, rl role, holder state.Party) int {
 	_ = watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 		st.NextNote++
 		id = st.NextNote
-		n := state.Note{ID: id, For: person, Text: d.text(), By: WatchParty, At: watchApp(w.Host).now.UTC(), Kind: noteDecision,
+		n := state.Note{ID: id, For: person, Text: d.text(), By: watch.WatchParty, At: watchApp(w.Host).now.UTC(), Kind: noteDecision,
 			Default: fmt.Sprintf("the standby watch starts at most %d successors, %s apart and doubling", maxFailedSuccessors, dur(successorBackoff))}
 		st.Notes = append(st.Notes, n)
-		return []state.Event{event(WatchParty, "note.add", "#%d %s", n.ID, n.Text)}, nil
+		return []state.Event{event(watch.WatchParty, "note.add", "#%d %s", n.ID, n.Text)}, nil
 	})
 	return id
 }

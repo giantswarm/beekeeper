@@ -11,6 +11,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // The team and management cluster of the quiet tests.
@@ -51,7 +52,7 @@ func quietLog(t *testing.T, a *app) []string {
 func TestShortLivedSessionsAreQuiet(t *testing.T) {
 	var out bytes.Buffer
 	a := quietApp(t, &out)
-	w := &Watcher{Host: a}
+	w := &watch.Watcher{Host: a}
 	w.Sessions = map[string]*claude.Session{"local_1": {ID: "s1", HostID: "local_1", Name: "test: wake-target"}}
 	w.SessionChanges([]*claude.Session{
 		{ID: "s2", HostID: "local_2", Name: "test: beekeeper#54 probe sender 3"},

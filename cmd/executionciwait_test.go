@@ -11,6 +11,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 func TestExecutionCIParkSurvivesLostReplyAndWakesOnResult(t *testing.T) {
@@ -46,31 +47,31 @@ func TestExecutionCIParkSurvivesLostReplyAndWakesOnResult(t *testing.T) {
 			if p == nil || !p.Checks || p.ReviewHead != "" || p.PostMerge != nil || st.Starts[0].Execution.Completed || len(st.ReviewParks) != 0 || len(st.Timers) != 1 {
 				t.Fatalf("CI wait became review/completion or duplicated: park %+v, timers %+v", p, st.Timers)
 			}
-			w := &Watcher{Host: a}
+			w := &watch.Watcher{Host: a}
 			if settled := w.SettledParks(context.Background(), st); len(settled) != 0 {
 				t.Fatalf("ordinary PR settlement handled CI park: %+v", settled)
 			}
-			if !TimerSettlesPark(st.Timers[0], p, a.cfg.Guide.Person) {
+			if !watch.TimerSettlesPark(st.Timers[0], p, a.cfg.Guide.Person) {
 				t.Fatal("CI timer cannot wake its park")
 			}
 			answer := ciAnswer("OPEN", ciRunning)
 			readErr := errors.New("CI read unavailable")
 			fakeRead(t, func(string) ([]byte, error) { return answer, readErr })
 			found := checkTimers(context.Background(), st.Timers, a.now, false)
-			_, _, fires, _ := SettleTimers(st, found, a.now)
+			_, _, fires, _ := watch.SettleTimers(st, found, a.now)
 			if len(fires) != 0 || len(st.Timers) != 1 {
 				t.Fatal("unreadable CI woke worker")
 			}
 			readErr = nil
 			found = checkTimers(context.Background(), st.Timers, a.now.Add(timerEvery), false)
-			_, _, fires, _ = SettleTimers(st, found, a.now.Add(timerEvery))
+			_, _, fires, _ = watch.SettleTimers(st, found, a.now.Add(timerEvery))
 			if len(fires) != 0 || len(st.Timers) != 1 {
 				t.Fatal("running CI woke worker")
 			}
 			answer = ciAnswer("OPEN", result)
 			now := a.now.Add(2 * timerEvery)
 			found = checkTimers(context.Background(), st.Timers, now, false)
-			_, _, fires, _ = SettleTimers(st, found, now)
+			_, _, fires, _ = watch.SettleTimers(st, found, now)
 			if len(fires) != 1 || len(st.Timers) != 1 || fires[0].T.Wake != r.Name || !strings.Contains(fires[0].Message(), "CI ") {
 				t.Fatalf("settled CI did not produce worker wake: %+v", fires)
 			}
@@ -85,11 +86,11 @@ func TestExecutionCIParkSurvivesLostReplyAndWakesOnResult(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, _, fires, _ = SettleTimers(restarted, found, now)
+			_, _, fires, _ = watch.SettleTimers(restarted, found, now)
 			if len(fires) != 1 {
 				t.Fatal("restart lost the CI wake before outbox insertion")
 			}
-			w = &Watcher{Host: a}
+			w = &watch.Watcher{Host: a}
 			// A replaced park cannot consume an old timer's wake.
 			if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 				st.Agents[0].Park.At = p.At.Add(time.Second)
@@ -157,7 +158,7 @@ func TestExecutionCIParkWakesAtItsDeadline(t *testing.T) {
 	if len(st.Timers) != 1 || st.Timers[0].Until.IsZero() {
 		t.Fatalf("CI wait has no deadline: %+v", st.Timers)
 	}
-	_, _, fires, _ := SettleTimers(st, map[int]checkResult{}, st.Timers[0].Until.Add(time.Minute))
+	_, _, fires, _ := watch.SettleTimers(st, map[int]checkResult{}, st.Timers[0].Until.Add(time.Minute))
 	if len(fires) != 1 || fires[0].T.Wake != r.Name || !fires[0].TimedOut {
 		t.Fatalf("deadline did not wake the worker: %+v", fires)
 	}

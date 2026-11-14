@@ -13,6 +13,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/mailbox"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // mailboxParty is who the mailbox watch's events and deliveries are by.
@@ -44,7 +45,7 @@ type mailEnvelope struct {
 // do the later ones to that agent, in their order; one to another machine's
 // agent is left to that machine. An expiry notice is said and acked. It
 // reports whether a message waits for delivery or acknowledgement.
-func watchDrainMailbox(w *Watcher, ctx context.Context) bool {
+func watchDrainMailbox(w *watch.Watcher, ctx context.Context) bool {
 	host := watchApp(w.Host).cfg.Identity.Host
 	me := state.Party{Name: watchApp(w.Host).cfg.Identity.Person, Host: host}
 	var got struct {

@@ -15,6 +15,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 func takeoverGate(t *testing.T, pid int, phase string) *gate.GateRun {
@@ -138,7 +139,7 @@ func TestLanesAndWatchSayStaleMergeOnce(t *testing.T) {
 		t.Fatal(out.String())
 	}
 	out.Reset()
-	w := &Watcher{Host: gateApp(g.Host), Last: map[string]time.Time{}}
+	w := &watch.Watcher{Host: gateApp(g.Host), Last: map[string]time.Time{}}
 	w.StaleMerges()
 	w.StaleMerges()
 	if strings.Count(out.String(), "MERGE STALE:") != 1 {
@@ -169,7 +170,7 @@ func TestSameSessionReusesWaitingPlace(t *testing.T) {
 func TestMergedWaitingHeadLeavesQueueWithLiveOwner(t *testing.T) {
 	stubGitHub(t, github.Merged, "")
 	g := takeoverGate(t, sleeper(t), state.Waiting)
-	if err := gateApp(g.Host).checkPlaces(g.Ctx, WatchParty, gateApp(g.Host).now, "", "", 0, time.Second); err != nil {
+	if err := gateApp(g.Host).checkPlaces(g.Ctx, watch.WatchParty, gateApp(g.Host).now, "", "", 0, time.Second); err != nil {
 		t.Fatal(err)
 	}
 	q := merge.Queue(gateState(t, g), scratchRepo)

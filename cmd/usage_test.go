@@ -26,6 +26,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/sandbox"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 type tightMachine struct{ platform.Machine }
@@ -395,7 +396,7 @@ capacity:
 	// pending may notify the guide asynchronously. Drain every watch's
 	// deliveries before the shared state directory and globals are restored,
 	// just as the production watch drains them on shutdown.
-	drainWatch := func(w *Watcher) {
+	drainWatch := func(w *watch.Watcher) {
 		t.Cleanup(func() {
 			w.Bg.Wait()
 			w.Stand.Inflight.Wait()
@@ -479,7 +480,7 @@ capacity:
 
 	// 2. Continuous watch prints USAGE on first poll, persists UsageReported in
 	// seen.watch.<caller>.json, and a restarted watch stays quiet before 30m.
-	newWatch := func(now time.Time) (*Watcher, *bytes.Buffer) {
+	newWatch := func(now time.Time) (*watch.Watcher, *bytes.Buffer) {
 		var out bytes.Buffer
 		a := &app{cfgPath: cfgPath, cfg: cfg, store: store, now: now, out: &out, as: usageCaller, readUsage: reader}
 		w := a.newWatcher(false, true)
@@ -3746,8 +3747,8 @@ func TestUsageReaderDeadline(t *testing.T) {
 	}
 	u := config.Usage{Command: []string{usageTestReader}, Timeout: config.Duration{Duration: 2 * time.Minute}}
 	k := config.Capacity{Providers: map[string]config.Provider{"one": {Usage: u}, "two": {Usage: u}}}
-	if UsageRefreshTimeout(k) != 4*time.Minute {
-		t.Fatalf("refresh cancels provider deadline: %s", UsageRefreshTimeout(k))
+	if watch.UsageRefreshTimeout(k) != 4*time.Minute {
+		t.Fatalf("refresh cancels provider deadline: %s", watch.UsageRefreshTimeout(k))
 	}
 }
 
@@ -3786,7 +3787,7 @@ func TestUsageFallbackReportedAgeExpires(t *testing.T) {
 	if derived.Ceiling != 0 || view == nil || !strings.Contains(view.Error, "20m old") {
 		t.Fatalf("cached provider: %+v %+v", derived, view)
 	}
-	w := &Watcher{Host: a}
+	w := &watch.Watcher{Host: a}
 	watchApp(w.Host).now = a.now
 	w.ProviderUsageErr = map[string]string{claudeComm: readFailure}
 	derived, view = w.CurrentUsage(k, a.now)

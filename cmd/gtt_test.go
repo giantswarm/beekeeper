@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/giantswarm/beekeeper/internal/machine"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 func TestGTTLine(t *testing.T) {
@@ -22,7 +23,7 @@ func TestGTTLine(t *testing.T) {
 	if gttLine(nil, models) != "" {
 		t.Error("a machine without amdgpu has a GTT line")
 	}
-	if Because("") != "" || Because("x") != "; cause: x" {
+	if watch.Because("") != "" || watch.Because("x") != "; cause: x" {
 		t.Error("because")
 	}
 }

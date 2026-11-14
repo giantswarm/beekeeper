@@ -14,6 +14,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 const suspendFixtureTask = "work"
@@ -48,7 +49,7 @@ func TestSuspendRecoveryAcrossPolls(t *testing.T) {
 	plat.Machine = fixture
 	defer func() { plat.Machine = original }()
 	calls := map[string]int{}
-	w.SuspendDeliver = func(_ context.Context, wake SuspendWake) error {
+	w.SuspendDeliver = func(_ context.Context, wake watch.SuspendWake) error {
 		calls[wake.Party.Name]++
 		if wake.Party.Name == worker.Name && calls[worker.Name] == 1 {
 			return errors.New("temporary fixture failure")
@@ -117,7 +118,7 @@ func TestSuspendRestartsSupervisorService(t *testing.T) {
 	plat.Machine = fixture
 	defer func() { plat.Machine = original }()
 	starts := 0
-	w.Stand.LoopUnit = &LoopService{
+	w.Stand.LoopUnit = &watch.LoopService{
 		State: func(context.Context) string { return "suspend fixture inactive" },
 		Start: func(context.Context) error { starts++; return nil },
 	}
@@ -175,7 +176,7 @@ func TestSuspendRecoveryDoesNotRetryFailuresAfterRelay(t *testing.T) {
 	plat.Machine = fixture
 	defer func() { plat.Machine = original }()
 	calls := map[string]int{}
-	w.SuspendDeliver = func(_ context.Context, wake SuspendWake) error {
+	w.SuspendDeliver = func(_ context.Context, wake watch.SuspendWake) error {
 		calls[wake.Party.Name]++
 		if wake.Party.Name == worker.Name {
 			return fmt.Errorf("waking %s: %w 9e3d7b10 of session %s; stopped the copy", worker.Name, errResumeStartedCopy, worker.Session)
@@ -476,7 +477,7 @@ func TestSuspendRecoveryRelayWhileQueued(t *testing.T) {
 		t.Fatal(err)
 	}
 	calls := map[string]int{}
-	w.SuspendDeliver = func(_ context.Context, wake SuspendWake) error {
+	w.SuspendDeliver = func(_ context.Context, wake watch.SuspendWake) error {
 		calls[wake.Party.Session]++
 		return nil
 	}

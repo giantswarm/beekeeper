@@ -15,17 +15,18 @@ import (
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/upgrade"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // watchApp is the app behind a host; nil for none.
-func watchApp(h Host) *app {
+func watchApp(h watch.Host) *app {
 	a, _ := h.(*app)
 	return a
 }
 
 // The watch calls the command through Cmd.
 func init() {
-	Cmd = Command{
+	watch.Cmd = watch.Command{
 		AgentArgv:      agentArgv,
 		AgentOfSession: agentOfSession,
 		AgyQuotaError:  agyQuotaError,
@@ -33,7 +34,7 @@ func init() {
 		AnsweredLine:   answeredLine,
 		BinaryVersion:  binaryVersion,
 		BudgetGateArgs: func() []string { return budgetGateArgs },
-		CapacityStopped: func(v *capacity.View, a Host, st *state.State) *capacity.View {
+		CapacityStopped: func(v *capacity.View, a watch.Host, st *state.State) *capacity.View {
 			return capacityStopped(v, watchApp(a), st)
 		},
 		CheckTimers:                checkTimers,

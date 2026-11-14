@@ -21,6 +21,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/upgrade"
+	"github.com/giantswarm/beekeeper/internal/watch"
 	"github.com/giantswarm/beekeeper/internal/worktrees"
 )
 
@@ -824,7 +825,7 @@ func (a *app) recheckLeaseParks(st *state.State, parks []settledPark) []settledP
 // watchAutoResume resumes, with agents.autoResume, every parked agent of st
 // whose park is resumable; a resume that fails is a line, and the agent
 // stays parked for the next poll or agents resume.
-func watchAutoResume(w *Watcher, ctx context.Context, st *state.State) {
+func watchAutoResume(w *watch.Watcher, ctx context.Context, st *state.State) {
 	if !watchApp(w.Host).cfg.Agents.AutoResume || st.Stop != nil {
 		return
 	}
@@ -840,7 +841,7 @@ func watchAutoResume(w *Watcher, ctx context.Context, st *state.State) {
 		}
 		quiet := *watchApp(w.Host) // the wake's own report is not a watch line
 		quiet.out = io.Discard
-		if err := quiet.resumeParked(ctx, WatchParty, cmp.Or(ag.Session, ag.Name)); err != nil {
+		if err := quiet.resumeParked(ctx, watch.WatchParty, cmp.Or(ag.Session, ag.Name)); err != nil {
 			w.Emit("park-resume-"+ag.Name, "AGENT RESUME FAILED %q: %v; beekeeper agents resume %q", ag.Name, err, ag.Name)
 		}
 	}
@@ -854,7 +855,7 @@ func watchAutoResume(w *Watcher, ctx context.Context, st *state.State) {
 		}
 		quiet := *watchApp(w.Host)
 		quiet.out = io.Discard
-		if err := quiet.resumeOffRoster(ctx, WatchParty, p.By, false); err != nil {
+		if err := quiet.resumeOffRoster(ctx, watch.WatchParty, p.By, false); err != nil {
 			id := cmp.Or(wakeID(p.By), p.By.Name)
 			w.Emit("park-resume-"+id, "AGENT RESUME FAILED %q (off the roster): %v; beekeeper agents resume %s", p.By.Name, err, id)
 		}

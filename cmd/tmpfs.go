@@ -10,6 +10,7 @@ import (
 	"github.com/gofrs/flock"
 
 	"github.com/giantswarm/beekeeper/internal/free"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // What dead sessions and dead go commands leave in the tmpfs /tmp is RAM no
@@ -91,7 +92,7 @@ func (a *app) freeTmpfs(dryRun bool, read func() (free.Machine, error)) tmpfsRun
 	o := free.Options{Apply: !dryRun, Only: free.Automatic, Stale: free.DefaultStale}
 	r.freed = (&free.Run{Options: o, Machine: m, Out: io.Discard}).Free()
 	if !dryRun && len(r.freed) > 0 {
-		_ = a.store.Log(event(WatchParty, freeVerb, "%s", r.what()))
+		_ = a.store.Log(event(watch.WatchParty, freeVerb, "%s", r.what()))
 	}
 	return r
 }
@@ -99,7 +100,7 @@ func (a *app) freeTmpfs(dryRun bool, read func() (free.Machine, error)) tmpfsRun
 // watchAutoFree runs the automatic free every doctor.freeEvery, in the background
 // so the sample goes on. The freeing flag orders the runs as goCaching orders
 // the Go build cache's looks: freeNext is read only with the flag held.
-func watchAutoFree(w *Watcher, now time.Time) {
+func watchAutoFree(w *watch.Watcher, now time.Time) {
 	every := watchApp(w.Host).cfg.Doctor.FreeEvery.Duration
 	if !w.FreeOn || every <= 0 || !w.Freeing.CompareAndSwap(false, true) {
 		return
@@ -121,7 +122,7 @@ func watchAutoFree(w *Watcher, now time.Time) {
 // ran it within every. A run that freed something is one FREED line; a failed
 // one is FREE FAILED until a run succeeds; a run another process holds the
 // lock for is tried again after goCacheRetry.
-func watchFreeDue(w *Watcher, read func() (free.Machine, error), now time.Time, every time.Duration) {
+func watchFreeDue(w *watch.Watcher, read func() (free.Machine, error), now time.Time, every time.Duration) {
 	if m := w.ReadFreeMark(); now.Sub(m.At) < every {
 		w.FreeNext = m.At.Add(every)
 		return

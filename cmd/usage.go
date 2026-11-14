@@ -25,6 +25,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 const (
@@ -1188,7 +1189,7 @@ func (a *app) singleProviderUsageHighBlock(ctx context.Context, prov, bucket str
 // watchExecUsageNow gives each provider its own observation time, then validates at
 // completion. A refresh can spend minutes on earlier providers; its scheduling
 // time must not make a newly written Codex event appear to be in the future.
-func watchExecUsageNow(w *Watcher, ctx context.Context, file string, u config.Usage) (capacity.UsageReading, error) {
+func watchExecUsageNow(w *watch.Watcher, ctx context.Context, file string, u config.Usage) (capacity.UsageReading, error) {
 	started := w.Clk().Now()
 	obs := w.UsageNow()
 	reader := watchApp(w.Host).snapshotAtNow()
@@ -1201,7 +1202,7 @@ func watchExecUsageNow(w *Watcher, ctx context.Context, file string, u config.Us
 	})
 }
 
-func watchTellBusyWorkersUsageHigh(w *Watcher, ctx context.Context, st *state.State, sessions []*claude.Session, u *capacity.UsageView, ledgerFile string, match func(state.Agent) bool) {
+func watchTellBusyWorkersUsageHigh(w *watch.Watcher, ctx context.Context, st *state.State, sessions []*claude.Session, u *capacity.UsageView, ledgerFile string, match func(state.Agent) bool) {
 	var l usageHighLedger
 	if watchApp(w.Host).store != nil {
 		_, _ = watchApp(w.Host).store.ReadFile(ledgerFile, &l)
@@ -1239,14 +1240,14 @@ func watchTellBusyWorkersUsageHigh(w *Watcher, ctx context.Context, st *state.St
 		}
 		quiet := *watchApp(w.Host)
 		quiet.out = io.Discard
-		if err := wakeOwner(&quiet, ctx, WatchParty, ag.Name, msg, ""); err != nil {
+		if err := wakeOwner(&quiet, ctx, watch.WatchParty, ag.Name, msg, ""); err != nil {
 			w.Emit("usage-wake-"+key, "USAGE HIGH WAKE FAILED %q: %v", ag.Name, err)
 			continue
 		}
 		w.Clear("usage-wake-" + key)
 		l.Told[key] = watchApp(w.Host).now.UTC().Format(time.RFC3339)
 		changed = true
-		_ = watchApp(w.Host).store.Log(event(WatchParty, verbUsageHigh, "%s: told to finish its step and park (%s)", ag.Name, u.HighFigure(watchApp(w.Host).now)))
+		_ = watchApp(w.Host).store.Log(event(watch.WatchParty, verbUsageHigh, "%s: told to finish its step and park (%s)", ag.Name, u.HighFigure(watchApp(w.Host).now)))
 	}
 	if changed && watchApp(w.Host).store != nil {
 		_ = watchApp(w.Host).store.WriteFile(ledgerFile, l)

@@ -22,6 +22,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // errInterrupted ends a reading cut short by SIGINT or SIGTERM: every
@@ -507,7 +508,7 @@ func (a *app) logQuiet(lines ...string) {
 	}
 	evs := make([]state.Event, len(lines))
 	for i, l := range lines {
-		evs[i] = event(WatchParty, quietVerb, "%s", l)
+		evs[i] = event(watch.WatchParty, quietVerb, "%s", l)
 	}
 	_ = a.store.Log(evs...)
 }

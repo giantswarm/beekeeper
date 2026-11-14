@@ -16,6 +16,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 const (
@@ -241,7 +242,7 @@ func TestTimerDispatcherKeepsTickingDuringEarlierAction(t *testing.T) {
 	var releaseOnce sync.Once
 	unblock := func() { releaseOnce.Do(func() { close(release) }) }
 	defer unblock()
-	var batches []*Watcher
+	var batches []*watch.Watcher
 	for id := 1; id <= 2; id++ {
 		if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 			st.Timers = append(st.Timers, state.Timer{ID: id, Due: a.now.Add(-time.Minute), Wake: timerDispatchRepairWorker, What: timerProofFinished})
@@ -533,11 +534,11 @@ func TestPlainWakeRetryWaitsForInterval(t *testing.T) {
 	now := time.Now().UTC()
 	timer := state.Timer{ID: 1, Due: now.Add(-time.Hour), Checked: now, Wake: workerRole, PendingWakeReason: timerDueEarlier, Every: time.Minute}
 	st := &state.State{Timers: []state.Timer{timer}}
-	_, _, fires, changed := SettleTimers(st, nil, now.Add(30*time.Second))
+	_, _, fires, changed := watch.SettleTimers(st, nil, now.Add(30*time.Second))
 	if changed || len(fires) != 0 || len(st.Timers) != 1 {
 		t.Fatal("plain wake retried before its interval", fires, st.Timers)
 	}
-	_, _, fires, _ = SettleTimers(st, nil, now.Add(time.Minute))
+	_, _, fires, _ = watch.SettleTimers(st, nil, now.Add(time.Minute))
 	if len(fires) != 1 || fires[0].Reason != timer.PendingWakeReason || !fires[0].T.Due.Equal(timer.Due) {
 		t.Fatal("retry lost its due occurrence", fires)
 	}
@@ -656,7 +657,7 @@ func TestTimerDispatchSkipsConditionProbesForPendingWakeRetries(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	oldBudget, oldReadProbe, oldProbe, oldWake := readBudget, readProbe, RunProbe, wakeOwner
+	oldBudget, oldReadProbe, oldProbe, oldWake := readBudget, readProbe, watch.RunProbe, wakeOwner
 	readBudget = func(*app, context.Context) (github.Budget, error) {
 		t.Error("budget sampled for latched pending wake retry")
 		return github.Budget{}, errors.New("unexpected budget read")
@@ -665,7 +666,7 @@ func TestTimerDispatchSkipsConditionProbesForPendingWakeRetries(t *testing.T) {
 		t.Error("check probe executed for latched pending wake retry")
 		return nil, errors.New("unexpected probe")
 	}
-	RunProbe = func(context.Context, string) bool {
+	watch.RunProbe = func(context.Context, string) bool {
 		t.Error("shell probe executed for latched pending wake retry")
 		return false
 	}
@@ -674,7 +675,7 @@ func TestTimerDispatchSkipsConditionProbesForPendingWakeRetries(t *testing.T) {
 		wakes.Add(1)
 		return nil
 	}
-	t.Cleanup(func() { readBudget, readProbe, RunProbe, wakeOwner = oldBudget, oldReadProbe, oldProbe, oldWake })
+	t.Cleanup(func() { readBudget, readProbe, watch.RunProbe, wakeOwner = oldBudget, oldReadProbe, oldProbe, oldWake })
 	lock := flock.New(filepath.Join(a.store.Dir(), "loop-graphql.lock"))
 	if err := lock.Lock(); err != nil {
 		t.Fatal(err)

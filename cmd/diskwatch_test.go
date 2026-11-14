@@ -11,13 +11,14 @@ import (
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/machine"
 	"github.com/giantswarm/beekeeper/internal/proc"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 const gibMiB = 1024
 
-func diskWatcher(out *bytes.Buffer, writes map[int]int64) *Watcher {
+func diskWatcher(out *bytes.Buffer, writes map[int]int64) *watch.Watcher {
 	cfg := &config.Config{Watch: config.Watch{DiskFillWithin: config.Duration{Duration: 2 * time.Hour}}}
-	w := &Watcher{Host: &app{out: out, cfg: cfg}, Last: map[string]time.Time{}}
+	w := &watch.Watcher{Host: &app{out: out, cfg: cfg}, Last: map[string]time.Time{}}
 	w.Disk.ReadPaths = func(context.Context) []diskPath { return nil }
 	w.Disk.ReadWrites = func(pid int) (int64, error) {
 		b, ok := writes[pid]
@@ -118,7 +119,7 @@ func TestSampleDiskIgnoresASlowFill(t *testing.T) {
 // A fill no readable process wrote (a root daemon) says so, with the share
 // of the loss it cannot attribute.
 func TestWritersLineNamesTheUnreadableShare(t *testing.T) {
-	dw := DiskWatch{ReadWrites: func(int) (int64, error) { return 0, errUnreadable }}
+	dw := watch.DiskWatch{ReadWrites: func(int) (int64, error) { return 0, errUnreadable }}
 	start := time.Now()
 	tab := table(&proc.Process{PID: 30, Comm: "dockerd", StartTicks: 2})
 	dw.Rebase(start, 50*gibMiB, tab)
@@ -133,21 +134,21 @@ func TestWritersLineNamesTheUnreadableShare(t *testing.T) {
 // writers span between one and two windows; a reused PID counts from zero.
 func TestRebaseKeepsTheOlderBaseline(t *testing.T) {
 	writes := map[int]int64{1: 100}
-	dw := DiskWatch{ReadWrites: func(pid int) (int64, error) { return writes[pid], nil }}
+	dw := watch.DiskWatch{ReadWrites: func(pid int) (int64, error) { return writes[pid], nil }}
 	start := time.Now()
 	tab := table(&proc.Process{PID: 1, Comm: "go", StartTicks: 5})
 	dw.Rebase(start, 100, tab)
-	dw.Rebase(start.Add(DiskWindow-time.Second), 100, tab)
+	dw.Rebase(start.Add(watch.DiskWindow-time.Second), 100, tab)
 	if dw.Base.At != start || dw.Next.At != start {
 		t.Fatalf("rebased before a window passed")
 	}
-	dw.Rebase(start.Add(DiskWindow), 100, tab)
-	if dw.Base.At != start || dw.Next.At != start.Add(DiskWindow) {
+	dw.Rebase(start.Add(watch.DiskWindow), 100, tab)
+	if dw.Base.At != start || dw.Next.At != start.Add(watch.DiskWindow) {
 		t.Fatalf("base %v next %v, want the first kept and a new next", dw.Base.At, dw.Next.At)
 	}
 	tab.ByPID[1] = &proc.Process{PID: 1, Comm: "go", StartTicks: 9}
 	writes[1] = 3 << 30
-	if got := dw.WritersLine(start.Add(DiskWindow), 100, tab, nil); !strings.Contains(got, "top: go 3.0 GiB") {
+	if got := dw.WritersLine(start.Add(watch.DiskWindow), 100, tab, nil); !strings.Contains(got, "top: go 3.0 GiB") {
 		t.Errorf("a reused PID's writes = %q, want all 3 GiB", got)
 	}
 }

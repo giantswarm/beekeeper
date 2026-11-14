@@ -8,6 +8,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 func TestParseReleaseTarget(t *testing.T) {
@@ -37,8 +38,8 @@ func TestParkReleaseAvailability(t *testing.T) {
 	if got := parkedText(ag.Park, watchApp(w.Host).now); !strings.Contains(got, target) {
 		t.Fatal(got)
 	}
-	old := ReadParkRelease
-	t.Cleanup(func() { ReadParkRelease = old })
+	old := watch.ReadParkRelease
+	t.Cleanup(func() { watch.ReadParkRelease = old })
 	for _, tc := range []struct {
 		name, raw string
 		err       error
@@ -52,7 +53,7 @@ func TestParkReleaseAvailability(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			calls := 0
-			ReadParkRelease = func(_ context.Context, repo, version string) ([]byte, error) {
+			watch.ReadParkRelease = func(_ context.Context, repo, version string) ([]byte, error) {
 				calls++
 				if repo != "example/tool" || version != "v1.2.3" {
 					t.Fatalf("target %s %s", repo, version)
@@ -66,7 +67,7 @@ func TestParkReleaseAvailability(t *testing.T) {
 				t.Fatalf("settled %+v, calls %d", settled, calls)
 			}
 			if tc.want > 0 {
-				lines, _ := MarkResumable(st, settled, true, watchApp(w.Host).now)
+				lines, _ := watch.MarkResumable(st, settled, true, watchApp(w.Host).now)
 				if len(lines) != 2 || !strings.Contains(lines[0], "is available") {
 					t.Fatalf("wake lines %v", lines)
 				}
@@ -98,10 +99,10 @@ func TestReleaseParkWakesOnce(t *testing.T) {
 	if err := park(t, w, "--on", target, "release to promote"); err != nil {
 		t.Fatal(err)
 	}
-	old := ReadParkRelease
-	t.Cleanup(func() { ReadParkRelease = old })
+	old := watch.ReadParkRelease
+	t.Cleanup(func() { watch.ReadParkRelease = old })
 	available := false
-	ReadParkRelease = func(context.Context, string, string) ([]byte, error) {
+	watch.ReadParkRelease = func(context.Context, string, string) ([]byte, error) {
 		if available {
 			return []byte(`{"verdict":"available","exitCode":0}`), nil
 		}

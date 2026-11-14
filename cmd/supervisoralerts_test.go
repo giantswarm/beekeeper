@@ -11,6 +11,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/alerts"
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 const loopAlertOwner = "alert-fixture-owner"
@@ -206,7 +207,7 @@ func TestLoopAlertBudgetHoldsWakeAndReplacement(t *testing.T) {
 			readLoopAlerts = func(context.Context, *app) ([]alerts.Firing, error) { return []alerts.Firing{f}, nil }
 			loopResumable = func(*app, *state.State, state.Agent) bool { return resumable }
 			r.park(t, loop.AlertParkPrefix+f.Alertname, time.Now())
-			if err := r.a.store.Record(event(WatchParty, "watch.budget-state", "true")); err != nil {
+			if err := r.a.store.Record(event(watch.WatchParty, "watch.budget-state", "true")); err != nil {
 				t.Fatal(err)
 			}
 			r.pass(t)

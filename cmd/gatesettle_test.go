@@ -16,6 +16,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // endDevctl writes the files a merge's devctl leaves when it ends: its
@@ -196,7 +197,7 @@ func TestAPromotionBehindAMergeWithoutItsOutcomeWaitsForItsJudgement(t *testing.
 			if !strings.Contains(out, "o/r: settling o/r#889, its release unknown, until ") {
 				t.Errorf("lanes does not say the settle:\n%s", out)
 			}
-			w := &Watcher{Host: a, Last: map[string]time.Time{}}
+			w := &watch.Watcher{Host: a, Last: map[string]time.Time{}}
 			w.Settled(context.Background(), a.now)
 			if st, _ := a.store.Read(); !slices.ContainsFunc(st.Merges, func(m state.Merge) bool { return m.Phase == state.Settling }) {
 				t.Fatal("the watch settled a release unknown before the settle rule")

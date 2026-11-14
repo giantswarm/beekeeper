@@ -15,6 +15,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 var reportNow = time.Date(2026, 9, 26, 23, 0, 30, 0, time.UTC)
@@ -34,21 +35,21 @@ func TestReportDue(t *testing.T) {
 		posted, ended bool
 		want          reportAction
 	}{
-		{"never ran", nil, nil, reportNow, false, false, ReportStart},
-		{"the last slot's ended", &state.Report{Slot: last, Started: last, Ended: last.Add(time.Minute)}, nil, reportNow, false, false, ReportStart},
-		{"this slot's ended", &state.Report{Slot: slot, Started: slot, Ended: slot.Add(time.Minute)}, nil, reportNow.Add(30 * time.Minute), false, false, ReportNone},
-		{"runs", &state.Report{Slot: slot, Started: slot}, nil, reportNow.Add(5 * time.Minute), false, false, ReportNone},
-		{"posted", &state.Report{Slot: slot, Started: slot}, nil, reportNow, true, true, ReportPosted},
-		{"ended without a post", &state.Report{Slot: slot, Started: slot}, nil, reportNow, false, true, ReportUnposted},
-		{"past the timeout", &state.Report{Slot: slot, Started: slot}, nil, slot.Add(20 * time.Minute), false, false, ReportTimeout},
-		{"the next slot while it runs", &state.Report{Slot: last, Started: slot.Add(-5 * time.Minute)}, nil, reportNow, false, false, ReportSkip},
-		{"the next slot, skipped already", &state.Report{Slot: last, Started: slot.Add(-5 * time.Minute), Skipped: slot}, nil, reportNow, false, false, ReportNone},
-		{"paused", &state.Report{Slot: last, Started: last, Ended: last.Add(time.Minute)}, &state.ReportPause{Since: last}, reportNow, false, false, ReportNone},
-		{"paused while one runs: no skip", &state.Report{Slot: last, Started: slot.Add(-5 * time.Minute)}, &state.ReportPause{Since: slot}, reportNow, false, false, ReportNone},
-		{"a final not yet due", &state.Report{Slot: slot, Started: slot, Ended: slot.Add(time.Minute)}, &state.ReportPause{Final: slot.Add(45 * time.Minute)}, slot.Add(30 * time.Minute), false, false, ReportNone},
-		{"a final not yet due, the next slot", &state.Report{Slot: last, Started: last, Ended: last.Add(time.Minute)}, &state.ReportPause{Final: slot.Add(45 * time.Minute)}, reportNow, false, false, ReportStart},
-		{"the final due", &state.Report{Slot: slot, Started: slot, Ended: slot.Add(time.Minute)}, &state.ReportPause{Final: slot.Add(45 * time.Minute)}, slot.Add(45 * time.Minute), false, false, ReportFinal},
-		{"the final due while one runs", &state.Report{Slot: slot, Started: slot}, &state.ReportPause{Final: slot.Add(5 * time.Minute)}, slot.Add(6 * time.Minute), false, false, ReportNone},
+		{"never ran", nil, nil, reportNow, false, false, watch.ReportStart},
+		{"the last slot's ended", &state.Report{Slot: last, Started: last, Ended: last.Add(time.Minute)}, nil, reportNow, false, false, watch.ReportStart},
+		{"this slot's ended", &state.Report{Slot: slot, Started: slot, Ended: slot.Add(time.Minute)}, nil, reportNow.Add(30 * time.Minute), false, false, watch.ReportNone},
+		{"runs", &state.Report{Slot: slot, Started: slot}, nil, reportNow.Add(5 * time.Minute), false, false, watch.ReportNone},
+		{"posted", &state.Report{Slot: slot, Started: slot}, nil, reportNow, true, true, watch.ReportPosted},
+		{"ended without a post", &state.Report{Slot: slot, Started: slot}, nil, reportNow, false, true, watch.ReportUnposted},
+		{"past the timeout", &state.Report{Slot: slot, Started: slot}, nil, slot.Add(20 * time.Minute), false, false, watch.ReportTimeout},
+		{"the next slot while it runs", &state.Report{Slot: last, Started: slot.Add(-5 * time.Minute)}, nil, reportNow, false, false, watch.ReportSkip},
+		{"the next slot, skipped already", &state.Report{Slot: last, Started: slot.Add(-5 * time.Minute), Skipped: slot}, nil, reportNow, false, false, watch.ReportNone},
+		{"paused", &state.Report{Slot: last, Started: last, Ended: last.Add(time.Minute)}, &state.ReportPause{Since: last}, reportNow, false, false, watch.ReportNone},
+		{"paused while one runs: no skip", &state.Report{Slot: last, Started: slot.Add(-5 * time.Minute)}, &state.ReportPause{Since: slot}, reportNow, false, false, watch.ReportNone},
+		{"a final not yet due", &state.Report{Slot: slot, Started: slot, Ended: slot.Add(time.Minute)}, &state.ReportPause{Final: slot.Add(45 * time.Minute)}, slot.Add(30 * time.Minute), false, false, watch.ReportNone},
+		{"a final not yet due, the next slot", &state.Report{Slot: last, Started: last, Ended: last.Add(time.Minute)}, &state.ReportPause{Final: slot.Add(45 * time.Minute)}, reportNow, false, false, watch.ReportStart},
+		{"the final due", &state.Report{Slot: slot, Started: slot, Ended: slot.Add(time.Minute)}, &state.ReportPause{Final: slot.Add(45 * time.Minute)}, slot.Add(45 * time.Minute), false, false, watch.ReportFinal},
+		{"the final due while one runs", &state.Report{Slot: slot, Started: slot}, &state.ReportPause{Final: slot.Add(5 * time.Minute)}, slot.Add(6 * time.Minute), false, false, watch.ReportNone},
 	} {
 		if got := reportDue(c.r, c.pause, hourly(), c.now, c.posted, c.ended); got != c.want {
 			t.Errorf("%s: reportDue = %d, want %d", c.name, got, c.want)
@@ -58,7 +59,7 @@ func TestReportDue(t *testing.T) {
 
 // reportingWatch is a standby watch with an hourly reporter on the state in
 // dir; launched collects the turns it starts.
-func reportingWatch(t *testing.T, dir string) (*Watcher, *[]string, *bytes.Buffer) {
+func reportingWatch(t *testing.T, dir string) (*watch.Watcher, *[]string, *bytes.Buffer) {
 	t.Helper()
 	w, _, out := notifyingWatch(t, dir, true)
 	w.Notifier = nil
@@ -200,13 +201,13 @@ func TestTurnPIDs(t *testing.T) {
 		12: {PID: 12, Comm: claudeComm, Args: []string{claudeComm, sessionIDFlag, "s2"}},
 		13: {PID: 13, Comm: testShell, Args: []string{testShell, sessionIDFlag, "s1"}},
 	}}
-	if got := TurnPIDs(tb, "s1"); len(got) != 2 || got[0] != 10 || got[1] != 11 {
+	if got := watch.TurnPIDs(tb, "s1"); len(got) != 2 || got[0] != 10 || got[1] != 11 {
 		t.Errorf("turnPIDs = %v, want [10 11]", got)
 	}
 }
 
 // verbs counts the events of verb in w's log.
-func verbs(t *testing.T, w *Watcher, verb string) int {
+func verbs(t *testing.T, w *watch.Watcher, verb string) int {
 	t.Helper()
 	evs, err := watchApp(w.Host).store.Events(0, func(e state.Event) bool { return e.Verb == verb })
 	if err != nil {
@@ -249,7 +250,7 @@ func TestReportSettings(t *testing.T) {
 			} `json:"PreToolUse"`
 		} `json:"hooks"`
 	}
-	if err := json.Unmarshal([]byte(ReportSettings("/bin/bee keeper")), &s); err != nil {
+	if err := json.Unmarshal([]byte(watch.ReportSettings("/bin/bee keeper")), &s); err != nil {
 		t.Fatal(err)
 	}
 	pre := s.Hooks.PreToolUse

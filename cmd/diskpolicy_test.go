@@ -13,6 +13,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 	"github.com/giantswarm/beekeeper/internal/worktrees"
 )
 
@@ -225,7 +226,7 @@ func TestAutomaticDiskDisablesLegacyGoCacheSchedule(t *testing.T) {
 	saved := goCacheDir
 	t.Cleanup(func() { goCacheDir = saved })
 	goCacheDir = func() string { return m.cache }
-	w := &Watcher{Host: a, GoCacheOn: true, Last: map[string]time.Time{}}
+	w := &watch.Watcher{Host: a, GoCacheOn: true, Last: map[string]time.Time{}}
 	w.GoCache(a.now)
 	w.Bg.Wait()
 	var mark goCacheMark

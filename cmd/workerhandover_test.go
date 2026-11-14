@@ -13,6 +13,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 const registerVerb = "register"
@@ -38,7 +39,7 @@ func TestKilledRunDoesNotFinishWorker(t *testing.T) {
 		t.Fatalf("killed step finished worker: %+v", ag)
 	}
 	sessions := []*claude.Session{{ID: p.Session, Name: p.Name}}
-	if got := HandoversDue(st, sessions, config.Agents{RelayAt: 20000}, a.now, func(state.Party) bool { return false }, func(state.Agent, *claude.Session) int64 { return 100 }, func(int) bool { return false }); len(got) != 0 {
+	if got := watch.HandoversDue(st, sessions, config.Agents{RelayAt: 20000}, a.now, func(state.Party) bool { return false }, func(state.Agent, *claude.Session) int64 { return 100 }, func(int) bool { return false }); len(got) != 0 {
 		t.Fatalf("killed step caused handover: %+v", got)
 	}
 	if got := planChores(st, sessions, unarchived, func(state.Party) bool { return false }, 24*time.Hour, a.now, nil); len(got) != 0 {

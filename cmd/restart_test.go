@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/proc"
+	"github.com/giantswarm/beekeeper/internal/watch"
 	"github.com/giantswarm/beekeeper/pkg/project"
 )
 
@@ -25,14 +26,14 @@ func TestRequestRestarts(t *testing.T) {
 	procs := map[int]string{
 		3:  "beekeeper watch --standby --notify",
 		5:  "beekeeper agents reopen --turn beekeeper-start-x.service 1234",
-		7:  WatchOwner,
+		7:  watch.WatchOwner,
 		9:  "beekeeper watch --once",
 		11: "beekeeper agents reopen --detach 1234",
 		13: "beekeeper alerts watch",
 		15: "beekeeper guide watch",
 		17: "beekeeper gate -- devctl pr merge o/r 1",
-		19: WatchOwner, // another binary
-		21: WatchOwner, // not replaced
+		19: watch.WatchOwner, // another binary
+		21: watch.WatchOwner, // not replaced
 		25: "beekeeper --config /c.yaml watch --standby",
 		27: "beekeeper --config /c.yaml alerts watch",
 	}
@@ -40,7 +41,7 @@ func TestRequestRestarts(t *testing.T) {
 	for pid, cmd := range procs {
 		tab.ByPID[pid] = &proc.Process{PID: pid, Comm: project.Name, Args: strings.Fields(cmd)}
 	}
-	tab.ByPID[23] = &proc.Process{PID: 23, Comm: "zsh", Args: strings.Fields(WatchOwner)}
+	tab.ByPID[23] = &proc.Process{PID: 23, Comm: "zsh", Args: strings.Fields(watch.WatchOwner)}
 	binary := func(pid int) (string, bool) {
 		switch pid {
 		case 19:

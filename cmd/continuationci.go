@@ -8,9 +8,10 @@ import (
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
-func watchHandCITimerToReviewRead(w *Watcher, ctx context.Context, f timerFire, ag state.Agent, ref string) (bool, error) {
+func watchHandCITimerToReviewRead(w *watch.Watcher, ctx context.Context, f timerFire, ag state.Agent, ref string) (bool, error) {
 	c := checkOf(f.T)
 	out, err := readProbe(ctx, c.cmd)
 	if err != nil {
@@ -56,7 +57,7 @@ func watchHandCITimerToReviewRead(w *Watcher, ctx context.Context, f timerFire, 
 			cur.Park.Resumable = state.Park{}.Resumable
 			cur.Park.Answer = ""
 			recordAgentReviewPark(st, *cur)
-			return []state.Event{event(WatchParty, "agents.ci-review", "%s: %s at %s; no worker turn", cur.Name, ref, p.Head)}, nil
+			return []state.Event{event(watch.WatchParty, "agents.ci-review", "%s: %s at %s; no worker turn", cur.Name, ref, p.Head)}, nil
 		}
 		return nil, fmt.Errorf("CI owner left roster before review handoff")
 	})

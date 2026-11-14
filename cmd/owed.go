@@ -14,11 +14,12 @@ import (
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // owedRetry is how long a claimed hand-over of an owed outcome waits before
 // the next try; owedAsk how long a stopped merge's outcome waits for
-// GitHub's answer before its owner hears it without one; owedFor how long
+// GitHub's answer before its owner hears it without one; watch.OwedFor how long
 // an outcome stays owed at all; owedBusy how long the gate and merge-child
 // that owe it may still be handing it over themselves.
 const (
@@ -101,7 +102,7 @@ func (a *app) payOwed(ctx context.Context, o state.Owed) {
 		a.paid(o, fmt.Sprintf("%q has no session id, nobody is woken", owner.Name))
 		return
 	}
-	if p := wakeTargetPark(st, q); p != nil && ParkOnPerson(p, a.cfg.Guide.Person) {
+	if p := wakeTargetPark(st, q); p != nil && watch.ParkOnPerson(p, a.cfg.Guide.Person) {
 		// Keep the result owed until the person's wait settles. An old
 		// command completing is no answer to a later decision.
 		return

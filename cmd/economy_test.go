@@ -14,6 +14,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // hourBudget is what the replayed hour may print, in bytes. The hour
@@ -42,7 +43,7 @@ func TestWatchReplayedHourSaysEachFactOnceInBudget(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	w := &Watcher{Host: &app{out: &out, cfg: &config.Config{}}, Last: map[string]time.Time{}, Sessions: map[string]*claude.Session{}}
+	w := &watch.Watcher{Host: &app{out: &out, cfg: &config.Config{}}, Last: map[string]time.Time{}, Sessions: map[string]*claude.Session{}}
 	live := map[string]*claude.Session{}
 	pid := 0
 	session := func(name string) *claude.Session {
@@ -146,7 +147,7 @@ func TestWatchSaysAConditionsStartAndEndOnce(t *testing.T) {
 	var out bytes.Buffer
 	cfg := &config.Config{}
 	cfg.Watch.Repeat.Duration = 10 * time.Minute
-	w := &Watcher{Host: &app{out: &out, cfg: cfg}, Last: map[string]time.Time{}}
+	w := &watch.Watcher{Host: &app{out: &out, cfg: cfg}, Last: map[string]time.Time{}}
 	for range 40 {
 		w.Check("avail", true, "LOW RAM: %d MiB available, swap %d MiB", 900, 12000)
 	}
@@ -238,7 +239,9 @@ func TestRestartedWatchSaysAnOpenConditionOnlyAtItsEnd(t *testing.T) {
 	}
 	var out bytes.Buffer
 	a := &app{cfg: cfg, store: store, now: time.Now(), out: &out, as: agentOne}
-	low := func(w *Watcher, on bool) { w.Check("avail", on, "LOW RAM: %d MiB available, swap %d MiB", 900, 12000) }
+	low := func(w *watch.Watcher, on bool) {
+		w.Check("avail", on, "LOW RAM: %d MiB available, swap %d MiB", 900, 12000)
+	}
 
 	first := a.newWatcher(false, true)
 	low(first, true)

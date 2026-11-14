@@ -8,6 +8,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 func TestParkedLeaseHolder(t *testing.T) {
@@ -61,7 +62,7 @@ func TestParkedLeaseHolder(t *testing.T) {
 			}
 			var out strings.Builder
 			a.out = &out
-			w := &Watcher{Host: a, Reported: map[string]bool{}, Last: map[string]time.Time{}}
+			w := &watch.Watcher{Host: a, Reported: map[string]bool{}, Last: map[string]time.Time{}}
 			w.StaleLeases(context.Background(), sessions)
 			stale := strings.Contains(out.String(), "STALE LEASE")
 			if stale != (tc.want == holderGone) {
@@ -71,7 +72,7 @@ func TestParkedLeaseHolder(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			lines, _ := FirePending(st, sessions, a.now)
+			lines, _ := watch.FirePending(st, sessions, a.now)
 			ended := strings.Contains(strings.Join(lines, "\n"), "SESSION ENDED")
 			if ended != (tc.want == holderGone) || (tc.want == holderParked && !st.Records[0].Ended.IsZero()) {
 				t.Fatalf("session end = %v, lines %v, record %+v", ended, lines, st.Records[0])
@@ -92,7 +93,7 @@ func TestParkedLeaseHolder(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				lines, _ = FirePending(st, nil, a.now)
+				lines, _ = watch.FirePending(st, nil, a.now)
 				if !strings.Contains(strings.Join(lines, "\n"), "SESSION ENDED") {
 					t.Fatal("no session end after losing wake path")
 				}

@@ -23,6 +23,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/upgrade"
+	"github.com/giantswarm/beekeeper/internal/watch"
 	"github.com/giantswarm/beekeeper/pkg/project"
 )
 
@@ -331,7 +332,7 @@ it reads a watch on the host, and stopping it stops the watch.`,
 
 // runWatcher runs w until ctx ends or an install asks it to restart, with
 // its desktop notifier (--notify) open for that run.
-func (a *app) runWatcher(ctx context.Context, w *Watcher, once, notifyDesktop bool) error {
+func (a *app) runWatcher(ctx context.Context, w *watch.Watcher, once, notifyDesktop bool) error {
 	if notifyDesktop {
 		d := plat.NewNotifier()
 		defer func() { _ = d.Close() }()
@@ -348,9 +349,9 @@ const transcriptFresh = 5 * time.Minute
 // newWatcher is a watch; one that keeps a mark resumes its caller's last
 // watch (seen.watch.<caller>.json): it says no open condition or event
 // again. --once and a watch outside a Claude session keep none.
-func (a *app) newWatcher(standby, keep bool) *Watcher {
-	w := &Watcher{Host: a, Standby: standby, Last: map[string]time.Time{}, SeenKills: map[string]bool{},
-		Reported: map[string]bool{}, Active: map[string]Condition{}, Chores: keep, Retitled: map[string]time.Time{}, Doctored: map[string]bool{},
+func (a *app) newWatcher(standby, keep bool) *watch.Watcher {
+	w := &watch.Watcher{Host: a, Standby: standby, Last: map[string]time.Time{}, SeenKills: map[string]bool{},
+		Reported: map[string]bool{}, Active: map[string]watch.Condition{}, Chores: keep, Retitled: map[string]time.Time{}, Doctored: map[string]bool{},
 		Upgrades: upgrade.Readings{}}
 	if keep {
 		// A poll reads every session's transcript (RUNAWAY): an idle
@@ -360,7 +361,7 @@ func (a *app) newWatcher(standby, keep bool) *Watcher {
 	w.Stand = standbyWatch{Send: a.peerSend, Succeed: a.succeedFromWatch, Revive: a.reviveFromWatch, Turning: unitsTurning, Reopening: unitsReopening, ImportRow: a.importRowFromWatch}
 	if me, err := a.caller(); keep && err == nil {
 		w.MarkFile = "seen.watch." + fileKey(me) + ".json"
-		var m WatchMark
+		var m watch.WatchMark
 		if found, err := a.store.ReadFile(w.MarkFile, &m); err == nil && found {
 			maps.Copy(w.Active, m.Conditions)
 			maps.Copy(w.Reported, m.Reported)
@@ -374,7 +375,7 @@ func (a *app) newWatcher(standby, keep bool) *Watcher {
 // watchTeleport says the Teleport login's trouble, one line when it starts and
 // one ENDED line when it ends: about to expire, expired, or its keeper's
 // renewal failed.
-func watchTeleport(w *Watcher, ctx context.Context) {
+func watchTeleport(w *watch.Watcher, ctx context.Context) {
 	v := watchApp(w.Host).readTeleport(ctx)
 	if v == nil {
 		return
@@ -391,7 +392,7 @@ func watchTeleport(w *Watcher, ctx context.Context) {
 
 // watchBudget probes the GitHub budget and says when it is under the floor and
 // when GitHub refuses GraphQL calls, with the callers drawing on it.
-func watchBudget(w *Watcher, ctx context.Context, now time.Time) {
+func watchBudget(w *watch.Watcher, ctx context.Context, now time.Time) {
 	b, err := readBudget(watchApp(w.Host), ctx)
 	if ctx.Err() == nil {
 		held := err != nil || b.Remaining < watchApp(w.Host).cfg.GitHub.Floor || b.GraphQL == nil || b.GraphQL.Err != "" || b.GraphQL.Remaining < watchApp(w.Host).cfg.GitHub.Floor || b.GraphQL.Blocks(now)
@@ -437,7 +438,7 @@ func watchBudget(w *Watcher, ctx context.Context, now time.Time) {
 
 // watchCallersText names the gh and devctl processes drawing on GitHub and the
 // sessions they run under, the longest-running first.
-func watchCallersText(w *Watcher) string {
+func watchCallersText(w *watch.Watcher) string {
 	sessions, t, err := watchApp(w.Host).sessions()
 	if err != nil {
 		return "unknown (" + err.Error() + ")"
@@ -458,7 +459,7 @@ func watchCallersText(w *Watcher) string {
 
 // watchStalls says each stalled lane, one LANE STALLED line per lane and waiting
 // merge when the stall starts and one ENDED line when it ends.
-func watchStalls(w *Watcher) {
+func watchStalls(w *watch.Watcher) {
 	st, err := watchApp(w.Host).readSnapshot()
 	if err != nil {
 		return
@@ -477,13 +478,13 @@ func watchStalls(w *Watcher) {
 // watchHungMerges ends the devctl of each running merge that has outlived its
 // pull request (endHung), one MERGE HUNG line each; the next poll records
 // it (lostMerges), or its gate does.
-func watchHungMerges(w *Watcher, ctx context.Context, now time.Time) {
+func watchHungMerges(w *watch.Watcher, ctx context.Context, now time.Time) {
 	// GitHub and persisted merge timestamps have no monotonic reading.
 	// Never use their wall-clock age alone to kill a wait after a suspend.
 	// The wall/monotonic difference detects suspend on platforms whose
 	// monotonic clock stops asleep; a long gap also covers other platforms
 	// and clocks without monotonic readings.
-	gap := max(5*time.Minute, 2*SlowReads*watchApp(w.Host).cfg.Watch.Interval.Duration)
+	gap := max(5*time.Minute, 2*watch.SlowReads*watchApp(w.Host).cfg.Watch.Interval.Duration)
 	wallElapsed := now.Round(0).Sub(w.LastHungCheck.Round(0))
 	elapsed := now.Sub(w.LastHungCheck)
 	if w.LastHungCheck.IsZero() || wallElapsed-elapsed > time.Second || wallElapsed > gap || wallElapsed < 0 {
@@ -493,7 +494,7 @@ func watchHungMerges(w *Watcher, ctx context.Context, now time.Time) {
 	if now.Sub(w.HungGrace) <= watchApp(w.Host).cfg.Merge.HungAfter.Duration {
 		return
 	}
-	for _, h := range watchApp(w.Host).endHung(ctx, WatchParty, now, watchApp(w.Host).cfg.Merge.HungAfter.Duration, func(m state.Merge) bool {
+	for _, h := range watchApp(w.Host).endHung(ctx, watch.WatchParty, now, watchApp(w.Host).cfg.Merge.HungAfter.Duration, func(m state.Merge) bool {
 		return now.Sub(m.Started) > watchApp(w.Host).cfg.Merge.HungAfter.Duration
 	}) {
 		w.EmitNow("lanes", "MERGE HUNG: %s in lane %s by %q: %s, its devctl (pid %d) still ran: ended, the lane records it next",
@@ -505,7 +506,7 @@ func watchHungMerges(w *Watcher, ctx context.Context, now time.Time) {
 // daemon must not stall the watch or its shutdown.
 const commandTimeout = 20 * time.Second
 
-func watchKills(w *Watcher, ctx context.Context, since time.Time, sessions []*claude.Session, t *proc.Table) {
+func watchKills(w *watch.Watcher, ctx context.Context, since time.Time, sessions []*claude.Session, t *proc.Table) {
 	ctx, cancel := context.WithTimeout(ctx, commandTimeout)
 	defer cancel()
 	kills, err := plat.Machine.OOMKills(ctx, since.Add(-2*time.Second))
@@ -550,11 +551,11 @@ func watchKills(w *Watcher, ctx context.Context, since time.Time, sessions []*cl
 
 // launchedLoop is the loop's service on plat's launcher, nil where this
 // machine has none.
-func launchedLoop() *LoopService {
+func launchedLoop() *watch.LoopService {
 	if !plat.Launcher.Available() {
 		return nil
 	}
-	return &LoopService{
+	return &watch.LoopService{
 		State: func(ctx context.Context) string { return plat.Launcher.State(ctx, loopUnit) },
 		Start: func(ctx context.Context) error { return plat.Launcher.Resume(ctx, loopUnit) },
 	}
@@ -563,7 +564,7 @@ func launchedLoop() *LoopService {
 // watchRunaways prints one line for each session figure over its threshold in
 // metrics.runaway, once per watch: a GitHub budget drain, the same failing
 // tool call repeating, a context near its window.
-func watchRunaways(w *Watcher, sessions []*claude.Session, t *proc.Table) {
+func watchRunaways(w *watch.Watcher, sessions []*claude.Session, t *proc.Table) {
 	holders, _ := lease.Dir(watchApp(w.Host).cfg.LeaseDir).List()
 	_, ms := watchApp(w.Host).sessionMetrics(sessions, t, holders)
 	for i, s := range sessions {
@@ -578,7 +579,7 @@ func watchRunaways(w *Watcher, sessions []*claude.Session, t *proc.Table) {
 	}
 }
 
-func watchStaleLeases(w *Watcher, ctx context.Context, sessions []*claude.Session) {
+func watchStaleLeases(w *watch.Watcher, ctx context.Context, sessions []*claude.Session) {
 	holders, err := lease.Dir(watchApp(w.Host).cfg.LeaseDir).List()
 	if err != nil {
 		return

@@ -23,6 +23,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/remotebuild"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 	"github.com/giantswarm/beekeeper/internal/worktrees"
 )
 
@@ -426,7 +427,7 @@ func (a *app) trimWorktrees(dryRun bool, read func() (worktreeMachine, error)) w
 	}
 	r.trim(ctx, m)
 	if !dryRun && (r.acted() || len(r.failed) > 0) {
-		_ = a.store.Log(event(WatchParty, worktreesVerb, "%s\n%s", r, strings.Join(r.paths(), "\n")))
+		_ = a.store.Log(event(watch.WatchParty, worktreesVerb, "%s\n%s", r, strings.Join(r.paths(), "\n")))
 	}
 	return r
 }
@@ -747,7 +748,7 @@ type worktreesMark struct {
 // watchWorktrees runs the trim every doctor.worktreesEvery, in the background so
 // the sample goes on. A run that removed something is one WORKTREES line; a
 // failed one is WORKTREES FAILED until a run succeeds.
-func watchWorktrees(w *Watcher, now time.Time) {
+func watchWorktrees(w *watch.Watcher, now time.Time) {
 	every := watchApp(w.Host).cfg.Doctor.WorktreesEvery.Duration
 	if watchApp(w.Host).cfg.Disk.Auto() || !w.WorktreesOn || every <= 0 || !w.WorktreesTrimming.CompareAndSwap(false, true) {
 		return

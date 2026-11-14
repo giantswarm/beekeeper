@@ -20,6 +20,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/install"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 	"github.com/giantswarm/beekeeper/pkg/project"
 )
 
@@ -248,7 +249,7 @@ func noteFaults(st *state.State, findings []faultFinding, person string, now tim
 			n := st.Notes[i]
 			st.Notes = slices.Delete(st.Notes, i, i+1)
 			lines = append(lines, fmt.Sprintf("closed note #%d: fault %q is absent again", n.ID, f.fault.Name))
-			evs = append(evs, event(WatchParty, noteDone, "#%d closed, its fault is absent again: %s", n.ID, n.Text))
+			evs = append(evs, event(watch.WatchParty, noteDone, "#%d closed, its fault is absent again: %s", n.ID, n.Text))
 		case !f.healthy && i < 0 && person != "":
 			d := noteDraft{
 				Question:  fmt.Sprintf("%s run `beekeeper doctor --fault %s` (its remedy: `%s`)?", prefix, f.fault.Name, f.fault.Remedy),
@@ -257,11 +258,11 @@ func noteFaults(st *state.State, findings []faultFinding, person string, now tim
 				Options:   []string{"run it: the remedy runs once, the doctor probes again"},
 			}
 			st.NextNote++
-			n := state.Note{ID: st.NextNote, For: person, Text: d.text(), By: WatchParty, At: now.UTC(), Kind: noteDecision,
+			n := state.Note{ID: st.NextNote, For: person, Text: d.text(), By: watch.WatchParty, At: now.UTC(), Kind: noteDecision,
 				Default: "the doctor keeps probing and closes this note once the fault is absent"}
 			st.Notes = append(st.Notes, n)
 			lines = append(lines, fmt.Sprintf("note #%d for %s: fault %q", n.ID, person, f.fault.Name))
-			evs = append(evs, event(WatchParty, "note.add", "#%d %s", n.ID, n.Text))
+			evs = append(evs, event(watch.WatchParty, "note.add", "#%d %s", n.ID, n.Text))
 		}
 	}
 	return lines, evs
@@ -1100,7 +1101,7 @@ const retitleAgain = 30 * time.Minute
 // goes: a steward's turn takes up to a minute, and the poll goes on. Each
 // chore it did is one DOCTOR line; a fault it could not fix is one DOCTOR
 // FAULT line while it lasts.
-func watchDoctor(w *Watcher, ctx context.Context) {
+func watchDoctor(w *watch.Watcher, ctx context.Context) {
 	if !w.Chores || !w.Doctoring.CompareAndSwap(false, true) {
 		return
 	}
@@ -1116,7 +1117,7 @@ func watchDoctor(w *Watcher, ctx context.Context) {
 	go func() {
 		defer w.Bg.Done()
 		defer w.Doctoring.Store(false)
-		rep, err := d.doctor(ctx, doctorRun{by: WatchParty, retry: retry, loopOwned: w.LoopRunning()})
+		rep, err := d.doctor(ctx, doctorRun{by: watch.WatchParty, retry: retry, loopOwned: w.LoopRunning()})
 		if ctx.Err() != nil {
 			return
 		}
@@ -1145,7 +1146,7 @@ func watchDoctor(w *Watcher, ctx context.Context) {
 
 // watchSayChores says the doctor's chore lines, each once per watch (a stay that
 // repeats is not said again), and its notes.
-func watchSayChores(w *Watcher, rep doctorReport) {
+func watchSayChores(w *watch.Watcher, rep doctorReport) {
 	if w.Doctored == nil {
 		w.Doctored = map[string]bool{}
 	}

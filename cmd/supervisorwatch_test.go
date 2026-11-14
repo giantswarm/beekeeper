@@ -10,6 +10,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/alerts"
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 func TestLoopWatchKeepsQuietAlertsOutOfEventFeed(t *testing.T) {
@@ -30,8 +31,8 @@ func TestLoopOwnsWatchUntilShutdown(t *testing.T) {
 	r := newLoopRig(t)
 	old := runLoopWatch
 	t.Cleanup(func() { runLoopWatch = old })
-	started, ended := make(chan *Watcher, 1), make(chan struct{})
-	runLoopWatch = func(ctx context.Context, w *Watcher) error {
+	started, ended := make(chan *watch.Watcher, 1), make(chan struct{})
+	runLoopWatch = func(ctx context.Context, w *watch.Watcher) error {
 		started <- w
 		<-ctx.Done()
 		close(ended)

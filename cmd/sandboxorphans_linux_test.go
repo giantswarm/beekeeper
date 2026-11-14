@@ -20,6 +20,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/sandbox"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // Use a real PID-namespace init and brokered scope. The sandbox's initial
@@ -28,7 +29,7 @@ func TestWatchStopsSandboxOrphan(t *testing.T) {
 	if !plat.Launcher.Available() {
 		t.Skip("no user systemd")
 	}
-	if _, err := exec.LookPath(SandboxInitCommand); err != nil {
+	if _, err := exec.LookPath(watch.SandboxInitCommand); err != nil {
 		t.Skip("no bubblewrap")
 	}
 	dir := t.TempDir()
@@ -69,7 +70,7 @@ func TestWatchStopsSandboxOrphan(t *testing.T) {
 	}
 	args := []string{"--unshare-pid", "--die-with-parent", "--ro-bind", "/", "/", "--bind", spool, spool, "--dev", "/dev", "sh", "-c",
 		`"$@" && echo ready; read -r finish`, "sh"}
-	cmd := exec.CommandContext(ctx, SandboxInitCommand, append(args, scoped.Args...)...) //nolint:gosec // this test's binary, scratch spool and scope inside bubblewrap
+	cmd := exec.CommandContext(ctx, watch.SandboxInitCommand, append(args, scoped.Args...)...) //nolint:gosec // this test's binary, scratch spool and scope inside bubblewrap
 	cmd.Env = append(os.Environ(), "BEEKEEPER_TEST_MAIN=1",
 		"BEEKEEPER_CONFIG="+emptyTestConfig(t, filepath.Join(dir, "none.yaml")))
 	var stderr bytes.Buffer
@@ -99,7 +100,7 @@ func TestWatchStopsSandboxOrphan(t *testing.T) {
 		t.Fatalf("scope processes %v, table error %v", pids, err)
 	}
 	child := table.ByPID[pids[0]]
-	if child == nil || table.ByPID[child.PPID] == nil || table.ByPID[child.PPID].Comm != SandboxInitCommand {
+	if child == nil || table.ByPID[child.PPID] == nil || table.ByPID[child.PPID].Comm != watch.SandboxInitCommand {
 		t.Fatalf("child %v was not adopted by bubblewrap", child)
 	}
 	if table.Orphaned(child) {
@@ -127,12 +128,12 @@ func TestWatchStopsSandboxOrphan(t *testing.T) {
 	w := a.newWatcher(false, false)
 	now := time.Now()
 	w.SlotOrphans(now, table)
-	w.SlotOrphans(now.Add(2*SlotOrphanGrace), table)
+	w.SlotOrphans(now.Add(2*watch.SlotOrphanGrace), table)
 	if strings.Contains(output.String(), "STOPPED") || len(saved.ScopePIDs(scope.Path)) != 1 {
 		t.Fatal("a reporting-only watch stopped the sandbox child")
 	}
 	w.SlotsOn = true
-	w.SlotOrphans(now.Add(2*SlotOrphanGrace), table)
+	w.SlotOrphans(now.Add(2*watch.SlotOrphanGrace), table)
 	if !strings.Contains(output.String(), "STOPPED orphaned slot scope "+unit+".scope") {
 		t.Fatalf("watch did not stop the sandbox orphan: %s", &output)
 	}

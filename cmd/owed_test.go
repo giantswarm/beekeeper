@@ -15,6 +15,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // mergedAt is when GitHub merged the tests' stopped merge.
@@ -56,7 +57,7 @@ func ownedState(t *testing.T, a *app) []state.Owed {
 
 // laterWatch is a watch on a's state, owedRetry after the merge-child that
 // owed the outcome ended.
-func laterWatch(t *testing.T, a *app, after time.Duration) *Watcher {
+func laterWatch(t *testing.T, a *app, after time.Duration) *watch.Watcher {
 	t.Helper()
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		for i := range st.Owed {
@@ -67,7 +68,7 @@ func laterWatch(t *testing.T, a *app, after time.Duration) *Watcher {
 		t.Fatal(err)
 	}
 	a.now = time.Now().Add(after)
-	return &Watcher{Host: a}
+	return &watch.Watcher{Host: a}
 }
 
 // A merge whose waiter was stopped while GitHub did not answer (its user
@@ -167,7 +168,7 @@ func TestARefusedWakeIsRetriedByTheWatch(t *testing.T) {
 
 // An outcome owed by a merge-child that ended before it handed it over
 // (killed while it waited for its gate) is handed over by the watch, unless
-// the gate's caller heard it; one owed past owedFor is given up, logged.
+// the gate's caller heard it; one owed past watch.OwedFor is given up, logged.
 func TestTheWatchHandsOverWhatAKilledMergeChildOwed(t *testing.T) {
 	a, r, woke := tellOwnerRun(t, state.Party{Session: "s1", Name: ownerName})
 	o := r.owed(time.Now().Add(-owedRetry))
@@ -197,7 +198,7 @@ func TestTheWatchHandsOverWhatAKilledMergeChildOwed(t *testing.T) {
 	}
 
 	a, r, woke = tellOwnerRun(t, state.Party{Session: "s1", Name: ownerName})
-	if err := a.owe(r.owed(time.Now().Add(-OwedFor - time.Minute))); err != nil {
+	if err := a.owe(r.owed(time.Now().Add(-watch.OwedFor - time.Minute))); err != nil {
 		t.Fatal(err)
 	}
 	laterWatch(t, a, 0).OwedOutcomes(context.Background())
@@ -215,7 +216,7 @@ func TestTheWatchLeavesAnOutcomeItsMergeChildHandsOver(t *testing.T) {
 		t.Fatal(err)
 	}
 	a.now = time.Now()
-	(&Watcher{Host: a}).OwedOutcomes(context.Background())
+	(&watch.Watcher{Host: a}).OwedOutcomes(context.Background())
 	if len(*woke) != 0 || len(ownedState(t, a)) != 1 {
 		t.Errorf("woke %q, owed %+v", *woke, ownedState(t, a))
 	}

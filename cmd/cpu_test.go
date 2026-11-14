@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/proc"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 func table(ps ...*proc.Process) *proc.Table {
@@ -32,15 +33,15 @@ func TestTopCPUGroupsTheSpanByCommand(t *testing.T) {
 		&proc.Process{PID: 4, Comm: "cc1", StartTicks: 9, CPU: 15 * time.Second},
 		&proc.Process{PID: 5, Comm: "bash", StartTicks: 9, CPU: 3 * time.Second},
 	)
-	got := TopCPU(prev, cur, 30*time.Second, 2)
-	if len(got) != 2 || got[0] != (CpuUse{Comm: "go", Cores: 2, Processes: 2}) || got[1] != (CpuUse{Comm: "cc1", Cores: 0.5, Processes: 1}) {
+	got := watch.TopCPU(prev, cur, 30*time.Second, 2)
+	if len(got) != 2 || got[0] != (watch.CpuUse{Comm: "go", Cores: 2, Processes: 2}) || got[1] != (watch.CpuUse{Comm: "cc1", Cores: 0.5, Processes: 1}) {
 		t.Fatalf("topCPU = %+v", got)
 	}
-	line := TopCPULine(got, 30*time.Second)
+	line := watch.TopCPULine(got, 30*time.Second)
 	if line != "; top CPU over 30s: go 2.0 cores (2), cc1 0.5 cores (1)" {
 		t.Errorf("line = %q", line)
 	}
-	if TopCPU(nil, cur, 30*time.Second, 5) != nil || TopCPULine(nil, time.Second) != "" {
+	if watch.TopCPU(nil, cur, 30*time.Second, 5) != nil || watch.TopCPULine(nil, time.Second) != "" {
 		t.Error("a first read names consumers")
 	}
 }
@@ -55,7 +56,7 @@ func TestLoadRising(t *testing.T) {
 		{[3]float64{20, 5, 2}, false},   // under one per core
 		{[3]float64{40, 30, 20}, false}, // high, not climbing
 	} {
-		if got := LoadRising(c.load, 24); got != c.want {
+		if got := watch.LoadRising(c.load, 24); got != c.want {
 			t.Errorf("loadRising(%v, 24) = %v", c.load, got)
 		}
 	}
@@ -83,13 +84,13 @@ func TestWatchSaysCPUPressureOnTheSecondSample(t *testing.T) {
 
 // A swapoff is read from the sample's process table.
 func TestSwapoffRuns(t *testing.T) {
-	if SwapoffRuns(nil) {
+	if watch.SwapoffRuns(nil) {
 		t.Error("swapoff without a process table")
 	}
-	if SwapoffRuns(table(&proc.Process{PID: 1, Comm: "init"})) {
+	if watch.SwapoffRuns(table(&proc.Process{PID: 1, Comm: "init"})) {
 		t.Error("swapoff with none running")
 	}
-	if !SwapoffRuns(table(&proc.Process{PID: 1, Comm: "init"}, &proc.Process{PID: 2, Comm: "swapoff"})) {
+	if !watch.SwapoffRuns(table(&proc.Process{PID: 1, Comm: "init"}, &proc.Process{PID: 2, Comm: "swapoff"})) {
 		t.Error("a running swapoff missed")
 	}
 }

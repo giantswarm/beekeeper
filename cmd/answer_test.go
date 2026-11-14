@@ -11,6 +11,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // The threads of the answer tests: a private one, a public slice under a
@@ -307,7 +308,7 @@ func TestAnAnswerAfterItsDefaultReplacesIt(t *testing.T) {
 				Text: "Merge now?", Refs: []string{privateThread}, Due: due, Default: "merge it at the due time"})
 		}
 		st.NextNote = 2
-		_, evs, closed := closeDefaulted(st, notePerson, WatchParty, relayNow)
+		_, evs, closed := closeDefaulted(st, notePerson, watch.WatchParty, relayNow)
 		if len(closed) != 2 || len(st.Notes) != 0 || len(st.Defaulted) != 2 {
 			t.Fatalf("closed %+v, open %+v, defaulted %+v", closed, st.Notes, st.Defaulted)
 		}
@@ -340,7 +341,7 @@ func TestAnAnswerAfterItsDefaultReplacesIt(t *testing.T) {
 	}
 	for range 2 {
 		if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-			closeDefaulted(st, notePerson, WatchParty, a.now)
+			closeDefaulted(st, notePerson, watch.WatchParty, a.now)
 			return nil, nil
 		}); err != nil {
 			t.Fatal(err)

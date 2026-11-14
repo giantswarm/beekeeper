@@ -12,6 +12,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/mailbox"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 const (
@@ -64,7 +65,7 @@ func TestPersonParkEightHoursWithoutTurns(t *testing.T) {
 			t.Fatalf("command result was lost: %+v", st.Owed)
 		}
 		watchApp(w.Host).payOwed(t.Context(), st.Owed[0])
-		if err := watchApp(w.Host).quietWake(t.Context(), WatchParty, agentOne, "an unrelated note defaulted"); err != nil {
+		if err := watchApp(w.Host).quietWake(t.Context(), watch.WatchParty, agentOne, "an unrelated note defaulted"); err != nil {
 			t.Fatal(err)
 		}
 		w.TellBusyWorkersUsageHigh(t.Context(), st, []*claude.Session{{Name: agentOne}}, &capacity.UsageView{High: true}, "park-usage.json", nil)
@@ -332,7 +333,7 @@ func TestTimerUndeliveredWakeRetries(t *testing.T) {
 						t.Helper()
 						var fires []timerFire
 						if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
-							_, events, f, _ := SettleTimers(st, nil, watchApp(w.Host).now)
+							_, events, f, _ := watch.SettleTimers(st, nil, watchApp(w.Host).now)
 							fires = f
 							return events, nil
 						}); err != nil {
@@ -383,7 +384,7 @@ func TestSkippedConditionalTimerStaysOpenPastExpiry(t *testing.T) {
 	}
 	var fires []timerFire
 	if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
-		_, events, f, _ := SettleTimers(st, map[int]checkResult{42: {Holds: true}}, watchApp(w.Host).now)
+		_, events, f, _ := watch.SettleTimers(st, map[int]checkResult{42: {Holds: true}}, watchApp(w.Host).now)
 		fires = f
 		return events, nil
 	}); err != nil {
@@ -400,7 +401,7 @@ func TestSkippedConditionalTimerStaysOpenPastExpiry(t *testing.T) {
 	watchApp(w.Host).now = relayNow.Add(timerEvery)
 	if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Agents[0].Park = &state.Park{Waits: "Timer 42: review proof running", At: watchApp(w.Host).now}
-		_, events, f, _ := SettleTimers(st, nil, watchApp(w.Host).now)
+		_, events, f, _ := watch.SettleTimers(st, nil, watchApp(w.Host).now)
 		fires = f
 		return events, nil
 	}); err != nil {
@@ -427,7 +428,7 @@ func TestConditionalWakeRetryKeepsFiredOccurrence(t *testing.T) {
 			if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 				st.Agents = []state.Agent{{Party: state.Party{Name: agentOne}, Park: &state.Park{On: "#3", Waits: verbAnswer, At: relayNow}}}
 				st.Timers = []state.Timer{{ID: 42, Due: relayNow, Wake: agentOne, Probe: probeHolds, Repeat: repeat}}
-				_, events, fires, _ := SettleTimers(st, map[int]checkResult{42: {Holds: true}}, watchApp(w.Host).now)
+				_, events, fires, _ := watch.SettleTimers(st, map[int]checkResult{42: {Holds: true}}, watchApp(w.Host).now)
 				if len(fires) != 1 {
 					t.Fatalf("expected initial fire: %+v", fires)
 				}
@@ -442,7 +443,7 @@ func TestConditionalWakeRetryKeepsFiredOccurrence(t *testing.T) {
 			var fires []timerFire
 			if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 				st.Agents[0].Park = &state.Park{Waits: "Timer 42: running", At: watchApp(w.Host).now}
-				_, events, f, _ := SettleTimers(st, map[int]checkResult{42: {Holds: false}}, watchApp(w.Host).now)
+				_, events, f, _ := watch.SettleTimers(st, map[int]checkResult{42: {Holds: false}}, watchApp(w.Host).now)
 				fires = f
 				return events, nil
 			}); err != nil {
@@ -465,8 +466,8 @@ func TestConditionalWakeRetryKeepsFiredOccurrence(t *testing.T) {
 
 // Keep existing simulated tick tests explicit about their delivery clock.
 type timerRetryClock struct {
-	WallClock
-	w *Watcher
+	watch.WallClock
+	w *watch.Watcher
 }
 
 func (c timerRetryClock) Now() time.Time { return watchApp(c.w.Host).now }
@@ -491,11 +492,11 @@ func TestDelayedWakeRetryUsesDeliveryTime(t *testing.T) {
 	if got := fatalTimers(st, clock.Now()); got.overdue != 0 {
 		t.Fatalf("fresh delivery reported overdue: %+v", got)
 	}
-	_, _, fires, _ := SettleTimers(st, nil, clock.Now().Add(30*time.Second))
+	_, _, fires, _ := watch.SettleTimers(st, nil, clock.Now().Add(30*time.Second))
 	if len(fires) != 0 {
 		t.Fatal("retry did not wait a full interval")
 	}
-	_, _, fires, _ = SettleTimers(st, nil, clock.Now().Add(time.Minute))
+	_, _, fires, _ = watch.SettleTimers(st, nil, clock.Now().Add(time.Minute))
 	if len(fires) != 1 {
 		t.Fatal("retry did not fire at the next interval")
 	}
@@ -524,7 +525,7 @@ func TestOwnedExternalWaitTimerIsItsWakeCondition(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			p := &state.Park{By: owner, On: tc.on, Waits: tc.waits}
 			timer := state.Timer{By: tc.by, When: tc.when, Repeat: tc.repeat}
-			if got := TimerSettlesPark(timer, p, personTimo); got != tc.want {
+			if got := watch.TimerSettlesPark(timer, p, personTimo); got != tc.want {
 				t.Fatalf("timer settlement = %v, want %v", got, tc.want)
 			}
 		})

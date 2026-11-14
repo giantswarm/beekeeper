@@ -16,6 +16,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/dockerprune"
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/proc"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // A lab machine that loads dev images into kind clusters piles up Docker
@@ -328,7 +329,7 @@ func (a *app) pruneDockerForPressure(dryRun, pressure bool, holds func() string)
 	// the trims ran over a cap and freed nothing, as the record of why
 	// (the keep reasons name what no removal may take).
 	if r.acted() || r.attempted {
-		_ = a.store.Log(event(WatchParty, dockerVerb, "%s", r.logLine()))
+		_ = a.store.Log(event(watch.WatchParty, dockerVerb, "%s", r.logLine()))
 	}
 	return r
 }
@@ -392,7 +393,7 @@ type dockerMark = goCacheMark
 // it has waited doctor.dockerEvery the watch says DOCKER until it ran. A
 // failed read or prune, or one that leaves the images over their cap, is
 // DOCKER too.
-func watchDocker(w *Watcher, now time.Time) {
+func watchDocker(w *watch.Watcher, now time.Time) {
 	if !w.DockerOn || dockerCLI == nil || (watchApp(w.Host).cfg.Doctor.DockerImagesMax() == 0 && watchApp(w.Host).cfg.Doctor.DockerBuildCacheMax() == 0) ||
 		!w.DockerPruning.CompareAndSwap(false, true) {
 		return

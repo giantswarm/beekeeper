@@ -12,6 +12,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 const finishedSession = "finished-session"
@@ -108,7 +109,7 @@ func TestBudgetAndWatchNameFinishedGitHubCaller(t *testing.T) {
 		t.Fatal(out.String())
 	}
 	out.Reset()
-	w := &Watcher{Host: a, Last: map[string]time.Time{}}
+	w := &watch.Watcher{Host: a, Last: map[string]time.Time{}}
 	w.Budget(context.Background(), a.now)
 	if !strings.Contains(out.String(), "window: finished-session: gh project item-list") {
 		t.Fatal(out.String())

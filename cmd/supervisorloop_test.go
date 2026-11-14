@@ -31,6 +31,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 const (
@@ -242,7 +243,7 @@ func newLoopRig(t *testing.T) *loopRig {
 		}
 		return github.Budget{Remaining: st.Budget.Remaining, Limit: st.Budget.Limit, Reset: st.Budget.Reset, GraphQL: graphqlOf(st.Budget.GraphQL)}, nil
 	}
-	if err := store.Record(event(WatchParty, "watch.budget-state", "false")); err != nil {
+	if err := store.Record(event(watch.WatchParty, "watch.budget-state", "false")); err != nil {
 		t.Fatal(err)
 	}
 	// The loop first started a minute ago: the rig's parks are requests
@@ -2282,7 +2283,7 @@ func TestSupervisorLoopLeavesLineOnlyTimersForWatch(t *testing.T) {
 				t.Fatalf("loop took watch-only timer: checks %d, wakes %d, timers %+v", checks, wakes, st.Timers)
 			}
 			if !conditional {
-				lines, evs := FirePending(st, nil, r.a.now)
+				lines, evs := watch.FirePending(st, nil, r.a.now)
 				if len(lines) != 1 || len(evs) != 1 || evs[0].Verb != "timer.due" {
 					t.Fatalf("firePending lost plain timer after loop: %v, %+v", lines, evs)
 				}

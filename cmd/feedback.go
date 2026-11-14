@@ -6,11 +6,12 @@ import (
 	"io"
 
 	"github.com/giantswarm/beekeeper/internal/central"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // watchTendFeedback reads the report threads once per feedback.every, in the
 // standby watch only, beside the poll: a slow muster never holds it up.
-func watchTendFeedback(w *Watcher, ctx context.Context) {
+func watchTendFeedback(w *watch.Watcher, ctx context.Context) {
 	fc := watchApp(w.Host).cfg.Feedback
 	if !w.Standby || !fc.Enabled() || watchApp(w.Host).now.Before(w.FeedbackNext) || !w.FeedbackBusy.CompareAndSwap(false, true) {
 		return

@@ -10,6 +10,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/diskprune"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // unusedFor starts the verdict of an eligible holder.
@@ -147,7 +148,7 @@ func TestStateHoldersWatchSaysEligibleSpaceOnce(t *testing.T) {
 	t.Cleanup(func() { liveHolders = saved })
 	calls := 0
 	liveHolders = func(*app) (holderMachine, error) { calls++; return m, nil }
-	w := &Watcher{Host: a, HoldersOn: true, Last: map[string]time.Time{}}
+	w := &watch.Watcher{Host: a, HoldersOn: true, Last: map[string]time.Time{}}
 	w.StateHolders(a.now)
 	w.Bg.Wait()
 	if calls != 1 || !w.IsActive("stateholders") {
@@ -159,7 +160,7 @@ func TestStateHoldersWatchSaysEligibleSpaceOnce(t *testing.T) {
 	}
 	// Another watch within the interval says the shared listing, walking
 	// nothing.
-	other := &Watcher{Host: a, HoldersOn: true, Last: map[string]time.Time{}}
+	other := &watch.Watcher{Host: a, HoldersOn: true, Last: map[string]time.Time{}}
 	other.StateHolders(a.now.Add(time.Minute))
 	other.Bg.Wait()
 	if calls != 1 || !other.IsActive("stateholders") {
@@ -183,7 +184,7 @@ func TestStateHoldersWatchSaysEligibleSpaceOnce(t *testing.T) {
 	if _, err := a.store.ReadFile(stateHoldersFile, &mark); err != nil || !mark.On || !strings.HasPrefix(mark.Line, "STATE HOLDERS unknown:") || !strings.Contains(mark.Line, "permission denied") {
 		t.Fatalf("unknown mark=%+v err=%v", mark, err)
 	}
-	third := &Watcher{Host: a, HoldersOn: true, Last: map[string]time.Time{}}
+	third := &watch.Watcher{Host: a, HoldersOn: true, Last: map[string]time.Time{}}
 	third.StateHolders(a.now.Add(14*time.Hour + time.Minute))
 	third.Bg.Wait()
 	if calls != 3 || !third.IsActive("stateholders") {

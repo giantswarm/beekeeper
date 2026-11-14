@@ -14,6 +14,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/gocache"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // goCacheApp is an app with a 2 GiB cap over a Go build cache of four
@@ -240,7 +241,7 @@ func TestGoCacheLookWithABuildAlwaysRunning(t *testing.T) {
 	a.out = out
 	a.cfg.Doctor.GoCacheEvery.Duration = time.Hour
 	a.cfg.Watch.Repeat.Duration = time.Hour
-	w := &Watcher{Host: a, Last: map[string]time.Time{}}
+	w := &watch.Watcher{Host: a, Last: map[string]time.Time{}}
 	t0 := time.Now()
 	for _, at := range []time.Duration{0, goCacheRetry, 55 * time.Minute} {
 		w.GoCacheLook(t0.Add(at), building)

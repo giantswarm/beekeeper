@@ -13,11 +13,12 @@ import (
 	"github.com/giantswarm/beekeeper/internal/central/centraltest"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/state/kube"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // feedWatch is ana's watch of the central feed, keeping its mark in her
 // state as a session's watch does, running until stop returns.
-func (p *person) feedWatch(out *syncBuffer) (w *Watcher, stop func()) {
+func (p *person) feedWatch(out *syncBuffer) (w *watch.Watcher, stop func()) {
 	p.t.Helper()
 	a := &app{cfgPath: p.cfg, as: p.agent, out: out}
 	if err := a.load(); err != nil {

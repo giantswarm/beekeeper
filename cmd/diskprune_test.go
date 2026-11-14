@@ -16,6 +16,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/gocache"
 	"github.com/giantswarm/beekeeper/internal/machine"
 	"github.com/giantswarm/beekeeper/internal/proc"
+	"github.com/giantswarm/beekeeper/internal/watch"
 	"github.com/giantswarm/beekeeper/internal/worktrees"
 )
 
@@ -131,7 +132,7 @@ func TestDiskPruneExternalOutputOnlyForEndedOwner(t *testing.T) {
 func TestDiskPrunePressureScheduleAndAsk(t *testing.T) {
 	a, m := diskFixture(t)
 	a.cfg.Disk = config.Disk{Prune: config.DiskPruneAuto, Every: config.Duration{Duration: time.Hour}}
-	w := &Watcher{Host: a, DiskPruneOn: true, Last: map[string]time.Time{}}
+	w := &watch.Watcher{Host: a, DiskPruneOn: true, Last: map[string]time.Time{}}
 	saved := liveDisk
 	defer func() { liveDisk = saved }()
 	calls := 0
@@ -165,7 +166,7 @@ func TestDiskPrunePressureScheduleAndAsk(t *testing.T) {
 func TestLowDiskStartsDiskPrune(t *testing.T) {
 	a, m := diskFixture(t)
 	a.cfg.Disk.Prune = config.DiskPruneAuto
-	w := &Watcher{Host: a, DiskPruneOn: true, Last: map[string]time.Time{}}
+	w := &watch.Watcher{Host: a, DiskPruneOn: true, Last: map[string]time.Time{}}
 	saved := liveDisk
 	defer func() { liveDisk = saved }()
 	calls := 0
@@ -265,7 +266,7 @@ func TestDiskFillingStartsPruneBeforeLowDisk(t *testing.T) {
 	if err := a.store.WriteFile(diskPruneFile, worktreesMark{At: now}); err != nil {
 		t.Fatal(err)
 	}
-	w := &Watcher{Host: a, DiskPruneOn: true, Last: map[string]time.Time{}}
+	w := &watch.Watcher{Host: a, DiskPruneOn: true, Last: map[string]time.Time{}}
 	saved := liveDisk
 	defer func() { liveDisk = saved }()
 	calls := 0

@@ -12,6 +12,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/update"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 func TestHostsDrainNamesRecordedExecutions(t *testing.T) {
@@ -66,7 +67,7 @@ func TestExecutionOrphanInventoryStopsOnlyUnknownJournal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w := &Watcher{Host: a}
+	w := &watch.Watcher{Host: a}
 	w.SyncExecutions(context.Background(), st)
 	if fake.inventoryCalls != 2 {
 		t.Fatalf("inventory calls=%d", fake.inventoryCalls)
@@ -262,7 +263,7 @@ func TestExecutionWatchFindsHostOnlyJournal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w := &Watcher{Host: a}
+	w := &watch.Watcher{Host: a}
 	w.SyncExecutions(context.Background(), st)
 	if stops != 1 {
 		t.Fatalf("host-only journal stops=%d; expected one", stops)

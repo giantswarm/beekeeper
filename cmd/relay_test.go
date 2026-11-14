@@ -9,6 +9,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 const (
@@ -52,7 +53,7 @@ func pendingState() *state.State {
 func TestFirePendingReportsEachOnce(t *testing.T) {
 	st := pendingState()
 	live := []*claude.Session{{ID: "s4", HostID: hostFour, Name: agentFour}}
-	lines, evs := FirePending(st, live, relayNow)
+	lines, evs := watch.FirePending(st, live, relayNow)
 	got := strings.Join(lines, "\n")
 	if len(lines) != 3 || len(evs) != 3 {
 		t.Fatalf("got %d lines, %d events:\n%s", len(lines), len(evs), got)
@@ -66,23 +67,23 @@ func TestFirePendingReportsEachOnce(t *testing.T) {
 			t.Errorf("lines lack %q:\n%s", want, got)
 		}
 	}
-	if lines, evs := FirePending(st, live, relayNow.Add(time.Minute)); len(lines)+len(evs) != 0 {
+	if lines, evs := watch.FirePending(st, live, relayNow.Add(time.Minute)); len(lines)+len(evs) != 0 {
 		t.Errorf("reported again: %v", lines)
 	}
 	// The ended session runs again (a resumed desktop session): the record
 	// is live again without a line, and its next end is a line again.
 	resumed := append(live, &claude.Session{ID: "s10", HostID: "local_9", Name: "Continue #37639"})
-	if lines, evs := FirePending(st, resumed, relayNow); len(lines) != 0 || len(evs) != 1 || !st.Records[1].Ended.IsZero() {
+	if lines, evs := watch.FirePending(st, resumed, relayNow); len(lines) != 0 || len(evs) != 1 || !st.Records[1].Ended.IsZero() {
 		t.Errorf("resume: %v, %v, %+v", lines, evs, st.Records[1])
 	}
-	if lines, _ := FirePending(st, live, relayNow); len(lines) != 1 {
+	if lines, _ := watch.FirePending(st, live, relayNow); len(lines) != 1 {
 		t.Errorf("second end: %v", lines)
 	}
 }
 
 func TestSessionChangesLeavesARecordedEndToItsLine(t *testing.T) {
 	var out bytes.Buffer
-	w := &Watcher{Host: &app{out: &out, cfg: &config.Config{}}, Records: []state.Record{{Session: four, Issue: issue}}}
+	w := &watch.Watcher{Host: &app{out: &out, cfg: &config.Config{}}, Records: []state.Record{{Session: four, Issue: issue}}}
 	w.Sessions = map[string]*claude.Session{
 		hostFour:  {ID: "s4", HostID: hostFour, Name: agentFour},
 		"local_5": {ID: "s5", HostID: "local_5", Name: agentFive},

@@ -11,6 +11,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 const claudeLoginExpired = "expired"
@@ -113,7 +114,7 @@ func (a *app) claudeLoginCmd() *cobra.Command {
 	}}
 }
 
-func watchClaudeLogin(w *Watcher) {
+func watchClaudeLogin(w *watch.Watcher) {
 	v := readClaudeLogin(watchApp(w.Host).now)
 	// A changed expiry gets a new status line even if the state stays healthy.
 	key := claudeLoginKey + " " + v.State + " " + v.Expires.Format(time.RFC3339)
@@ -145,9 +146,9 @@ func watchClaudeLogin(w *Watcher) {
 			}
 		}
 		st.NextNote++
-		n := state.Note{ID: st.NextNote, For: watchApp(w.Host).cfg.Guide.Person, By: WatchParty, At: watchApp(w.Host).now.UTC(), Due: watchApp(w.Host).now.UTC(), Kind: noteLogin, Until: probe, Text: v.line(), Default: "headless Claude turns may fail until the CLI login is renewed"}
+		n := state.Note{ID: st.NextNote, For: watchApp(w.Host).cfg.Guide.Person, By: watch.WatchParty, At: watchApp(w.Host).now.UTC(), Due: watchApp(w.Host).now.UTC(), Kind: noteLogin, Until: probe, Text: v.line(), Default: "headless Claude turns may fail until the CLI login is renewed"}
 		st.Notes = append(st.Notes, n)
-		return []state.Event{event(WatchParty, "note.add", "#%d %s", n.ID, n.Text)}, nil
+		return []state.Event{event(watch.WatchParty, "note.add", "#%d %s", n.ID, n.Text)}, nil
 	}); err != nil {
 		w.Fail(claudeLoginKey+"-note", "CLAUDE CLI LOGIN: cannot record credential step")
 	} else {

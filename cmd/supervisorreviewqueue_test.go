@@ -14,6 +14,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 const (
@@ -267,7 +268,7 @@ func TestReviewVerdictsPrintACommentedVerdict(t *testing.T) {
 // A wake that cannot reach the starter is said, not dropped.
 func TestWatchSaysAVerdictItCouldNotDeliver(t *testing.T) {
 	r := newLoopRig(t)
-	w := &Watcher{Host: r.a, Last: map[string]time.Time{}, Reported: map[string]bool{}}
+	w := &watch.Watcher{Host: r.a, Last: map[string]time.Time{}, Reported: map[string]bool{}}
 	w.TellReviewVerdicts(context.Background(), []state.WorkerReport{{By: state.Party{Name: queueReviewer}, Text: queueVerdict, TellTo: state.Party{Session: holderGone, Name: "gone-guide"}}})
 	if !strings.Contains(r.out.String(), "REVIEW VERDICT NOT DELIVERED") {
 		t.Fatalf("output:\n%s", r.out)

@@ -10,6 +10,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // An execution that published more than once keeps one transfer per push. A
@@ -138,7 +139,7 @@ func TestExecutionRetiresOnHostAfterMultiplePublications(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w := &Watcher{Host: rig.a}
+	w := &watch.Watcher{Host: rig.a}
 	st = w.SyncExecutions(ctx, st)
 	if len(fake.requests) != 1 || fake.requests[0].Trigger != execution.RetireTriggerReport {
 		t.Fatalf("host retire requests after syncExecutions = %+v, want 1 report retirement", fake.requests)

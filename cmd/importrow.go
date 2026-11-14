@@ -14,6 +14,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // importRowWait bounds one import of a session beside its headless turn:
@@ -245,9 +246,9 @@ func (a *app) importRowFromWatch(ctx context.Context, id, name string) (string, 
 	line, err := a.importRow(ctx, id, name)
 	_ = a.store.Update(func(*state.State) ([]state.Event, error) {
 		if err != nil {
-			return []state.Event{event(WatchParty, "agent.import", "%s: missed: %v", name, err)}, nil
+			return []state.Event{event(watch.WatchParty, "agent.import", "%s: missed: %v", name, err)}, nil
 		}
-		return []state.Event{event(WatchParty, "agent.import", "%s", line)}, nil
+		return []state.Event{event(watch.WatchParty, "agent.import", "%s", line)}, nil
 	})
 	return line, err
 }

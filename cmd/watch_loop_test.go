@@ -17,6 +17,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // The lane and repository of the merge a loop test's watch settles.
@@ -43,7 +44,7 @@ func (s *syncBuffer) String() string {
 // loopWatcher is a standby watch polling every interval, with a merge
 // settling on a lane whose HelmReleases readHRs reads, none when nil (never
 // kubectl): extra is appended to the watch configuration.
-func loopWatcher(t *testing.T, interval, extra string, readHRs func(context.Context, config.Lane) ([]merge.HelmRelease, error)) (*Watcher, *syncBuffer) {
+func loopWatcher(t *testing.T, interval, extra string, readHRs func(context.Context, config.Lane) ([]merge.HelmRelease, error)) (*watch.Watcher, *syncBuffer) {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
@@ -92,7 +93,7 @@ func loopWatcher(t *testing.T, interval, extra string, readHRs func(context.Cont
 }
 
 // runWatch runs the watch until the test ends.
-func runWatch(t *testing.T, w *Watcher) {
+func runWatch(t *testing.T, w *watch.Watcher) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -259,7 +260,7 @@ func TestWatchSamplesTheMachineWhileALaneReadHangs(t *testing.T) {
 	}
 }
 
-// While the CPU is under pressure the installation reads run slowReads
+// While the CPU is under pressure the installation reads run watch.SlowReads
 // times less often and at nice 10, said once as READS SLOWED.
 func TestWatchSlowsInstallationReadsUnderCPUPressure(t *testing.T) {
 	needsPlatform(t)
@@ -285,10 +286,10 @@ func TestWatchSlowsInstallationReadsUnderCPUPressure(t *testing.T) {
 	}
 	idle, idleNiced, _ := count(", loadMax: 1000000, cpuPSIMax: 1000")
 	strained, strainedNiced, out := count(", loadMax: 1000000, cpuPSIMax: -1")
-	// A read every poll, at 0 to 12 intervals, against one every slowReads.
-	if idle != intervals+1 || strained != intervals/SlowReads+1 {
+	// A read every poll, at 0 to 12 intervals, against one every watch.SlowReads.
+	if idle != intervals+1 || strained != intervals/watch.SlowReads+1 {
 		t.Errorf("%d lane reads under CPU pressure against %d idle in %d intervals, want %d and %d",
-			strained, idle, intervals, intervals/SlowReads+1, intervals+1)
+			strained, idle, intervals, intervals/watch.SlowReads+1, intervals+1)
 	}
 	if idleNiced != 0 || strainedNiced != strained {
 		t.Errorf("%d of %d reads niced under CPU pressure, %d of %d idle", strainedNiced, strained, idleNiced, idle)
@@ -301,7 +302,7 @@ func TestWatchSlowsInstallationReadsUnderCPUPressure(t *testing.T) {
 // A loop whose run overruns its interval skips the ticks it missed.
 func TestLoopSkipsMissedTicks(t *testing.T) {
 	clk := newFakeClock(t)
-	w := &Watcher{Clock: clk}
+	w := &watch.Watcher{Clock: clk}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	start := clk.Now()

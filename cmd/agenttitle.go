@@ -17,6 +17,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // retitleWait bounds the wait for the desktop to record the title a steward
@@ -854,7 +855,7 @@ func (a *app) recordDeclines(asked []stewardAnswer) {
 			}
 			st.Declines = slices.DeleteFunc(st.Declines, func(d state.Decline) bool { return d.Host == s.host })
 			st.Declines = append(st.Declines, state.Decline{Host: s.host, At: a.now.UTC(), Why: firstLine(s.answer.Text)})
-			evs = append(evs, event(WatchParty, "agents.archive", "steward %s declined to archive: %s; asked for none for %s", s.host, firstLine(s.answer.Text), dur(stewardDeclineFor)))
+			evs = append(evs, event(watch.WatchParty, "agents.archive", "steward %s declined to archive: %s; asked for none for %s", s.host, firstLine(s.answer.Text), dur(stewardDeclineFor)))
 		}
 		return evs, nil
 	})

@@ -13,6 +13,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 const overtakenRepo = "o/r"
@@ -29,7 +30,7 @@ const (
 // overtakingWatch is a running watch (it writes) on the state in dir, with
 // the desktop's records in dir/desktop and GitHub answering refs: a state,
 // or "CLOSED by <ref>" for an issue a closing keyword closed.
-func overtakingWatch(t *testing.T, refs map[string]string) (*Watcher, *bytes.Buffer) {
+func overtakingWatch(t *testing.T, refs map[string]string) (*watch.Watcher, *bytes.Buffer) {
 	t.Helper()
 	dir := t.TempDir()
 	w, _, out := notifyingWatch(t, dir, false)
@@ -56,9 +57,9 @@ func overtakingWatch(t *testing.T, refs map[string]string) (*Watcher, *bytes.Buf
 const keywordClosed = github.Closed + " by " + refTwo
 
 // keptEvents are the note.kept events of w's log.
-func keptEvents(t *testing.T, w *Watcher) []state.Event {
+func keptEvents(t *testing.T, w *watch.Watcher) []state.Event {
 	t.Helper()
-	evs, err := watchApp(w.Host).store.Events(0, func(e state.Event) bool { return e.Verb == NoteKept })
+	evs, err := watchApp(w.Host).store.Events(0, func(e state.Event) bool { return e.Verb == watch.NoteKept })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +67,7 @@ func keptEvents(t *testing.T, w *Watcher) []state.Event {
 }
 
 // listedFor is what note list --for person prints.
-func listedFor(t *testing.T, w *Watcher, person string) string {
+func listedFor(t *testing.T, w *watch.Watcher, person string) string {
 	t.Helper()
 	var out bytes.Buffer
 	prev := watchApp(w.Host).out
@@ -173,14 +174,14 @@ func TestWorkerNoteClosedAfterItsTaskEndedIsOvertaken(t *testing.T) {
 	}
 }
 
-func setNotes(t *testing.T, w *Watcher, notes ...state.Note) {
+func setNotes(t *testing.T, w *watch.Watcher, notes ...state.Note) {
 	t.Helper()
 	if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) { st.Notes = notes; return nil, nil }); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func openIDs(t *testing.T, w *Watcher) []int {
+func openIDs(t *testing.T, w *watch.Watcher) []int {
 	t.Helper()
 	st, err := watchApp(w.Host).store.Read()
 	if err != nil {
@@ -193,7 +194,7 @@ func openIDs(t *testing.T, w *Watcher) []int {
 	return ids
 }
 
-func overtakenEvents(t *testing.T, w *Watcher) []state.Event {
+func overtakenEvents(t *testing.T, w *watch.Watcher) []state.Event {
 	t.Helper()
 	evs, err := watchApp(w.Host).store.Events(0, func(e state.Event) bool { return e.Verb == noteOvertaken })
 	if err != nil {
@@ -397,7 +398,7 @@ func TestGuideFeedSaysOvertakenOnce(t *testing.T) {
 		t.Fatalf("first poll: %q", lines)
 	}
 	st.Notes = nil
-	closed := map[int]state.Event{4: overtakenEvent(WatchParty, state.Note{ID: 4, Kind: noteDecision, Text: askedQ}, "o/r#1 merged")}
+	closed := map[int]state.Event{4: overtakenEvent(watch.WatchParty, state.Note{ID: 4, Kind: noteDecision, Text: askedQ}, "o/r#1 merged")}
 	if lines, _ := a.feedLines(st, nil, closed, nil); !slices.Equal(lines, []string{"GUIDE CLOSED #4 overtaken: o/r#1 merged"}) {
 		t.Fatalf("closed: %q", lines)
 	}
@@ -475,7 +476,7 @@ func TestTodoIsNeverOvertakenByItsRef(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if refs := OvertakeRefs(st); len(refs) != 0 {
+	if refs := watch.OvertakeRefs(st); len(refs) != 0 {
 		t.Fatalf("the watch reads a to-do's refs: %v", refs)
 	}
 }
@@ -537,7 +538,7 @@ func TestReopenHoldsNothing(t *testing.T) {
 	a, out := noteApp(t)
 	n := state.Note{ID: 3, Kind: noteDecision, For: notePerson, Text: askedQ, Default: dfltOK, Refs: []string{refOne},
 		Held: &state.ItemHold{Ref: refOne}, Kept: "o/r#1 closed, its worker still runs"}
-	if err := a.store.Record(overtakenEvent(WatchParty, n, "o/r#1 closed")); err != nil {
+	if err := a.store.Record(overtakenEvent(watch.WatchParty, n, "o/r#1 closed")); err != nil {
 		t.Fatal(err)
 	}
 	if err := reopenNote(a, "3"); err != nil {
@@ -557,7 +558,7 @@ func TestReopenHoldsNothing(t *testing.T) {
 // refuses, saying to file it again, instead of "not found".
 func TestReopenOfAnOldOvertakenNoteSaysToFileItAgain(t *testing.T) {
 	a, out := noteApp(t)
-	old := event(WatchParty, noteOvertaken, "#5 overtaken: o/r#1 closed%srotate the robot password", overtakenSep)
+	old := event(watch.WatchParty, noteOvertaken, "#5 overtaken: o/r#1 closed%srotate the robot password", overtakenSep)
 	if err := a.store.Record(old); err != nil {
 		t.Fatal(err)
 	}

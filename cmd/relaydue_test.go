@@ -10,6 +10,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // A relay due said at one relayAt is said again once relayAt changed, a
@@ -92,7 +93,7 @@ func TestPastRelayGrace(t *testing.T) {
 		{"a relay open", state.Role{Holder: sup, RelayDue: due(time.Hour, 150_000), Relay: open}, false},
 		{"no holder", state.Role{RelayDue: due(time.Hour, 150_000)}, false},
 	} {
-		if got := PastRelayGrace(c.r, cfg, relayNow); got != c.want {
+		if got := watch.PastRelayGrace(c.r, cfg, relayNow); got != c.want {
 			t.Errorf("%s: %v, want %v", c.name, got, c.want)
 		}
 	}

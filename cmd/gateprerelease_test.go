@@ -15,6 +15,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // platMgrHR is the platform manager's HelmRelease on gazelle, on the
@@ -147,7 +148,7 @@ func TestLanesSayWhatASettlingMergeWaitsFor(t *testing.T) {
 			if !c.failed {
 				return
 			}
-			w := &Watcher{Host: a, Last: map[string]time.Time{}}
+			w := &watch.Watcher{Host: a, Last: map[string]time.Time{}}
 			w.Settled(context.Background(), a.now)
 			if st, _ := a.store.Read(); len(st.Merges) != 0 {
 				t.Errorf("the watch keeps a failed release settling: %+v", st.Merges)

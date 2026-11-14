@@ -27,6 +27,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 
 	"github.com/giantswarm/beekeeper/internal/sshagent"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // Background sessions (agents.mode background): beekeeper starts a session
@@ -726,7 +727,7 @@ var freshSessions = (*app).sessions
 // its turn ended, so a parked session costs the machine no memory; its wake
 // (agents wake, agents resume, the watch's resume or a timer's) resumes it
 // from its transcript. A stop that fails is a line, tried again next poll.
-func watchStopParked(w *Watcher, ctx context.Context, st *state.State, sessions []*claude.Session) {
+func watchStopParked(w *watch.Watcher, ctx context.Context, st *state.State, sessions []*claude.Session) {
 	if !slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Park != nil }) {
 		return
 	}
@@ -746,7 +747,7 @@ func watchStopParked(w *Watcher, ctx context.Context, st *state.State, sessions 
 		if !stopped {
 			continue
 		}
-		_ = watchApp(w.Host).store.Record(event(WatchParty, parkStoppedEvent, "%s: stopped its background session %s while it is parked; its wake resumes it", p.Name, p.Session))
+		_ = watchApp(w.Host).store.Record(event(watch.WatchParty, parkStoppedEvent, "%s: stopped its background session %s while it is parked; its wake resumes it", p.Name, p.Session))
 		w.EmitNow("park-stop", "PARKED SESSION STOPPED %q: background session %s frees its memory while parked; its wake resumes it (claude attach %s)", p.Name, short, short)
 	}
 	for _, ag := range st.Agents {
@@ -770,7 +771,7 @@ func watchStopParked(w *Watcher, ctx context.Context, st *state.State, sessions 
 			continue
 		}
 		w.Clear(key)
-		_ = watchApp(w.Host).store.Record(event(WatchParty, parkStoppedEvent, "%s: stopped its %s unit %s while it is parked; its wake resumes it", ag.Name, h.Name(), unit))
+		_ = watchApp(w.Host).store.Record(event(watch.WatchParty, parkStoppedEvent, "%s: stopped its %s unit %s while it is parked; its wake resumes it", ag.Name, h.Name(), unit))
 		w.EmitNow("park-stop", "PARKED SESSION STOPPED %q: %s unit %s frees its memory while parked; its wake resumes it", ag.Name, h.Name(), unit)
 	}
 }

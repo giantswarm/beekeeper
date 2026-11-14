@@ -18,6 +18,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/fatal"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // kindBlocks are the kinds of ks at a cap now: maxBusy against the busy
@@ -290,7 +291,7 @@ func kindSpendKey(kind string, day time.Time) string {
 // watchKindSpending says SPEND <kind> once a day for each kind past its
 // dailySpend: the day's spend so far in the machine's zone. The mark
 // outlives a restarted watch.
-func watchKindSpending(w *Watcher, now time.Time) {
+func watchKindSpending(w *watch.Watcher, now time.Time) {
 	if !slices.ContainsFunc(watchApp(w.Host).cfg.Agents.Kinds, func(k config.AgentKind) bool { return k.DailySpend > 0 }) {
 		return
 	}

@@ -19,6 +19,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 const (
@@ -70,7 +71,7 @@ func TestHandoversDue(t *testing.T) {
 	cfg := config.Agents{RelayAt: 20_000, LastStepGrace: config.Duration{Duration: 30 * time.Minute}, LastStepCeiling: 30_000}
 	now := time.Date(2026, 10, 8, 9, 0, 0, 0, time.UTC)
 
-	due := HandoversDue(st, sessions, cfg, now, said, contextOf, alive)
+	due := watch.HandoversDue(st, sessions, cfg, now, said, contextOf, alive)
 	if len(due) != 2 || due[0].Agent.Session != dueID || due[0].Context != 25_000 || due[0].Parked || due[0].Held != "" || due[0].Was != "" {
 		t.Fatalf("due = %+v, want the quiet agent past relayAt first", due)
 	}
@@ -80,7 +81,7 @@ func TestHandoversDue(t *testing.T) {
 		t.Errorf("due = %+v, want the parked agent past relayAt second", due)
 	}
 	// The merge ended: the merging agent is quiet now.
-	if due := HandoversDue(st, sessions, cfg, now, said, contextOf, func(int) bool { return false }); len(due) != 3 {
+	if due := watch.HandoversDue(st, sessions, cfg, now, said, contextOf, func(int) bool { return false }); len(due) != 3 {
 		t.Errorf("after the merge: due = %+v", due)
 	}
 }
@@ -119,15 +120,15 @@ func TestHandoversHeldInTheLastStep(t *testing.T) {
 	cfg := config.Agents{RelayAt: 20_000, LastStepGrace: config.Duration{Duration: 30 * time.Minute}, LastStepCeiling: 30_000}
 	contextOf := func(state.Agent, *claude.Session) int64 { return 25_000 }
 	none := func(state.Party) bool { return false }
-	find := func(due []DueAgent) map[string]DueAgent {
-		got := map[string]DueAgent{}
+	find := func(due []watch.DueAgent) map[string]watch.DueAgent {
+		got := map[string]watch.DueAgent{}
 		for _, d := range due {
 			got[d.Agent.Session] = d
 		}
 		return got
 	}
 
-	got := find(HandoversDue(st, sessions, cfg, now, none, contextOf, func(int) bool { return false }))
+	got := find(watch.HandoversDue(st, sessions, cfg, now, none, contextOf, func(int) bool { return false }))
 	if _, done := got[finished]; len(got) != 6 || done {
 		t.Fatalf("due = %+v, want every agent but the done one", got)
 	}
@@ -155,7 +156,7 @@ func TestHandoversHeldInTheLastStep(t *testing.T) {
 
 	// At the ceiling the last step holds nothing.
 	cfg.LastStepCeiling = 25_000
-	got = find(HandoversDue(st, sessions, cfg, now, none, contextOf, func(int) bool { return false }))
+	got = find(watch.HandoversDue(st, sessions, cfg, now, none, contextOf, func(int) bool { return false }))
 	for id := range held {
 		if d := got[id]; d.Held != "" || !strings.HasPrefix(d.Was, "its last step (") || !strings.HasSuffix(d.Was, ") holds no hand-over past 25k") {
 			t.Errorf("%s at the ceiling: held %q, was %q", id, d.Held, d.Was)

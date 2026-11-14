@@ -6,6 +6,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/machine"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // This optional capability leaves platforms without a kernel journal unchanged.
@@ -13,7 +14,7 @@ type suspendReader interface {
 	SuspendRecords(context.Context, time.Time) ([]machine.SuspendRecord, error)
 }
 
-func watchSuspends(w *Watcher, ctx context.Context, since time.Time, sessions []*claude.Session) {
+func watchSuspends(w *watch.Watcher, ctx context.Context, since time.Time, sessions []*claude.Session) {
 	reader, ok := plat.Machine.(suspendReader)
 	if !ok {
 		return
