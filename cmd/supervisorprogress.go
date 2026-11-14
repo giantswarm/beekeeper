@@ -26,6 +26,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/superloop"
 	"github.com/giantswarm/beekeeper/internal/transcripts"
 	"github.com/giantswarm/beekeeper/internal/update"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 const progressEvent = "supervisor.board-progress"
@@ -562,7 +563,7 @@ func (a *app) settledStalledPark(ctx context.Context, st *state.State, in superl
 		if err != nil {
 			return "", false
 		}
-		closes := noteCloses(evs, []int{id}, "")
+		closes := watch.NoteCloses(evs, []int{id}, "")
 		return cmp.Or(closes[id], fmt.Sprintf("note #%d is closed", id)), true
 	}
 	if answer, ok := a.settledStalledReleasePark(ctx, st, in, c, ag); ok {
@@ -677,7 +678,7 @@ func (a *app) releaseTargetSettled(ctx context.Context, st *state.State, in supe
 	}
 	var available bool
 	_ = a.LoopGitHub(ctx, "progress-release", func() error {
-		raw, err := readParkRelease(ctx, repo, version)
+		raw, err := watch.ReadParkRelease(ctx, repo, version)
 		if err != nil {
 			return err
 		}

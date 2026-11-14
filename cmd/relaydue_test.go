@@ -10,10 +10,14 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // A relay due said at one relayAt is said again once relayAt changed, a
 // record from before relayAt was kept among them.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestRelayDueAgainAtAChangedRelayAt(t *testing.T) {
 	sup := &state.Supervisor{Party: agentC, Since: relayNow.Add(-time.Hour)}
 	for _, said := range []*state.RelayDue{
@@ -21,16 +25,16 @@ func TestRelayDueAgainAtAChangedRelayAt(t *testing.T) {
 		{Supervisor: agentC, Since: sup.Since, Reported: relayNow.Add(-4 * 24 * time.Hour)}, // before relayAt was kept
 	} {
 		st := &state.State{}
-		guideRole.set(st, state.Role{Holder: sup, RelayDue: said})
-		q := quietness{checked: true, context: 537_000, relayAt: 400_000}
-		lines, _ := guideRole.fireRelayDue(st, q, nil, relayNow)
+		guideRole.Set(st, state.Role{Holder: sup, RelayDue: said})
+		q := quietness{Checked: true, Context: 537_000, RelayAt: 400_000}
+		lines, _ := guideRole.FireRelayDue(st, q, nil, relayNow)
 		if len(lines) != 1 || !strings.HasPrefix(lines[0], `GUIDE RELAY DUE: "Agent three" is at 537k`) {
 			t.Fatalf("relay due at the new relayAt: %q", lines)
 		}
-		if d := guideRole.get(st).RelayDue; !d.At(sup, 400_000) || !d.Reported.Equal(relayNow) {
+		if d := guideRole.Get(st).RelayDue; !d.At(sup, 400_000) || !d.Reported.Equal(relayNow) {
 			t.Fatalf("record at the new relayAt: %+v", d)
 		}
-		if lines, _ := guideRole.fireRelayDue(st, q, nil, relayNow.Add(time.Minute)); lines != nil {
+		if lines, _ := guideRole.FireRelayDue(st, q, nil, relayNow.Add(time.Minute)); lines != nil {
 			t.Fatalf("relay due twice at the same relayAt: %q", lines)
 		}
 	}
@@ -38,6 +42,9 @@ func TestRelayDueAgainAtAChangedRelayAt(t *testing.T) {
 
 // A watch process that did not say a standing relay due says it once, in
 // both of its poll's passes, and keeps when it was first reported.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestRelayDueOncePerWatchProcess(t *testing.T) {
 	const relayAt = 150_000
 	since, first := relayNow.Add(-3*time.Hour), relayNow.Add(-2*time.Hour)
@@ -48,23 +55,23 @@ func TestRelayDueOncePerWatchProcess(t *testing.T) {
 	sessions := []*claude.Session{{ID: supA.Session, HostID: supA.HostSession, Name: supA.Name, Transcript: supervisorTranscript}}
 	q := func(said relayDues, now time.Time) quietness {
 		c := roleContext(st.GuideRole(), sessions, now, relayAt, said)
-		return quietness{checked: c > 0, context: c, relayAt: relayAt}
+		return quietness{Checked: c > 0, Context: c, RelayAt: relayAt}
 	}
 	if c := roleContext(st.GuideRole(), sessions, relayNow, relayAt, nil); c != 0 {
 		t.Fatalf("a watch --once reads the context of a said relay due: %d", c)
 	}
-	if lines, _ := guideRole.fireRelayDue(st, q(nil, relayNow), nil, relayNow); lines != nil {
+	if lines, _ := guideRole.FireRelayDue(st, q(nil, relayNow), nil, relayNow); lines != nil {
 		t.Fatalf("a watch --once said a standing relay due: %q", lines)
 	}
 	for i, said := range []relayDues{{}, {}} {
 		now := relayNow.Add(time.Duration(i) * time.Hour)
 		for pass := range 2 { // the poll's read, then its write under the lock
-			if lines, _ := guideRole.fireRelayDue(st, q(said, now), said, now); len(lines) != 1 {
+			if lines, _ := guideRole.FireRelayDue(st, q(said, now), said, now); len(lines) != 1 {
 				t.Fatalf("watch %d, pass %d: %q", i, pass, lines)
 			}
 		}
 		later := now.Add(time.Minute)
-		if lines, _ := guideRole.fireRelayDue(st, q(said, later), said, later); lines != nil {
+		if lines, _ := guideRole.FireRelayDue(st, q(said, later), said, later); lines != nil {
 			t.Fatalf("watch %d said it on its next poll: %q", i, lines)
 		}
 	}
@@ -73,6 +80,8 @@ func TestRelayDueOncePerWatchProcess(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestPastRelayGrace(t *testing.T) {
 	cfg := config.Role{RelayAt: 150_000, RelayGrace: config.Duration{Duration: 30 * time.Minute}}
 	sup := &state.Supervisor{Party: supA, Since: relayNow.Add(-time.Hour)}
@@ -92,7 +101,7 @@ func TestPastRelayGrace(t *testing.T) {
 		{"a relay open", state.Role{Holder: sup, RelayDue: due(time.Hour, 150_000), Relay: open}, false},
 		{"no holder", state.Role{RelayDue: due(time.Hour, 150_000)}, false},
 	} {
-		if got := pastRelayGrace(c.r, cfg, relayNow); got != c.want {
+		if got := watch.PastRelayGrace(c.r, cfg, relayNow); got != c.want {
 			t.Errorf("%s: %v, want %v", c.name, got, c.want)
 		}
 	}
@@ -100,41 +109,44 @@ func TestPastRelayGrace(t *testing.T) {
 
 // The standby watch relays a live guide that stays over its relayAt past
 // relayGrace after its relay due, once until the backoff passed.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestStandbyRelaysAHolderOverItsRelayAt(t *testing.T) {
 	for _, rl := range roles {
-		t.Run(rl.name, func(t *testing.T) {
+		t.Run(rl.Name, func(t *testing.T) {
 			w, _, out := notifyingWatch(t, t.TempDir(), true)
-			w.cfg.LeaseDir = t.TempDir()
-			w.cfg.Guide.RelayAt = 150_000
+			watchApp(w.Host).cfg.LeaseDir = t.TempDir()
+			watchApp(w.Host).cfg.Guide.RelayAt = 150_000
 			var from atomic.Value
 			var started atomic.Int32
-			w.stand = standbyWatch{succeed: func(_ context.Context, got role, holder state.Party) (state.Party, error) {
-				if got.name != rl.name {
-					t.Errorf("relayed the %s", got.name)
+			w.Stand = standbyWatch{Succeed: func(_ context.Context, got role, holder state.Party) (state.Party, error) {
+				if got.Name != rl.Name {
+					t.Errorf("relayed the %s", got.Name)
 				}
 				from.Store(holder.Name)
 				started.Add(1)
 				return supB, nil
 			}}
-			t.Cleanup(w.stand.inflight.Wait)
+			t.Cleanup(w.Stand.Inflight.Wait)
 			sup := &state.Supervisor{Party: supA, Since: relayNow.Add(-3 * time.Hour)}
 			st := &state.State{}
-			rl.set(st, state.Role{Holder: sup,
+			rl.Set(st, state.Role{Holder: sup,
 				RelayDue: &state.RelayDue{Supervisor: supA, Since: sup.Since, Reported: relayNow.Add(-31 * time.Minute), RelayAt: 150_000}})
 			sessions := []*claude.Session{{ID: supA.Session, HostID: supA.HostSession, Name: supA.Name, Transcript: supervisorTranscript}}
 
-			w.relayOverdue(context.Background(), rl, st, sessions)
-			w.stand.inflight.Wait()
+			w.RelayOverdue(context.Background(), rl, st, sessions)
+			w.Stand.Inflight.Wait()
 			if started.Load() != 1 || from.Load() != supA.Name {
 				t.Fatalf("%d relays from %v", started.Load(), from.Load())
 			}
-			if l := out.String(); !strings.Contains(l, rl.tag+`RELAYED: "`+supA.Name+`" is at 163k tokens of context, over 150k`) || !strings.Contains(l, `started "`+supB.Name+`"`) {
+			if l := out.String(); !strings.Contains(l, rl.Tag+`RELAYED: "`+supA.Name+`" is at 163k tokens of context, over 150k`) || !strings.Contains(l, `started "`+supB.Name+`"`) {
 				t.Fatalf("watch lines:\n%s", l)
 			}
-			w.relayOverdue(context.Background(), rl, st, sessions)
-			w.now = w.now.Add(successorBackoff)
-			w.relayOverdue(context.Background(), rl, st, sessions)
-			w.stand.inflight.Wait()
+			w.RelayOverdue(context.Background(), rl, st, sessions)
+			watchApp(w.Host).now = watchApp(w.Host).now.Add(successorBackoff)
+			w.RelayOverdue(context.Background(), rl, st, sessions)
+			w.Stand.Inflight.Wait()
 			if n := started.Load(); n != 2 {
 				t.Fatalf("%d relays, want a second only past the backoff", n)
 			}
@@ -143,18 +155,21 @@ func TestStandbyRelaysAHolderOverItsRelayAt(t *testing.T) {
 }
 
 // Under its relayAt, the holder is not relayed.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestStandbyLeavesAHolderUnderItsRelayAt(t *testing.T) {
 	w, _, _ := notifyingWatch(t, t.TempDir(), true)
-	w.cfg.LeaseDir = t.TempDir()
-	w.cfg.Guide.RelayAt = 400_000
-	w.stand = standbyWatch{succeed: func(context.Context, role, state.Party) (state.Party, error) {
+	watchApp(w.Host).cfg.LeaseDir = t.TempDir()
+	watchApp(w.Host).cfg.Guide.RelayAt = 400_000
+	w.Stand = standbyWatch{Succeed: func(context.Context, role, state.Party) (state.Party, error) {
 		t.Error("relayed a guide under its relayAt")
 		return state.Party{}, nil
 	}}
-	t.Cleanup(w.stand.inflight.Wait)
+	t.Cleanup(w.Stand.Inflight.Wait)
 	sup := &state.Supervisor{Party: supA, Since: relayNow.Add(-3 * time.Hour)}
 	st := &state.State{}
-	guideRole.set(st, state.Role{Holder: sup,
+	guideRole.Set(st, state.Role{Holder: sup,
 		RelayDue: &state.RelayDue{Supervisor: supA, Since: sup.Since, Reported: relayNow.Add(-time.Hour), RelayAt: 400_000}})
-	w.relayOverdue(context.Background(), guideRole, st, []*claude.Session{{ID: supA.Session, Name: supA.Name, Transcript: supervisorTranscript}})
+	w.RelayOverdue(context.Background(), guideRole, st, []*claude.Session{{ID: supA.Session, Name: supA.Name, Transcript: supervisorTranscript}})
 }

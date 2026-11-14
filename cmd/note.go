@@ -643,10 +643,10 @@ to other due decisions until the deferral time arrives. Logs note.deferred.`,
 					return nil, refused("note #%d is not open: use `beekeeper note reopen %d --due %s` to reopen a closed note", id, id, due)
 				}
 				setNoteDeferral(&st.Notes[i], d, reason)
-				r := guideRole.get(st)
+				r := guideRole.Get(st)
 				if r.Asking == id && r.AskingFrom == "" {
 					r.Asking, r.AskingFrom = 0, ""
-					guideRole.set(st, r)
+					guideRole.Set(st, r)
 				}
 				cp := st.Notes[i]
 				deferred = &cp

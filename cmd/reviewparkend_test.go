@@ -99,10 +99,13 @@ func TestEndMergedKeepsSameNameOtherSessionRequest(t *testing.T) {
 }
 
 // The live worker runs the done command the loop told it to run after a merge.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestIdleDoneKeepsOtherOpenRequest(t *testing.T) {
 	w := parkingWatch(t, nil)
 	agent := state.Party{Session: "done-session", HostSession: "local_done-session", Name: agentOne}
-	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+	if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Agents[0].Party = agent
 		st.Records = []state.Record{{Session: agent}}
 		st.ReviewParks = []state.ReviewPark{{On: multiParkSecondPR, At: relayNow, ReviewHead: loopHead, Agent: agentOne, Party: agent}}
@@ -110,14 +113,14 @@ func TestIdleDoneKeepsOtherOpenRequest(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	c := w.agentsCmd()
-	c.SetOut(w.out)
-	c.SetErr(w.out)
+	c := watchApp(w.Host).agentsCmd()
+	c.SetOut(watchApp(w.Host).out)
+	c.SetErr(watchApp(w.Host).out)
 	c.SetArgs([]string{stateIdle, flagDone, flagReport, "first pull request done", flagProblem, noProblems})
 	if err := c.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	st, err := w.store.Read()
+	st, err := watchApp(w.Host).store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}

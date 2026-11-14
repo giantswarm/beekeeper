@@ -33,8 +33,11 @@ var migrated = []string{
 	// The state every flow records in.
 	"internal/state",
 	// The watch's loops and samples: the supervisor loop owns one, whose
-	// budget reading admits the loop's starts.
-	"cmd/watch.go",
+	// budget reading admits the loop's starts. In internal/watch, the files
+	// that came from the flows above.
+	"cmd/watch.go", "internal/watch/watch.go", "internal/watch/supervisorwatch.go",
+	"internal/watch/timer*.go", "internal/watch/capacity.go", "internal/watch/usage.go",
+	"internal/watch/gatetakeover.go", "internal/watch/ungated.go", "internal/watch/throughputhealth.go",
 }
 
 // clockFuncs are the time package's clock functions, each with what

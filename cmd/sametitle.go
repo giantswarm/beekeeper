@@ -9,6 +9,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // A title is the name a session's CLI takes messages under. Two live
@@ -63,16 +64,16 @@ func (d sameTitle) String() string {
 // session carries.
 const sameTitleKey = "same-title "
 
-// sameTitles says one SAME TITLE line per title more than one live session
+// watchSameTitles says one SAME TITLE line per title more than one live session
 // carries, and its ENDED line once one session is left with it.
-func (w *watcher) sameTitles(sessions []*claude.Session) {
+func watchSameTitles(w *watch.Watcher, sessions []*claude.Session) {
 	found := map[string]bool{}
 	for _, d := range sameTitles(sessions) {
 		key := sameTitleKey + titleKey(d.title)
 		found[key] = true
-		w.emit(key, "SAME TITLE: %s", d)
+		w.Emit(key, "SAME TITLE: %s", d)
 	}
-	w.clearMissing(sameTitleKey, found)
+	w.ClearMissing(sameTitleKey, found)
 }
 
 // titleTaken refuses to give title to me while another live session

@@ -8,8 +8,11 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestParkedLeaseHolder(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -61,8 +64,8 @@ func TestParkedLeaseHolder(t *testing.T) {
 			}
 			var out strings.Builder
 			a.out = &out
-			w := &watcher{app: a, reported: map[string]bool{}, last: map[string]time.Time{}}
-			w.staleLeases(context.Background(), sessions)
+			w := &watch.Watcher{Host: a, Reported: map[string]bool{}, Last: map[string]time.Time{}}
+			w.StaleLeases(context.Background(), sessions)
 			stale := strings.Contains(out.String(), "STALE LEASE")
 			if stale != (tc.want == holderGone) {
 				t.Fatalf("stale alarm = %v, output %q", stale, out.String())
@@ -71,7 +74,7 @@ func TestParkedLeaseHolder(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			lines, _ := firePending(st, sessions, a.now)
+			lines, _ := watch.FirePending(st, sessions, a.now)
 			ended := strings.Contains(strings.Join(lines, "\n"), "SESSION ENDED")
 			if ended != (tc.want == holderGone) || (tc.want == holderParked && !st.Records[0].Ended.IsZero()) {
 				t.Fatalf("session end = %v, lines %v, record %+v", ended, lines, st.Records[0])
@@ -84,7 +87,7 @@ func TestParkedLeaseHolder(t *testing.T) {
 				}); err != nil {
 					t.Fatal(err)
 				}
-				w.staleLeases(context.Background(), nil)
+				w.StaleLeases(context.Background(), nil)
 				if !strings.Contains(out.String(), "STALE LEASE") {
 					t.Fatal("no stale alarm after losing wake path")
 				}
@@ -92,7 +95,7 @@ func TestParkedLeaseHolder(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				lines, _ = firePending(st, nil, a.now)
+				lines, _ = watch.FirePending(st, nil, a.now)
 				if !strings.Contains(strings.Join(lines, "\n"), "SESSION ENDED") {
 					t.Fatal("no session end after losing wake path")
 				}

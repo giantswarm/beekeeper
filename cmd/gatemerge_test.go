@@ -22,6 +22,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 const mergedDoc = `{"mergeCommitSha":"abc","release":{"verdict":"available","tag":"v1.2.4"}}`
@@ -324,8 +325,8 @@ func TestASignalExitWithoutADocumentIsJudgedByGitHub(t *testing.T) {
 	}
 }
 
-// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
-// The merge base has no internal/gate package, so these tests cannot build there.
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestADeadMergesToolWindowCloses(t *testing.T) {
 	for _, c := range []struct {
 		name, pull, version string
@@ -347,7 +348,7 @@ func TestADeadMergesToolWindowCloses(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			gateApp(g.Host).closeToolWindow(context.Background(), watchParty)
+			gateApp(g.Host).closeToolWindow(context.Background(), watch.WatchParty)
 			st := gateState(t, g)
 			if lifted := len(st.Holds) == 0; lifted != c.lifted {
 				t.Fatalf("lifted %v, want %v: %+v", lifted, c.lifted, st.Holds)
@@ -368,7 +369,7 @@ func TestADeadMergesToolWindowCloses(t *testing.T) {
 			st.Merges[0].PID, st.Merges[0].Child = 0, os.Getpid()
 			return nil, nil
 		})
-		gateApp(g.Host).closeToolWindow(context.Background(), watchParty)
+		gateApp(g.Host).closeToolWindow(context.Background(), watch.WatchParty)
 		if st := gateState(t, g); len(st.Holds) != 1 || st.Holds[0].ToolMerged || updates != 0 {
 			t.Errorf("a running devctl's window, pull request %q: %+v, %d updates", pull, st.Holds, updates)
 		}
@@ -383,8 +384,8 @@ func TestADeadMergesToolWindowCloses(t *testing.T) {
 // installs the release lifts it, and the merges held behind it pass. The
 // merge's own record then finds no window left.
 //
-// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
-// The merge base has no internal/gate package, so these tests cannot build there.
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestARunningToolMergeLiftsItsWindowOnceTheReleaseVerifies(t *testing.T) {
 	asked := stubGitHub(t, github.Open, devctlFrom)
 	pull, version, updates, fail := github.Open, devctlFrom, 0, error(nil)
@@ -418,20 +419,20 @@ func TestARunningToolMergeLiftsItsWindowOnceTheReleaseVerifies(t *testing.T) {
 
 	// The pull request waits for its checks: no update, the window stays and
 	// lets the other merges through, the installed devctl being the latest.
-	gateApp(g.Host).closeToolWindow(context.Background(), watchParty)
+	gateApp(g.Host).closeToolWindow(context.Background(), watch.WatchParty)
 	if st := gateState(t, g); len(st.Holds) != 1 || updates != 0 || held() {
 		t.Fatalf("before the merge: %d updates, holds %+v", updates, st.Holds)
 	}
 
 	// Merged, no release published yet: the update installs nothing.
 	pull = github.Merged
-	gateApp(g.Host).closeToolWindow(context.Background(), watchParty)
+	gateApp(g.Host).closeToolWindow(context.Background(), watch.WatchParty)
 	st := gateState(t, g)
 	if len(st.Holds) != 1 || !st.Holds[0].ToolMerged || updates != 1 || !held() {
 		t.Fatalf("merged, nothing released: %d updates, holds %+v", updates, st.Holds)
 	}
 	asked0 := *asked
-	gateApp(g.Host).closeToolWindow(context.Background(), watchParty)
+	gateApp(g.Host).closeToolWindow(context.Background(), watch.WatchParty)
 	if updates != 1 || *asked != asked0 {
 		t.Fatalf("within toolUpdateEvery: %d updates, GitHub asked %d more times", updates, *asked-asked0)
 	}
@@ -440,7 +441,7 @@ func TestARunningToolMergeLiftsItsWindowOnceTheReleaseVerifies(t *testing.T) {
 	// and says why.
 	fail = errors.New("the latest release has no signature bundle for this platform's binary")
 	sinceUpdate()
-	gateApp(g.Host).closeToolWindow(context.Background(), watchParty)
+	gateApp(g.Host).closeToolWindow(context.Background(), watch.WatchParty)
 	st = gateState(t, g)
 	if len(st.Holds) != 1 || updates != 2 || !held() || !strings.Contains(st.Holds[0].ToolFailed, "no signature bundle") {
 		t.Fatalf("an unverified release: %d updates, holds %+v", updates, st.Holds)
@@ -456,7 +457,7 @@ func TestARunningToolMergeLiftsItsWindowOnceTheReleaseVerifies(t *testing.T) {
 	// while the merge's devctl still runs; the held merges pass.
 	fail, published = nil, true
 	sinceUpdate()
-	gateApp(g.Host).closeToolWindow(context.Background(), watchParty)
+	gateApp(g.Host).closeToolWindow(context.Background(), watch.WatchParty)
 	st = gateState(t, g)
 	if len(st.Holds) != 0 || updates != 3 || held() {
 		t.Fatalf("a verified release: %d updates, holds %+v", updates, st.Holds)
@@ -480,8 +481,8 @@ func TestARunningToolMergeLiftsItsWindowOnceTheReleaseVerifies(t *testing.T) {
 // A running promotion's window updates devctl as its release comes and
 // lifts once devctl reports a release newer than the window's opening one.
 //
-// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
-// The merge base has no internal/gate package, so these tests cannot build there.
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestARunningToolPromotionLiftsItsWindowOnceTheReleaseVerifies(t *testing.T) {
 	asked := stubGitHub(t, github.Open, devctlFrom)
 	version := devctlFrom
@@ -493,7 +494,7 @@ func TestARunningToolPromotionLiftsItsWindowOnceTheReleaseVerifies(t *testing.T)
 		st.Merges[0].PR, st.Holds[0].ToolPR = 0, 0
 		return nil, nil
 	})
-	gateApp(g.Host).closeToolWindow(context.Background(), watchParty)
+	gateApp(g.Host).closeToolWindow(context.Background(), watch.WatchParty)
 	if st := gateState(t, g); len(st.Holds) != 0 || *asked != 0 {
 		t.Fatalf("a promotion's verified release: holds %+v, GitHub asked %d times", st.Holds, *asked)
 	}
@@ -846,8 +847,8 @@ func TestAFixWindowWaivesTheLanesReadiness(t *testing.T) {
 // toolUpdateEvery, a failed one is logged, and the window lifts once devctl
 // reports the release.
 //
-// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
-// The merge base has no internal/gate package, so these tests cannot build there.
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestAMergedToolWindowUpdatesDevctl(t *testing.T) {
 	stubGitHub(t, github.Merged, devctlFrom)
 	version, updates, fail := devctlFrom, 0, error(nil)
@@ -868,8 +869,8 @@ func TestAMergedToolWindowUpdatesDevctl(t *testing.T) {
 	})
 
 	fail = errors.New("no release asset yet")
-	gateApp(g.Host).closeToolWindow(context.Background(), watchParty)
-	gateApp(g.Host).closeToolWindow(context.Background(), watchParty)
+	gateApp(g.Host).closeToolWindow(context.Background(), watch.WatchParty)
+	gateApp(g.Host).closeToolWindow(context.Background(), watch.WatchParty)
 	if st := gateState(t, g); len(st.Holds) != 1 || updates != 1 {
 		t.Fatalf("after a failed update: %d updates, holds %+v", updates, st.Holds)
 	}
@@ -882,7 +883,7 @@ func TestAMergedToolWindowUpdatesDevctl(t *testing.T) {
 		st.Holds[0].ToolUpdated = time.Now().Add(-toolUpdateEvery)
 		return nil, nil
 	})
-	gateApp(g.Host).closeToolWindow(context.Background(), watchParty)
+	gateApp(g.Host).closeToolWindow(context.Background(), watch.WatchParty)
 	if st := gateState(t, g); len(st.Holds) != 0 || updates != 2 {
 		t.Fatalf("after the update: %d updates, holds %+v", updates, st.Holds)
 	}
@@ -910,8 +911,8 @@ func TestANoReleaseToolMergeLiftsItsWindow(t *testing.T) {
 	}
 }
 
-// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
-// The merge base has no internal/gate package, so these tests cannot build there.
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestAToolMergeRerunDoesNotReopenItsClosedWindow(t *testing.T) {
 	stubGitHub(t, github.Merged, devctlTo)
 	// Stop after the startup transaction so no external merge runs.
@@ -940,7 +941,7 @@ func TestAToolMergeRerunDoesNotReopenItsClosedWindow(t *testing.T) {
 	if !held() {
 		t.Fatal("open window admitted another repository's merge")
 	}
-	gateApp(g.Host).closeToolWindow(context.Background(), watchParty)
+	gateApp(g.Host).closeToolWindow(context.Background(), watch.WatchParty)
 	if held() {
 		t.Fatal("installed release still blocks another repository's merge")
 	}
@@ -1054,8 +1055,8 @@ func TestACandidateToolMergeLiftsItsWindow(t *testing.T) {
 // merge's devctl still waits for the rest of the release: no update installs
 // a candidate, so devctl never reports it.
 //
-// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
-// The merge base has no internal/gate package, so these tests cannot build there.
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestAToolWindowLiftsOnceItsCandidateIsPublished(t *testing.T) {
 	stubGitHub(t, github.Merged, devctlFrom)
 	toolRelease = func(context.Context, string) (string, error) { return devctlTo + "-rc.1", nil }
@@ -1070,7 +1071,7 @@ func TestAToolWindowLiftsOnceItsCandidateIsPublished(t *testing.T) {
 	}
 
 	// Merged, the candidate not yet published: the window holds.
-	gateApp(g.Host).closeToolWindow(context.Background(), watchParty)
+	gateApp(g.Host).closeToolWindow(context.Background(), watch.WatchParty)
 	st := gateState(t, g)
 	if len(st.Holds) != 1 || !st.Holds[0].ToolMerged || !held() {
 		t.Fatalf("merged, no candidate: holds %+v", st.Holds)
@@ -1084,7 +1085,7 @@ func TestAToolWindowLiftsOnceItsCandidateIsPublished(t *testing.T) {
 
 	// The candidate is out: the window lifts, the merge still runs.
 	candidate = devctlTo + "-rc.1"
-	gateApp(g.Host).closeToolWindow(context.Background(), watchParty)
+	gateApp(g.Host).closeToolWindow(context.Background(), watch.WatchParty)
 	st = gateState(t, g)
 	if len(st.Holds) != 0 || held() {
 		t.Fatalf("a published candidate left the window: holds %+v", st.Holds)
@@ -1109,8 +1110,8 @@ func TestAToolWindowLiftsOnceItsCandidateIsPublished(t *testing.T) {
 // devctl reports the stable release; one that ends without its document,
 // with no pull request to ask, lifts it.
 //
-// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
-// The merge base has no internal/gate package, so these tests cannot build there.
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestAToolPromotionHoldsUntilDevctlReportsItsRelease(t *testing.T) {
 	stubGitHub(t, github.Merged, devctlFrom)
 	version := devctlFrom + "-rc.1"
@@ -1133,7 +1134,7 @@ func TestAToolPromotionHoldsUntilDevctlReportsItsRelease(t *testing.T) {
 	_ = gateApp(g.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 		return recordRun(st, 0, g.Lane, g.Me, gate.RunOutcome{Out: merge.Outcome{Merged: true, Release: devctlTo}}, time.Now(), ""), nil
 	})
-	gateApp(g.Host).closeToolWindow(context.Background(), watchParty)
+	gateApp(g.Host).closeToolWindow(context.Background(), watch.WatchParty)
 	st := gateState(t, g)
 	if len(st.Holds) != 1 || !st.Holds[0].ToolMerged || st.Holds[0].ToolRelease != devctlTo {
 		t.Fatalf("before devctl reports %s: holds %+v", devctlTo, st.Holds)
@@ -1142,7 +1143,7 @@ func TestAToolPromotionHoldsUntilDevctlReportsItsRelease(t *testing.T) {
 		t.Error("the promotion's window lets another merge through")
 	}
 	version = devctlTo
-	gateApp(g.Host).closeToolWindow(context.Background(), watchParty)
+	gateApp(g.Host).closeToolWindow(context.Background(), watch.WatchParty)
 	if st := gateState(t, g); len(st.Holds) != 0 {
 		t.Fatalf("after devctl reports %s: holds %+v", devctlTo, st.Holds)
 	}
@@ -1162,8 +1163,8 @@ func TestAToolPromotionHoldsUntilDevctlReportsItsRelease(t *testing.T) {
 // A merged window stays until devctl reports its release: another version
 // than the window's opening one is not enough.
 //
-// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
-// The merge base has no internal/gate package, so these tests cannot build there.
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestAMergedToolWindowWaitsForItsRelease(t *testing.T) {
 	stubGitHub(t, github.Merged, "v8.0.5")
 	g := runningMerge(t, merge.ToolRepo, config.Lane{Name: merge.ToolRepo})
@@ -1172,7 +1173,7 @@ func TestAMergedToolWindowWaitsForItsRelease(t *testing.T) {
 		st.Holds[0].ToolMerged, st.Holds[0].ToolRelease = true, devctlTo
 		return nil, nil
 	})
-	gateApp(g.Host).closeToolWindow(context.Background(), watchParty)
+	gateApp(g.Host).closeToolWindow(context.Background(), watch.WatchParty)
 	if st := gateState(t, g); len(st.Holds) != 1 {
 		t.Fatalf("lifted on v8.0.5 before %s: %+v", devctlTo, st.Holds)
 	}
@@ -1307,8 +1308,8 @@ func TestMergeRerunRecoversMissingExitRecord(t *testing.T) {
 	}
 }
 
-// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
-// The merge base has no internal/gate package, so these tests cannot build there.
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestToolWindowWaitsForMergeCommitRelease(t *testing.T) {
 	for _, live := range []bool{false, true} {
 		t.Run(fmt.Sprint(live), func(t *testing.T) {
@@ -1323,18 +1324,18 @@ func TestToolWindowWaitsForMergeCommitRelease(t *testing.T) {
 				})
 			}
 			// An unrelated newer binary is installed before this merge gets a tag.
-			gateApp(g.Host).closeToolWindow(context.Background(), watchParty)
+			gateApp(g.Host).closeToolWindow(context.Background(), watch.WatchParty)
 			if st := gateState(t, g); len(st.Holds) != 1 {
 				t.Fatal("unrelated release lifted the window")
 			}
 			// The merge's tag appears, but its binary is not installed yet.
 			tag = "v999.0.0"
-			gateApp(g.Host).closeToolWindow(context.Background(), watchParty)
+			gateApp(g.Host).closeToolWindow(context.Background(), watch.WatchParty)
 			if st := gateState(t, g); len(st.Holds) != 1 || st.Holds[0].ToolRelease != tag {
 				t.Fatalf("expected persisted release, got %+v", st.Holds)
 			}
 			gate.DevctlVersion = func(context.Context) string { return "999.0.0" }
-			gateApp(g.Host).closeToolWindow(context.Background(), watchParty)
+			gateApp(g.Host).closeToolWindow(context.Background(), watch.WatchParty)
 			if st := gateState(t, g); len(st.Holds) != 0 {
 				t.Fatalf("installed merge release kept window: %+v", st.Holds)
 			}

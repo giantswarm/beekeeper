@@ -14,6 +14,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // The events of a configuration override, from its set to its end.
@@ -244,7 +245,7 @@ func overridesDue(st *state.State, found map[int]checkResult, now time.Time) map
 			}
 		case o.Ref == "" && !o.Until.IsZero() && !now.Before(o.Until):
 			due[o.ID] = "its time " + clockZone(now, o.Until) + " came"
-		case o.Ref != "" && found[o.ID].holds:
+		case o.Ref != "" && found[o.ID].Holds:
 			due[o.ID] = o.Ref + " closed"
 		}
 	}
@@ -294,10 +295,10 @@ func (a *app) settleOverrides(ctx context.Context, by state.Party, check func([]
 				continue
 			}
 			if r, ok := found[o.ID]; ok {
-				if r.unreadable && (o.Found != r.reason) {
-					lines = append(lines, fmt.Sprintf("CONFIG OVERRIDE UNREADABLE: #%d, %s cannot be read (%s); it stays in effect", o.ID, o.Ref, r.reason))
+				if r.Unreadable && (o.Found != r.Reason) {
+					lines = append(lines, fmt.Sprintf("CONFIG OVERRIDE UNREADABLE: #%d, %s cannot be read (%s); it stays in effect", o.ID, o.Ref, r.Reason))
 				}
-				o.Checked, o.Found = now.UTC(), r.reason
+				o.Checked, o.Found = now.UTC(), r.Reason
 			}
 		}
 		return evs, nil
@@ -316,23 +317,6 @@ func (a *app) settleOverrides(ctx context.Context, by state.Party, check func([]
 	return lines, nil
 }
 
-// overrides settles the overrides whose end arrived, a GitHub check held
-// while githubHeld, and says what it did.
-func (w *watcher) overrides(ctx context.Context, githubHeld bool) {
-	lines, err := w.settleOverrides(ctx, watchParty, func(ts []state.Timer) map[int]checkResult {
-		if w.loopOwned {
-			return w.loopTimerChecks(ctx, ts, w.now, githubHeld)
-		}
-		return checkTimers(ctx, ts, w.now, githubHeld)
-	})
-	for _, l := range lines {
-		w.emitNow("pending", "%s", l)
-	}
-	if err != nil {
-		w.emitNow("pending", "CONFIG OVERRIDES FAILED: %v", err)
-	}
-}
-
 // loopSettleOverrides is the loop's tick of the overrides: its GitHub reads
 // take the loop's allowance and wait under the budget floor as its timers'.
 func loopSettleOverrides(l *loop.Loop, ctx context.Context, st *state.State) {
@@ -343,9 +327,9 @@ func loopSettleOverrides(l *loop.Loop, ctx context.Context, st *state.State) {
 		return a.loopTimerChecks(ctx, ts, a.now, held)
 	})
 	snapshot := *a
-	w := &watcher{app: &snapshot}
+	w := &watch.Watcher{Host: &snapshot}
 	for _, line := range lines {
-		w.emitNow("timer", "%s", line)
+		w.EmitNow("timer", "%s", line)
 	}
 	if err != nil {
 		l.SayOnce("overrides", "SUPERVISOR CONFIG OVERRIDES FAILED: %v", err)

@@ -1,4 +1,4 @@
-package cmd
+package watch
 
 import (
 	"cmp"
@@ -12,10 +12,10 @@ import (
 	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
-// tmpfsLargest is read only and runs only above the tmpfs warning threshold.
+// TmpfsLargest is read only and runs only above the tmpfs warning threshold.
 // References associate files with commands and their owning worker sessions;
 // files left behind by exited or unreadable processes have unknown owners.
-func tmpfsLargest(root string, table *proc.Table, owners map[int]string, refs func(int) ([]string, error)) string {
+func TmpfsLargest(root string, table *proc.Table, owners map[int]string, refs func(int) ([]string, error)) string {
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		return "largest entries unavailable"
@@ -39,7 +39,7 @@ func tmpfsLargest(root string, table *proc.Table, owners map[int]string, refs fu
 		for pid, p := range table.ByPID {
 			paths, _ := refs(pid)
 			label := fmt.Sprintf("%s pid %d", p.Comm, pid)
-			if s := owner(table, pid, owners); s != "" {
+			if s := Cmd.Owner(table, pid, owners); s != "" {
 				label += fmt.Sprintf(" (%q)", s)
 			}
 			for _, e := range largest {
@@ -69,7 +69,7 @@ func tmpfsLargest(root string, table *proc.Table, owners map[int]string, refs fu
 				who += fmt.Sprintf(", +%d processes", len(labels)-len(shown))
 			}
 		}
-		size := sizeStr(e.bytes)
+		size := Cmd.SizeStr(e.bytes)
 		if e.partial {
 			size += "+ (partly unreadable)"
 		}

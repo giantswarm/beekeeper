@@ -10,6 +10,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 const noteCheckAPI = "api"
@@ -246,17 +247,19 @@ func TestNoteFoldKeysOnItsRefNotOnCitedURLs(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLoginNoteClosesOnceItsProbePasses(t *testing.T) {
 	st := &state.State{Notes: []state.Note{
 		{ID: 1, Kind: noteLogin, Until: probeHolds, Text: "sign in"},
 		{ID: 2, Kind: noteLogin, Until: probeFails, Text: "sign in elsewhere"},
 		{ID: 3, Kind: noteDecision, Text: "no probe"},
 	}}
-	passed := probeLogins(context.Background(), st.Notes)
+	passed := watch.ProbeLogins(context.Background(), st.Notes)
 	if !slices.Equal(passed, []int{1}) {
 		t.Fatalf("passed %v", passed)
 	}
-	lines, evs := closeProbed(st, append(passed, 3))
+	lines, evs := watch.CloseProbed(st, append(passed, 3))
 	if len(lines) != 1 || !strings.HasPrefix(lines[0], "NOTE CLOSED: #1") || len(evs) != 1 || evs[0].Verb != noteDone {
 		t.Fatalf("lines %q, events %+v", lines, evs)
 	}

@@ -36,6 +36,9 @@ func TestAgentDir(t *testing.T) {
 }
 
 // A role may use exactly its own configured folder outside the worker roots.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestAgentDirRoleFolders(t *testing.T) {
 	a, _ := stubApp(t)
 	base := t.TempDir()
@@ -44,9 +47,9 @@ func TestAgentDirRoleFolders(t *testing.T) {
 	a.cfg.Guide.Dir = filepath.Join(a.cfg.Agents.Dir, "desk")
 	a.cfg.Guide.Dir = filepath.Join(base, "supervision")
 	for _, rl := range roles {
-		t.Run(rl.name, func(t *testing.T) {
-			dir := rl.cfg(a.cfg).Dir
-			got, err := a.agentDir(dir, rl.name)
+		t.Run(rl.Name, func(t *testing.T) {
+			dir := rl.Cfg(a.cfg).Dir
+			got, err := a.agentDir(dir, rl.Name)
 			if err != nil || got != dir {
 				t.Fatalf("role folder: %q, %v, want %q", got, err, dir)
 			}
@@ -56,18 +59,18 @@ func TestAgentDirRoleFolders(t *testing.T) {
 				}
 			}
 			for _, other := range roles {
-				if other.name != rl.name {
-					if _, err := a.agentDir(dir, other.name); err == nil {
-						t.Errorf("role folder accepted for %s", other.name)
+				if other.Name != rl.Name {
+					if _, err := a.agentDir(dir, other.Name); err == nil {
+						t.Errorf("role folder accepted for %s", other.Name)
 					}
 				}
 			}
 			for _, bad := range []string{filepath.Join(dir, "child"), dir + "-other"} {
-				if _, err := a.agentDir(bad, rl.name); err == nil {
+				if _, err := a.agentDir(bad, rl.Name); err == nil {
 					t.Errorf("role accepted unrelated folder %q", bad)
 				}
 			}
-			if got, err := a.agentDir("", rl.name); err != nil || got != a.cfg.Agents.Dir {
+			if got, err := a.agentDir("", rl.Name); err != nil || got != a.cfg.Agents.Dir {
 				t.Errorf("default changed: %q, %v", got, err)
 			}
 		})
@@ -75,9 +78,12 @@ func TestAgentDirRoleFolders(t *testing.T) {
 }
 
 // The relay launches each successor in its role folder, outside worker roots.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestSuccessorStartsInRoleFolder(t *testing.T) {
 	for _, rl := range roles {
-		t.Run(rl.name, func(t *testing.T) {
+		t.Run(rl.Name, func(t *testing.T) {
 			a, _ := stubApp(t)
 			plat.Machine = tableMachine{plat.Machine}
 			a.cfg.Agents.Mode = config.ModeBackground
@@ -85,16 +91,16 @@ func TestSuccessorStartsInRoleFolder(t *testing.T) {
 			a.cfg.Agents.Dir = t.TempDir()
 			a.cfg.Agents.Roots = []string{t.TempDir()}
 			dir := t.TempDir()
-			if rl.name == guideName {
+			if rl.Name == guideName {
 				a.cfg.Guide.Dir = dir
 			} else {
 				a.cfg.Guide.Dir = dir
 			}
-			name := rl.runName(2)
+			name := rl.RunName(2)
 			calls := stubBackground(t, "backgrounded · "+bgShortID+" · "+name+"\n", bgSession{ID: bgShortID, SessionID: bgID, Name: name})
-			from := state.Party{Session: "predecessor", Name: rl.runName(1)}
+			from := state.Party{Session: "predecessor", Name: rl.RunName(1)}
 			if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-				rl.set(st, state.Role{Holder: &state.Supervisor{Party: from, Since: a.now}, Run: 1})
+				rl.Set(st, state.Role{Holder: &state.Supervisor{Party: from, Since: a.now}, Run: 1})
 				return nil, nil
 			}); err != nil {
 				t.Fatal(err)
@@ -110,7 +116,7 @@ func TestSuccessorStartsInRoleFolder(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if r := rl.get(st); r.Relay == nil || !r.Relay.To.Is(to) {
+			if r := rl.Get(st); r.Relay == nil || !r.Relay.To.Is(to) {
 				t.Fatalf("successor relay lost: %+v", r)
 			}
 			if _, err := a.startAgent(t.Context(), agentStart{name: workerRole, role: workerRole, dir: dir, by: &from}); err == nil {

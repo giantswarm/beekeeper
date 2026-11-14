@@ -10,25 +10,27 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestRelayKeepsRunNameAfterDesktopCLIRestarts(t *testing.T) {
 	for _, title := range []string{mailGuide, claimSupervisor} {
 		t.Run(title, func(t *testing.T) {
 			rl := guideRole
-			rl.title = title
-			out := state.Party{Session: "outgoing-run", Name: rl.runName(79)}
-			next := state.Party{Session: "next-run", HostSession: "local_next-run", Name: rl.runName(80)}
+			rl.Title = title
+			out := state.Party{Session: "outgoing-run", Name: rl.RunName(79)}
+			next := state.Party{Session: "next-run", HostSession: "local_next-run", Name: rl.RunName(80)}
 			st := &state.State{}
-			rl.set(st, state.Role{Holder: &state.Supervisor{Party: out, Since: relayNow.Add(-time.Hour)}, Run: 79})
-			if _, _, err := rl.relay(st, out, next, relayNow, time.Minute); err != nil {
+			rl.Set(st, state.Role{Holder: &state.Supervisor{Party: out, Since: relayNow.Add(-time.Hour)}, Run: 79})
+			if _, _, err := rl.Relay(st, out, next, relayNow, time.Minute); err != nil {
 				t.Fatal(err)
 			}
-			if _, _, err := rl.start(st, next, true, false, relayNow); err != nil {
+			if _, _, err := rl.Take(st, next, true, false, relayNow); err != nil {
 				t.Fatal(err)
 			}
 			for i, name := range []string{next.Name, "workspace-12", "", "workspace-13"} {
 				sessions := []*claude.Session{{PID: 100 + i, ID: next.Session, HostID: next.HostSession, Name: name}}
-				_, evs := rl.observeCLI(st, sessions, relayNow.Add(time.Duration(i)*time.Second))
-				r := rl.get(st)
+				_, evs := rl.ObserveCLI(st, sessions, relayNow.Add(time.Duration(i)*time.Second))
+				r := rl.Get(st)
 				if r.Holder.Name != next.Name || r.CLI.Supervisor.Name != next.Name {
 					t.Fatalf("restart lost run name: %+v", r)
 				}

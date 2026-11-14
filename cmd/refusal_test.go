@@ -10,10 +10,14 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // An upstream refusal is a hook.refused event, and the watch says each one
 // logged after its first reading once.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchSaysUpstreamRefusals(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
@@ -35,12 +39,12 @@ func TestWatchSaysUpstreamRefusals(t *testing.T) {
 	a := &app{cfg: cfg, store: store, out: &out}
 	a.recordRefusal("s0", "gh pr create -R o/before --fill", "o/before")
 	a.now = time.Now()
-	w := &watcher{app: a, last: map[string]time.Time{}}
-	w.refusals() // the baseline
+	w := &watch.Watcher{Host: a, Last: map[string]time.Time{}}
+	w.Refusals() // the baseline
 	time.Sleep(time.Millisecond)
 	a.recordRefusal("s1", "gh pr create -R o/r --fill", "o/r")
-	w.refusals()
-	w.refusals()
+	w.Refusals()
+	w.Refusals()
 	s := out.String()
 	if strings.Count(s, "REFUSED ") != 1 || !strings.Contains(s, "upstream write to o/r: gh pr create -R o/r --fill") || strings.Contains(s, "o/before") {
 		t.Errorf("watch:\n%s", s)

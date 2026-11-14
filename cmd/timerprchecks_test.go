@@ -28,6 +28,8 @@ func ciAnswer(state string, rollup ...string) []byte {
 	return []byte(`{"state":"` + state + `","headRefOid":"` + ciHead + `","statusCheckRollup":[` + strings.Join(rollup, ",") + `]}`)
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestPRChecksConditionReadsTheRollup(t *testing.T) {
 	c, err := conditionCheck(prChecks7)
 	if err != nil || c.cmd != "gh pr view 7 --repo o/r --json state,headRefOid,statusCheckRollup" || !c.github || c.judge == nil {
@@ -55,17 +57,17 @@ func TestPRChecksConditionReadsTheRollup(t *testing.T) {
 		overrideClosed:   {ciAnswer("CLOSED"), true, "o/r#7 is closed at head abcdef012"},
 	} {
 		r := c.result(tc.out, nil)
-		if r.unreadable || r.holds != tc.holds || r.reason != tc.reason {
+		if r.Unreadable || r.Holds != tc.holds || r.Reason != tc.reason {
 			t.Errorf("%s: %+v, want holds %v reason %q", name, r, tc.holds, tc.reason)
 		}
 	}
-	if r := c.result([]byte("not json"), nil); !r.unreadable {
+	if r := c.result([]byte("not json"), nil); !r.Unreadable {
 		t.Errorf("garbage read as %+v", r)
 	}
-	if r := c.result([]byte(`{}`), nil); !r.unreadable {
+	if r := c.result([]byte(`{}`), nil); !r.Unreadable {
 		t.Errorf("an empty answer read as %+v", r)
 	}
-	if r := c.result(nil, errors.New("exit status 1: no pull request")); !r.unreadable {
+	if r := c.result(nil, errors.New("exit status 1: no pull request")); !r.Unreadable {
 		t.Errorf("a failed read read as %+v", r)
 	}
 }
@@ -74,6 +76,9 @@ func TestPRChecksConditionReadsTheRollup(t *testing.T) {
 // wait, with a pr-checks timer: the timer keeps waiting while the checks
 // run, queues a fresh worker on failure with the check and URL, and closes.
 // A green run goes directly to review without a worker turn.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestPlainCIParkWakesOnRedAndOnGreen(t *testing.T) {
 	for name, tc := range map[string]struct {
 		settled []byte
@@ -84,7 +89,7 @@ func TestPlainCIParkWakesOnRedAndOnGreen(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			w, _, out := notifyingWatch(t, t.TempDir(), false)
-			w.chores = true
+			w.Chores = true
 			answer := ciAnswer("OPEN", ciRunning, ciStatusOK)
 			reads := 0
 			fakeRead(t, func(cmd string) ([]byte, error) {
@@ -101,7 +106,7 @@ func TestPlainCIParkWakesOnRedAndOnGreen(t *testing.T) {
 				return nil
 			}
 			t.Cleanup(func() { wakeOwner = wasWake })
-			if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+			if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 				st.Agents = []state.Agent{{Party: state.Party{Session: "s9", Name: bk228}, Task: "fix o/r#7",
 					Park: &state.Park{On: claimIssue, At: relayNow.Add(-time.Minute), Waits: "CI", ReviewHead: ciHead}}}
 				st.Timers = []state.Timer{{ID: 1, Due: relayNow.Add(-time.Minute), When: prChecks7, Wake: bk228, What: "CI settled: fix or park for review", Until: relayNow.Add(2 * time.Hour)}}
@@ -110,19 +115,19 @@ func TestPlainCIParkWakesOnRedAndOnGreen(t *testing.T) {
 				t.Fatal(err)
 			}
 			live := []*claude.Session{}
-			w.pending(context.Background(), live)
-			st, _ := w.store.Read()
+			w.Pending(context.Background(), live)
+			st, _ := watchApp(w.Host).store.Read()
 			if len(woke) != 0 || len(st.Timers) != 1 || st.Timers[0].Reason != "1 of 2 checks on head abcdef012 still running" {
 				t.Fatalf("while running: woke %v, timers %+v", woke, st.Timers)
 			}
 			answer = tc.settled
-			w.now = relayNow.Add(timerEvery)
-			w.pending(context.Background(), live)
-			w.timerActs.Wait()
+			watchApp(w.Host).now = relayNow.Add(timerEvery)
+			w.Pending(context.Background(), live)
+			w.TimerActs.Wait()
 			if len(woke) != 0 {
 				t.Fatalf("old worker woke: %v", woke)
 			}
-			settled, _ := w.store.Read()
+			settled, _ := watchApp(w.Host).store.Read()
 			if name == ciGreenName {
 				if settled.Agents[0].Park.ReviewHead != ciHead || len(settled.ReviewParks) != 1 {
 					t.Fatal("green CI did not request review")
@@ -136,10 +141,10 @@ func TestPlainCIParkWakesOnRedAndOnGreen(t *testing.T) {
 			}
 			// Closed: later ticks neither read nor wake again.
 			before := reads
-			w.now = relayNow.Add(3 * timerEvery)
-			w.pending(context.Background(), live)
-			w.timerActs.Wait()
-			if st, _ := w.store.Read(); len(st.Timers) != 0 || len(woke) != 0 || reads != before {
+			watchApp(w.Host).now = relayNow.Add(3 * timerEvery)
+			w.Pending(context.Background(), live)
+			w.TimerActs.Wait()
+			if st, _ := watchApp(w.Host).store.Read(); len(st.Timers) != 0 || len(woke) != 0 || reads != before {
 				t.Fatalf("after firing: timers %+v, woke %v, reads %d→%d", st.Timers, woke, before, reads)
 			}
 		})

@@ -765,20 +765,6 @@ func (a *app) agentViews(st *state.State, sessions []*claude.Session) []agentVie
 	return out
 }
 
-// stoppedAgents are the agents with a task whose CLI does not run.
-func stoppedAgents(agents []state.Agent, sessions []*claude.Session) []state.Agent {
-	var out []state.Agent
-	for _, ag := range agents {
-		if ag.Execution != nil {
-			continue
-		}
-		if _, live := claude.Live(sessions, ag.Party); ag.Task != "" && !live {
-			out = append(out, ag)
-		}
-	}
-	return out
-}
-
 // resumeMessage is the turn a resumed worker starts with.
 const resumeMessage = "Your CLI stopped (a reboot or a crash). Re-query the live state of your task and continue it."
 

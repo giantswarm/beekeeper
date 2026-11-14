@@ -288,13 +288,13 @@ func (a *app) timerCheck(ctx context.Context, arg string) error {
 	r := c.result(readProbe(ctx, c.cmd))
 	found := "not yet"
 	switch {
-	case r.holds:
+	case r.Holds:
 		found = "it holds"
-	case r.unreadable:
+	case r.Unreadable:
 		found = unchecked(t)
 	}
-	if r.reason != "" {
-		found += ": " + r.reason
+	if r.Reason != "" {
+		found += ": " + r.Reason
 	}
 	if a.json {
 		return a.printJSON(struct {
@@ -303,7 +303,7 @@ func (a *app) timerCheck(ctx context.Context, arg string) error {
 			Holds      bool   `json:"holds"`
 			Unreadable bool   `json:"unreadable,omitempty"`
 			Reason     string `json:"reason,omitempty"`
-		}{t.ID, timerCond(t), r.holds, r.unreadable, r.reason})
+		}{t.ID, timerCond(t), r.Holds, r.Unreadable, r.Reason})
 	}
 	_, err = fmt.Fprintf(a.out, "#%d %s: %s\n", t.ID, timerCond(t), found)
 	return err

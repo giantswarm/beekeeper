@@ -38,7 +38,7 @@ func (a *app) personExtraText(st *state.State, me state.Party, n *state.Note) st
 		return ""
 	}
 	var parties []state.Party
-	if h := guideRole.get(st).Holder; h != nil {
+	if h := guideRole.Get(st).Holder; h != nil {
 		parties = append(parties, h.Party)
 	}
 	if me.Session != "" || me.HostSession != "" {

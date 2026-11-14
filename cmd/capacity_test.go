@@ -265,37 +265,43 @@ func supervised(n int) *state.State {
 // The watch says CAPACITY FULL at the ceiling and ENDED when busy drops below
 // it; below the ceiling it stays silent (no CAPACITY LOW) and clears any stale
 // capacity-low condition.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchCapacity(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
 	room := roomy()
 	reads := 0
-	w.readHeadroom = func(context.Context, *capacity.SwapReading) *capacity.Headroom { reads++; return room }
+	w.ReadHeadroom = func(context.Context, *capacity.SwapReading) *capacity.Headroom { reads++; return room }
 	count := func(s string) int { return strings.Count(out.String(), s) }
 
-	w.capacity(context.Background(), supervised(3), nil)
+	w.Capacity(context.Background(), supervised(3), nil)
 	if out.Len() != 0 || reads != 0 {
 		t.Fatalf("below ceiling (reads %d):\n%s", reads, out)
 	}
-	w.capacity(context.Background(), supervised(10), nil)
-	w.capacity(context.Background(), supervised(10), nil)
+	w.Capacity(context.Background(), supervised(10), nil)
+	w.Capacity(context.Background(), supervised(10), nil)
 	if count("CAPACITY FULL 10 of 10: headroom:") != 1 || reads != 2 {
 		t.Fatalf("at the ceiling twice (reads %d):\n%s", reads, out)
 	}
-	w.capacity(context.Background(), supervised(9), nil)
+	w.Capacity(context.Background(), supervised(9), nil)
 	if count("ENDED CAPACITY FULL 10 of 10") != 1 || reads != 2 {
 		t.Fatalf("below ceiling again (reads %d):\n%s", reads, out)
 	}
 }
 
 // The watch's swap reading reaches capacity through the state while fresh.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchSwapReading(t *testing.T) {
 	w, _, _ := notifyingWatch(t, t.TempDir(), false)
-	w.keepSwap(&capacity.SwapReading{At: relayNow, UsedMiB: 900, PerHourMiB: 40, Rated: true})
-	if r := w.watchSwap(); r == nil || r.PerHourMiB != 40 {
+	w.KeepSwap(&capacity.SwapReading{At: relayNow, UsedMiB: 900, PerHourMiB: 40, Rated: true})
+	if r := watchApp(w.Host).watchSwap(); r == nil || r.PerHourMiB != 40 {
 		t.Fatalf("fresh reading: %+v", r)
 	}
-	w.now = relayNow.Add(swapFresh + time.Second)
-	if r := w.watchSwap(); r != nil {
+	watchApp(w.Host).now = relayNow.Add(swapFresh + time.Second)
+	if r := watchApp(w.Host).watchSwap(); r != nil {
 		t.Errorf("stale reading counted: %+v", r)
 	}
 }
@@ -384,6 +390,9 @@ func TestDryRunSlotNamesTheWait(t *testing.T) {
 
 // A configured ceiling of 0 says "no start: ceiling 0", refuses agents start
 // without --force, and keeps the watch silent; unset keeps the default 10.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestCapacityCeilingZeroAndUnset(t *testing.T) {
 	zero := config.Capacity{Ceiling: 0}
 	for _, n := range []int{0, 2} {
@@ -534,40 +543,40 @@ func TestCapacityCeilingZeroAndUnset(t *testing.T) {
 	watchDir := t.TempDir()
 	watchCfg := filepath.Join(watchDir, "config.yaml")
 	w, _, out := notifyingWatch(t, watchDir, false)
-	w.cfgPath = watchCfg
+	watchApp(w.Host).cfgPath = watchCfg
 	reads := 0
-	w.readHeadroom = func(context.Context, *capacity.SwapReading) *capacity.Headroom { reads++; return roomy() }
-	w.capacity(context.Background(), supervised(10), nil)
+	w.ReadHeadroom = func(context.Context, *capacity.SwapReading) *capacity.Headroom { reads++; return roomy() }
+	w.Capacity(context.Background(), supervised(10), nil)
 	if !strings.Contains(out.String(), fullTenOfTen) || reads != 1 {
 		t.Fatalf("before ceiling 0 (reads %d):\n%s", reads, out)
 	}
 	out.Reset()
 	setCap(watchCfg, "0")
-	w.capacity(context.Background(), supervised(0), nil)
+	w.Capacity(context.Background(), supervised(0), nil)
 	if !strings.Contains(out.String(), "ENDED "+fullTenOfTen) || reads != 1 {
 		t.Fatalf("at ceiling 0 with 0 busy (reads %d):\n%s", reads, out)
 	}
-	if w.cfg.Capacity.Ceiling != config.DefaultCeiling {
-		t.Errorf("w.cfg.Capacity mutated to %+v", w.cfg.Capacity)
+	if watchApp(w.Host).cfg.Capacity.Ceiling != config.DefaultCeiling {
+		t.Errorf("w.cfg.Capacity mutated to %+v", watchApp(w.Host).cfg.Capacity)
 	}
 	out.Reset()
-	w.capacity(context.Background(), supervised(2), nil)
+	w.Capacity(context.Background(), supervised(2), nil)
 	if out.Len() != 0 || reads != 1 {
 		t.Fatalf("at ceiling 0 with 2 busy (reads %d):\n%s", reads, out)
 	}
 
 	// A watcher started at ceiling 0 speaks once watchCfg restores a positive ceiling.
 	wFromZero, _, outFromZero := notifyingWatch(t, t.TempDir(), false)
-	wFromZero.cfg.Capacity = zero
-	wFromZero.cfgPath = watchCfg
+	watchApp(wFromZero.Host).cfg.Capacity = zero
+	watchApp(wFromZero.Host).cfgPath = watchCfg
 	fromZeroReads := 0
-	wFromZero.readHeadroom = func(context.Context, *capacity.SwapReading) *capacity.Headroom { fromZeroReads++; return roomy() }
-	wFromZero.capacity(context.Background(), supervised(10), nil)
+	wFromZero.ReadHeadroom = func(context.Context, *capacity.SwapReading) *capacity.Headroom { fromZeroReads++; return roomy() }
+	wFromZero.Capacity(context.Background(), supervised(10), nil)
 	if outFromZero.Len() != 0 || fromZeroReads != 0 {
 		t.Fatalf("started at ceiling 0 (reads %d):\n%s", fromZeroReads, outFromZero)
 	}
 	setCap(watchCfg, "10")
-	wFromZero.capacity(context.Background(), supervised(10), nil)
+	wFromZero.Capacity(context.Background(), supervised(10), nil)
 	if !strings.Contains(outFromZero.String(), fullTenOfTen) || fromZeroReads != 1 {
 		t.Fatalf("after restoring positive ceiling (reads %d):\n%s", fromZeroReads, outFromZero)
 	}
@@ -576,7 +585,7 @@ func TestCapacityCeilingZeroAndUnset(t *testing.T) {
 	if err := os.WriteFile(watchCfg, []byte("capacity: ["), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if got := wFromZero.liveCapacity(); got.Ceiling != zero.Ceiling {
+	if got := watchApp(wFromZero.Host).liveCapacity(); got.Ceiling != zero.Ceiling {
 		t.Errorf("liveCapacity on broken file = %+v, want fallback %+v", got, zero)
 	}
 }

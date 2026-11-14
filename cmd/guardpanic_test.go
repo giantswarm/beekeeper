@@ -12,6 +12,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 const panicCWDKey = "cwd"
@@ -81,6 +82,8 @@ func TestRecordGuardPanicLog(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestAnnotationHookPanicsLogAndStayOpen(t *testing.T) {
 	oldPlatform := plat
 	t.Cleanup(func() { plat = oldPlatform })
@@ -111,9 +114,9 @@ func TestAnnotationHookPanicsLogAndStayOpen(t *testing.T) {
 			}
 			a.store = store
 			a.now = events[0].At.Add(-time.Second)
-			w := &watcher{app: a, last: map[string]time.Time{}, refusedSince: a.now}
-			w.refusals()
-			w.refusals()
+			w := &watch.Watcher{Host: a, Last: map[string]time.Time{}, RefusedSince: a.now}
+			w.Refusals()
+			w.Refusals()
 			if strings.Count(out.String(), "HOOK PANIC") != 1 || !strings.Contains(out.String(), hook) {
 				t.Fatalf("watch: %s", out.String())
 			}

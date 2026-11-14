@@ -14,6 +14,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/gocache"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // goCacheApp is an app with a 2 GiB cap over a Go build cache of four
@@ -233,6 +234,9 @@ func TestTrimGoCachePastTheMarginWaitsForTheRuns(t *testing.T) {
 // A desk where a go build always runs: the cache over its cap waits, the
 // watch says GO CACHE with its size, cap and wait once it stayed over the
 // cap across two intervals, and the trim runs once it is past the margin.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestGoCacheLookWithABuildAlwaysRunning(t *testing.T) {
 	a, cache := goCacheApp(t)
 	overCap(t, a, cache)
@@ -240,10 +244,10 @@ func TestGoCacheLookWithABuildAlwaysRunning(t *testing.T) {
 	a.out = out
 	a.cfg.Doctor.GoCacheEvery.Duration = time.Hour
 	a.cfg.Watch.Repeat.Duration = time.Hour
-	w := &watcher{app: a, last: map[string]time.Time{}}
+	w := &watch.Watcher{Host: a, Last: map[string]time.Time{}}
 	t0 := time.Now()
 	for _, at := range []time.Duration{0, goCacheRetry, 55 * time.Minute} {
-		w.goCacheLook(t0.Add(at), building)
+		w.GoCacheLook(t0.Add(at), building)
 	}
 	if out.Len() != 0 {
 		t.Fatalf("within one interval the watch said:\n%s", out)
@@ -251,13 +255,13 @@ func TestGoCacheLookWithABuildAlwaysRunning(t *testing.T) {
 	if !exists(filepath.Join(cache, "03/oldest-d")) {
 		t.Fatal("a cache short of the margin was trimmed while a build ran")
 	}
-	w.goCacheLook(t0.Add(time.Hour), building)
+	w.GoCacheLook(t0.Add(time.Hour), building)
 	want := "GO CACHE: Go build cache " + cache + ": 4.5 GiB, cap 4.0 GiB (doctor.goCacheMaxGiB); its trim waits for the go builds (PIDs 4242); over the cap for 1h0m0s"
 	if !strings.Contains(out.String(), want) {
 		t.Fatalf("after two intervals the watch said:\n%s\nwant\n%s", out, want)
 	}
 	addEntry(t, cache, "05/new-c", 1<<30, time.Now())
-	w.goCacheLook(t0.Add(time.Hour+goCacheRetry), building)
+	w.GoCacheLook(t0.Add(time.Hour+goCacheRetry), building)
 	if !strings.Contains(out.String(), "ENDED GO CACHE") {
 		t.Errorf("past the margin the trim did not end GO CACHE:\n%s", out)
 	}

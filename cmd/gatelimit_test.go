@@ -21,11 +21,14 @@ import (
 
 // Killing the gate must not hide its still-running child or tell its owner
 // that the merge was lost. The child PID alone keeps the lane occupied.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestAKilledGateWithALiveChildStaysInItsLane(t *testing.T) {
 	w, woke := cutWatch(t, state.Merge{Repo: scratchRepo, PR: 7, Lane: hungLane, By: four,
 		PID: deadPID(t), Child: os.Getpid(), Phase: state.Running, Started: relayNow})
 	polls(w, 3)
-	st, err := w.store.Read()
+	st, err := watchApp(w.Host).store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,12 +36,12 @@ func TestAKilledGateWithALiveChildStaysInItsLane(t *testing.T) {
 		t.Fatalf("merges %+v, wakes %q", st.Merges, *woke)
 	}
 	var out bytes.Buffer
-	w.out = &out
-	w.printLanes(w.laneViews(st))
+	watchApp(w.Host).out = &out
+	watchApp(w.Host).printLanes(watchApp(w.Host).laneViews(st))
 	if !strings.Contains(out.String(), "running o/r#7") {
 		t.Fatalf("surviving merge missing from lanes: %s", out.String())
 	}
-	evs, err := w.store.Events(0, func(e state.Event) bool { return e.Verb == "merge.lost" || e.Verb == "merge.cut" })
+	evs, err := watchApp(w.Host).store.Events(0, func(e state.Event) bool { return e.Verb == "merge.lost" || e.Verb == "merge.cut" })
 	if err != nil || len(evs) != 0 {
 		t.Fatalf("premature loss events %+v: %v", evs, err)
 	}

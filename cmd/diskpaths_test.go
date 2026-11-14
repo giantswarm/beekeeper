@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 const diskGrowthTestPath = "/cache/b"
@@ -216,6 +217,8 @@ func TestDiskUsageNamesOwners(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestDiskPathGrowthAndReports(t *testing.T) {
 	prev := []diskPath{{Path: "/cache/a", Bytes: 100}, {Path: diskGrowthTestPath, Bytes: 5}, {Path: "/cache/partial", Bytes: 1, Partial: true}}
 	cur := []diskPath{{Path: "/cache/a", Bytes: 90}, {Path: diskGrowthTestPath, Bytes: 15}, {Path: "/cache/new", Bytes: 1000}, {Path: "/cache/partial", Bytes: 20}}
@@ -228,8 +231,8 @@ func TestDiskPathGrowthAndReports(t *testing.T) {
 	if !strings.Contains(lines, "disk paths by size:") || !strings.Contains(lines, "disk paths by growth: \"/cache/b\"") || !strings.Contains(lines, "growth unknown") {
 		t.Fatal(lines)
 	}
-	dw := diskWatch{paths: cur}
-	if line := dw.writersLine(time.Now(), 0, nil, nil); !strings.Contains(line, "fastest-growing path: \"/cache/b\"") {
+	dw := watch.DiskWatch{Paths: cur}
+	if line := dw.WritersLine(time.Now(), 0, nil, nil); !strings.Contains(line, "fastest-growing path: \"/cache/b\"") {
 		t.Fatal(line)
 	}
 	changes := strings.Join(diffSnapshots(&snapshot{DiskPaths: prev}, &snapshot{DiskPaths: cur}), "\n")

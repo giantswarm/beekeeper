@@ -17,26 +17,29 @@ import (
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 const continuationOldSession = "continuation-old-session"
 const continuationNewSession = "continuation-new-session"
 const continuationTaskRef = "o/r#12"
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestParkWakeQueuesFreshContinuationWithoutHarness(t *testing.T) {
 	for _, harness := range []string{claudeComm, config.CodexHarness, capacity.HarnessAgy} {
 		t.Run(harness, func(t *testing.T) {
 			w := parkingWatch(t, nil)
-			if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+			if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 				st.Agents[0].Harness = harness
 				st.Agents[0].Task = recoveryTask
-				st.Agents[0].Park = &state.Park{At: w.now, On: "#3", Waits: "answer"}
+				st.Agents[0].Park = &state.Park{At: watchApp(w.Host).now, On: "#3", Waits: "answer"}
 				return nil, nil
 			}); err != nil {
 				t.Fatal(err)
 			}
 			for range 2 {
-				if err := w.wakeAgent(context.Background(), state.Party{Name: resumer}, agentOne, parkAnswer, ""); err != nil {
+				if err := watchApp(w.Host).wakeAgent(context.Background(), state.Party{Name: resumer}, agentOne, parkAnswer, ""); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -116,31 +119,35 @@ func TestContinuationTransfersOwnershipOnlyAfterAcceptedStart(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestContinuationRefusesNewEventsDuringStartup(t *testing.T) {
 	w := parkingWatch(t, nil)
-	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Agents[0].Park = &state.Park{At: w.now, Continuing: true}
+	if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents[0].Park = &state.Park{At: watchApp(w.Host).now, Continuing: true}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	err := w.queueContinuation(state.Party{Name: resumer}, agentOf(t, w), parkAnswer)
+	err := watchApp(w.Host).queueContinuation(state.Party{Name: resumer}, agentOf(t, w), parkAnswer)
 	if err == nil || !strings.Contains(err.Error(), "retry event delivery") {
 		t.Fatalf("event acknowledged without delivery: %v", err)
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestReviewWaitIgnoresLegacyMechanicalTimers(t *testing.T) {
 	w := parkingWatch(t, nil)
 	woke := stubWakes(t)
-	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Agents[0].Park = &state.Park{At: w.now, On: loopPR, ReviewHead: loopHead, Waits: deskReviewWait}
+	if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents[0].Park = &state.Park{At: watchApp(w.Host).now, On: loopPR, ReviewHead: loopHead, Waits: deskReviewWait}
 		recordAgentReviewPark(st, st.Agents[0])
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	w.wakeTimer(context.Background(), timerFire{t: state.Timer{ID: 1, Wake: agentOne, When: "pr-checks " + loopPR}, reason: "fixture condition settled"})
+	w.WakeTimer(context.Background(), timerFire{T: state.Timer{ID: 1, Wake: agentOne, When: "pr-checks " + loopPR}, Reason: "fixture condition settled"})
 	if len(*woke) != 0 || len(agentOf(t, w).Park.Continuation) != 0 {
 		t.Fatal("mechanical review event used a worker turn")
 	}
@@ -299,6 +306,9 @@ func TestAlertWakeAndEndedParkCandidatePreserveQueuedContinuation(t *testing.T) 
 // Exercise generated briefs through the real lint and duplicate-PR gate, not
 // just a fake successful start. Both timer and message delivery must replace
 // the owner of an existing PR without turning its previous transcript.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestContinuationOfOpenPullPassesRealStartGates(t *testing.T) {
 	for _, fromTimer := range []bool{false, true} {
 		t.Run(fmt.Sprint("timer=", fromTimer), func(t *testing.T) {
@@ -315,8 +325,8 @@ func TestContinuationOfOpenPullPassesRealStartGates(t *testing.T) {
 			}
 			const message = "Guide run 32: verify #888.\n```\nSee https://github.com/other/repo/issues/99\n```"
 			if fromTimer {
-				w := &watcher{app: r.a}
-				w.wakeTimer(t.Context(), timerFire{t: state.Timer{ID: 42, By: party, Wake: party.Name, Due: r.a.now, What: message}, reason: paramDue})
+				w := &watch.Watcher{Host: r.a}
+				w.WakeTimer(t.Context(), timerFire{T: state.Timer{ID: 42, By: party, Wake: party.Name, Due: r.a.now, What: message}, Reason: paramDue})
 			} else if err := r.a.queueContinuation(loop.LoopParty, old, message); err != nil {
 				t.Fatal(err)
 			}

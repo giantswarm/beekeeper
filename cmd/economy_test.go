@@ -14,6 +14,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // hourBudget is what the replayed hour may print, in bytes. The hour
@@ -36,13 +37,16 @@ var (
 // through its session tracking, the alerts through their line and its
 // brackets, the rest as they came. Each fact is said exactly once, and the
 // hour stays under hourBudget.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchReplayedHourSaysEachFactOnceInBudget(t *testing.T) {
 	raw, err := os.ReadFile("testdata/watch-hour.txt")
 	if err != nil {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	w := &watcher{app: &app{out: &out, cfg: &config.Config{}}, last: map[string]time.Time{}, sessions: map[string]*claude.Session{}}
+	w := &watch.Watcher{Host: &app{out: &out, cfg: &config.Config{}}, Last: map[string]time.Time{}, Sessions: map[string]*claude.Session{}}
 	live := map[string]*claude.Session{}
 	pid := 0
 	session := func(name string) *claude.Session {
@@ -56,13 +60,13 @@ func TestWatchReplayedHourSaysEachFactOnceInBudget(t *testing.T) {
 		if m := sessionsRe.FindStringSubmatch(hourLine.FindStringSubmatch(l)[2]); m != nil {
 			for _, n := range names(m[2]) {
 				if !seen[n] && m[1] != "started" {
-					w.sessions[n], live[n] = session(n), nil
+					w.Sessions[n], live[n] = session(n), nil
 				}
 				seen[n] = true
 			}
 		}
 	}
-	for n, s := range w.sessions {
+	for n, s := range w.Sessions {
 		live[n] = s
 	}
 	now := time.Date(2026, 9, 25, 4, 0, 0, 0, time.UTC)
@@ -103,17 +107,17 @@ func TestWatchReplayedHourSaysEachFactOnceInBudget(t *testing.T) {
 				}
 				continue
 			}
-			w.emitNow("event", "%s", l)
+			w.EmitNow("event", "%s", l)
 		}
 		if changed {
 			sessions := make([]*claude.Session, 0, len(live))
 			for _, s := range live {
 				sessions = append(sessions, s)
 			}
-			w.sessionChanges(sessions)
+			w.SessionChanges(sessions)
 		}
 		for _, l := range decorate(alertsNow, nil, func() []string { return hints }) {
-			w.emitNow("alerts", "%s", l)
+			w.EmitNow("alerts", "%s", l)
 		}
 	}
 
@@ -142,16 +146,19 @@ func names(list string) []string {
 
 // A lasting condition is one line when it starts and one ENDED line when
 // it ends, however many polls it lasts.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchSaysAConditionsStartAndEndOnce(t *testing.T) {
 	var out bytes.Buffer
 	cfg := &config.Config{}
 	cfg.Watch.Repeat.Duration = 10 * time.Minute
-	w := &watcher{app: &app{out: &out, cfg: cfg}, last: map[string]time.Time{}}
+	w := &watch.Watcher{Host: &app{out: &out, cfg: cfg}, Last: map[string]time.Time{}}
 	for range 40 {
-		w.check("avail", true, "LOW RAM: %d MiB available, swap %d MiB", 900, 12000)
+		w.Check("avail", true, "LOW RAM: %d MiB available, swap %d MiB", 900, 12000)
 	}
-	w.check("avail", false, "LOW RAM: %d MiB available, swap %d MiB", 9000, 12000)
-	w.check("avail", false, "LOW RAM: %d MiB available, swap %d MiB", 9000, 12000)
+	w.Check("avail", false, "LOW RAM: %d MiB available, swap %d MiB", 9000, 12000)
+	w.Check("avail", false, "LOW RAM: %d MiB available, swap %d MiB", 9000, 12000)
 	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
 	if len(lines) != 2 || !strings.HasSuffix(lines[0], "LOW RAM: 900 MiB available, swap 12000 MiB") ||
 		!strings.Contains(lines[1], "ENDED LOW RAM (since ") {
@@ -222,6 +229,9 @@ func TestSecondReadSaysNoChange(t *testing.T) {
 
 // A restarted watch of the same caller resumes its open conditions: the
 // condition still in progress gives no new line until it ends.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestRestartedWatchSaysAnOpenConditionOnlyAtItsEnd(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
@@ -238,12 +248,14 @@ func TestRestartedWatchSaysAnOpenConditionOnlyAtItsEnd(t *testing.T) {
 	}
 	var out bytes.Buffer
 	a := &app{cfg: cfg, store: store, now: time.Now(), out: &out, as: agentOne}
-	low := func(w *watcher, on bool) { w.check("avail", on, "LOW RAM: %d MiB available, swap %d MiB", 900, 12000) }
+	low := func(w *watch.Watcher, on bool) {
+		w.Check("avail", on, "LOW RAM: %d MiB available, swap %d MiB", 900, 12000)
+	}
 
 	first := a.newWatcher(false, true)
 	low(first, true)
-	first.reported["runaway x"], first.dirty = true, true
-	first.saveMark()
+	first.Reported["runaway x"], first.Dirty = true, true
+	first.SaveMark()
 	if strings.Count(out.String(), "LOW RAM") != 1 {
 		t.Fatalf("the first watch printed:\n%s", out.String())
 	}
@@ -253,7 +265,7 @@ func TestRestartedWatchSaysAnOpenConditionOnlyAtItsEnd(t *testing.T) {
 	for range 5 {
 		low(second, true)
 	}
-	if out.Len() != 0 || !second.reported["runaway x"] {
+	if out.Len() != 0 || !second.Reported["runaway x"] {
 		t.Errorf("a restarted watch said again what the first had said:\n%s", out.String())
 	}
 	low(second, false)

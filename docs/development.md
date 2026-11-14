@@ -580,6 +580,16 @@ timer from the running watches.
   forwarder that says so. A seam entry goes when its target moves to a package the loop can import.
   The loop uses `internal/gate` directly for its command name, exit codes, release verdict and
   short commit IDs, without command callbacks or copied gate constants.
+- `internal/watch`: The watch (`Watcher` and its loops: the poll, the machine sample, the
+  standby watch's relays and recoveries, timers, usage, the reporter, the doctor's and the disk's
+  chores, central feed and mailbox). `cmd` holds the `watch` command and builds the `Watcher`, and
+  is its `Host`. What the package still needs of the command is named in `host.go` (`Host` for the
+  app, `Cmd` for the package's functions) and `vocabulary.go` (the command's constants, kept equal
+  by `cmd`'s `TestWatchVocabulary`). Steps whose bodies need the command's own types stay in `cmd`
+  as functions over `*watch.Watcher`, behind a forwarder that says so. The relayed `role` lives
+  here, beside the standby watch that relays it; `cmd` keeps aliases of it and of the other shared
+  types (`cmd/watchalias.go`). A seam entry goes when its target moves to a package the watch can
+  import.
 - `internal/superloop`: The supervisor's pure planner: the pass's input, actions, `Tracked` and
   `Plan` in `superloop.go`, the action ledger and tracking episodes in `ledger.go`, the pull
   request stage in `pull.go`, the overlap stage in `overlap.go`, the orphan sweep in `sweep.go`,
@@ -644,7 +654,7 @@ timer from the running watches.
   failure tail. A leaf so both writers share it.
 - `internal/free`: What can be freed (dead sessions' dirs, throwaway temp dirs, orphaned workers) and what is only reported, as a report or the front end's TSV.
 - `internal/update`: The latest release, its signature check and the one-rename install.
-- `cmd`: The command line. The supervisor and the guide are one `role` type (`cmd/relay.go`): start,
+- `cmd`: The command line. The supervisor and the guide are one `role` type (`internal/watch/relay.go`): start,
   relay, relief, restart grace and relay due are written once and parameterised by the role's name,
   record and configuration; only the supervisor's start moves the grants. The guide's queue
   (`guideQueue`) holds the notes for `guide.person` (`noteFor`: a note's `For`, or an older note's

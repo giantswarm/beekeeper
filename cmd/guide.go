@@ -27,7 +27,7 @@ import (
 
 func (a *app) guideCmd() *cobra.Command {
 	c := &cobra.Command{
-		Use:   guideRole.name,
+		Use:   guideRole.Name,
 		Short: "Start, stop or show the guide: the session that walks the person through their decisions",
 		Long: `The guide is the session that walks the person through the decisions
 waiting on them and takes their answers back to the sessions that asked.
@@ -186,7 +186,7 @@ func guideQueue(st *state.State, sessions []*claude.Session, person string, sinc
 		_, live := claude.Live(sessions, n.By)
 		q = append(q, queueItem{Note: n, Owner: n.By.Name, OwnerLive: live, Key: "note#" + strconv.Itoa(n.ID)})
 	}
-	guide := guideRole.get(st).Holder
+	guide := guideRole.Get(st).Holder
 	for i := range st.Records {
 		r := &st.Records[i]
 		ask, ok := waitsOn(person, r.Waits)
@@ -447,7 +447,7 @@ wait on the person (` + "`beekeeper guide queue`" + `).`,
 // marks it in st and returns it with its lines and events; more, when set,
 // adds to the machine's queue (the central instance's notes).
 func (a *app) guideNext(st *state.State, sessions []*claude.Session, me state.Party, more func([]queueItem) []queueItem) (*queueItem, []string, []state.Event, error) {
-	r := guideRole.get(st)
+	r := guideRole.Get(st)
 	if r.Holder == nil || !r.Holder.Is(me) {
 		return nil, nil, nil, refused("only the guide serves its person's decisions: `beekeeper guide status` names it")
 	}
@@ -458,7 +458,7 @@ func (a *app) guideNext(st *state.State, sessions []*claude.Session, me state.Pa
 	it := nextDecisionAt(q, r.AskingFrom+"#"+strconv.Itoa(r.Asking), a.now)
 	if it == nil {
 		r.Asking, r.AskingFrom = 0, ""
-		guideRole.set(st, r)
+		guideRole.Set(st, r)
 		deferredCount, nextDue, waiting := 0, time.Time{}, 0
 		for _, item := range q {
 			if item.Note == nil {
@@ -495,7 +495,7 @@ func (a *app) guideNext(st *state.State, sessions []*claude.Session, me state.Pa
 		return it, lines, nil, nil
 	}
 	r.Asking, r.AskingFrom = n.ID, n.Central
-	guideRole.set(st, r)
+	guideRole.Set(st, r)
 	return it, lines, []state.Event{event(me, "guide.asking", "%s %s", noteRef(&n), n.Text)}, nil
 }
 
@@ -582,7 +582,7 @@ the hand-over before gets only what changed; --full prints everything.`,
 				return err
 			}
 			q, _ := a.guideQueue(st, sessions)
-			r := guideRole.get(st)
+			r := guideRole.Get(st)
 			s, err := a.readStanding()
 			if err != nil {
 				return err
@@ -653,7 +653,7 @@ func (a *app) relayLine(rl role, r state.Role) string {
 	if !r.Relay.Open(a.now) {
 		return ""
 	}
-	return fmt.Sprintf("Relayed to %q until %s: its `beekeeper %s start` takes the role.", r.Relay.To.Name, clock(a.now, r.Relay.Expires), rl.name)
+	return fmt.Sprintf("Relayed to %q until %s: its `beekeeper %s start` takes the role.", r.Relay.To.Name, clock(a.now, r.Relay.Expires), rl.Name)
 }
 
 // guideLiveCommands read what the guide's prompt leaves out.
@@ -1037,11 +1037,11 @@ func (a *app) guideFeed(ctx context.Context) ([]string, error) {
 		return nil, err
 	}
 	// Outside the lock: the transcript's context and the log's answers.
-	c := roleContext(guideRole.get(st), sessions, a.now, a.cfg.Guide.RelayAt, a.guideDues)
-	q := quietness{checked: c > 0, context: c, relayAt: a.cfg.Guide.RelayAt}
+	c := roleContext(guideRole.Get(st), sessions, a.now, a.cfg.Guide.RelayAt, a.guideDues)
+	q := quietness{Checked: c > 0, Context: c, RelayAt: a.cfg.Guide.RelayAt}
 	idleQ := quietness{}
-	if !q.checked {
-		idleQ = idleRoleReading(guideRole.get(st), sessions, a.now, a.cfg.Guide.RelayAt, a.guideDues)
+	if !q.Checked {
+		idleQ = idleRoleReading(guideRole.Get(st), sessions, a.now, a.cfg.Guide.RelayAt, a.guideDues)
 	}
 	problems, err := a.store.Follow("guide-problems", func(e state.Event) bool { return e.Verb == loop.LoopFileVerb })
 	if err != nil {
@@ -1057,12 +1057,12 @@ func (a *app) guideFeed(ctx context.Context) ([]string, error) {
 		archived = claude.Archived(a.cfg)
 	}
 	fire := func(st *state.State) ([]string, []state.Event, bool) {
-		seen, ce := guideRole.observeCLI(st, sessions, a.now)
+		seen, ce := guideRole.ObserveCLI(st, sessions, a.now)
 		var lines []string
 		for _, e := range ce {
 			lines = append(lines, fmt.Sprintf("GUIDE RESTARTED: %q, %s; it keeps the role", e.By.Name, e.Detail))
 		}
-		rl, re := guideRole.fireRelay(st, a.now)
+		rl, re := guideRole.FireRelay(st, a.now)
 		reportsSince, workText, reportCount := st.GuideReportsSince, guideWorkText(st), len(st.GuideReports)
 		pl, pf := guideProblemLines(st, guideReportEvents(st, problems, a.now))
 		pf = pf || !reportsSince.Equal(st.GuideReportsSince) || workText != guideWorkText(st) || reportCount != len(st.GuideReports)
@@ -1074,10 +1074,10 @@ func (a *app) guideFeed(ctx context.Context) ([]string, error) {
 		fed = fed || pf
 		lines = append(append(lines, rl...), fl...)
 		reading := q
-		if !reading.checked && len(lines) > 0 {
+		if !reading.Checked && len(lines) > 0 {
 			reading = idleQ
 		}
-		dl, de := guideRole.fireRelayDue(st, reading, a.guideDues, a.now)
+		dl, de := guideRole.FireRelayDue(st, reading, a.guideDues, a.now)
 		lines = append(lines, dl...)
 		evs := append(append(ce, re...), de...)
 		heartbeat := st.Guide != nil && a.now.Sub(st.Guide.WatchSeen) >= 30*time.Second
@@ -1148,7 +1148,7 @@ func (a *app) centralGuideLines(st *state.State, sessions []*claude.Session, not
 	if !available {
 		return
 	}
-	guideRole.update(st, func(r *state.Role) {
+	guideRole.Update(st, func(r *state.Role) {
 		before := slices.Clone(r.Fed)
 		var current []string
 		for _, it := range withCentral(nil, notes, sessions, a.cfg.Guide.Person, a.cfg.Identity.Host) {
@@ -1229,7 +1229,7 @@ func (a *app) closedNotes(st *state.State) (map[int]state.Event, error) {
 // closed now, and records what it said in the guide's Fed. It reports
 // whether Fed changed.
 func (a *app) feedLines(st *state.State, sessions []*claude.Session, closed map[int]state.Event, orphans []overtake) (lines []string, changed bool) {
-	guideRole.update(st, func(r *state.Role) {
+	guideRole.Update(st, func(r *state.Role) {
 		var cur []string
 		for _, k := range r.Fed {
 			if strings.HasPrefix(k, "problem:") || strings.HasPrefix(k, "note:") {
@@ -1251,18 +1251,18 @@ func (a *app) feedLines(st *state.State, sessions []*claude.Session, closed map[
 			}
 		}
 		for _, o := range orphans {
-			i := slices.IndexFunc(st.Notes, func(n state.Note) bool { return n.ID == o.id })
+			i := slices.IndexFunc(st.Notes, func(n state.Note) bool { return n.ID == o.Id })
 			if i < 0 {
 				continue
 			}
-			k := fmt.Sprintf("orphan#%d", o.id)
+			k := fmt.Sprintf("orphan#%d", o.Id)
 			cur = append(cur, k)
 			if slices.Contains(r.Fed, k) {
 				continue
 			}
 			who, text := noteFor(&st.Notes[i])
 			lines = append(lines, fmt.Sprintf("GUIDE ORPHANED #%d for %s, %s; ask it, or close it with note done %d --overtaken: %s",
-				o.id, who, o.reason, o.id, truncate(oneLine(text), 200)))
+				o.Id, who, o.Reason, o.Id, truncate(oneLine(text), 200)))
 		}
 		for _, k := range r.Fed {
 			id, err := strconv.Atoi(strings.TrimPrefix(k, "note#"))
@@ -1302,7 +1302,7 @@ func guideProblemLines(st *state.State, events []state.Event) (lines []string, c
 			current["problem:"+key] = true
 		}
 	}
-	guideRole.update(st, func(r *state.Role) {
+	guideRole.Update(st, func(r *state.Role) {
 		before := len(r.Fed)
 		reportsBefore, workBefore := len(st.GuideReports), guideWorkText(st)
 		r.Fed = slices.DeleteFunc(r.Fed, func(key string) bool {

@@ -13,6 +13,9 @@ import (
 // addresses the holder, and the relieved run is no longer on the roster to
 // address. The relieved run's own status says it was relieved, naming its
 // successor.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestStatusAndWakeNameTheHolderAfterARelay(t *testing.T) {
 	const relieved, successor = "Guide run 11", "Guide run 12"
 	a, out := stubApp(t)
@@ -24,10 +27,10 @@ func TestStatusAndWakeNameTheHolderAfterARelay(t *testing.T) {
 		st.Guide = &state.Role{Holder: &state.Supervisor{Party: from, Since: a.now.Add(-time.Hour)}}
 		st.Guide.Run = 11
 		st.Agents = []state.Agent{{Party: from}, {Party: to}, {Party: worker}}
-		if _, _, err := guideRole.relay(st, from, to, a.now, 15*time.Minute); err != nil {
+		if _, _, err := guideRole.Relay(st, from, to, a.now, 15*time.Minute); err != nil {
 			return nil, err
 		}
-		_, evs, err := guideRole.start(st, to, true, false, a.now.Add(time.Minute))
+		_, evs, err := guideRole.Take(st, to, true, false, a.now.Add(time.Minute))
 		return evs, err
 	}); err != nil {
 		t.Fatal(err)

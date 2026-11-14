@@ -15,6 +15,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // platMgrHR is the platform manager's HelmRelease on gazelle, on the
@@ -110,8 +111,8 @@ func TestTheNextMergeStartsAtOnceAfterAMergeThatRollsNothing(t *testing.T) {
 // pre-release, a release unknown, or a release that failed and rolls
 // nothing; the watch settles a failed release at once.
 //
-// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
-// The merge base has no internal/gate package, so these tests cannot build there.
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLanesSayWhatASettlingMergeWaitsFor(t *testing.T) {
 	const (
 		lane    = "portal-tools"
@@ -147,8 +148,8 @@ func TestLanesSayWhatASettlingMergeWaitsFor(t *testing.T) {
 			if !c.failed {
 				return
 			}
-			w := &watcher{app: a, last: map[string]time.Time{}}
-			w.settled(context.Background(), a.now)
+			w := &watch.Watcher{Host: a, Last: map[string]time.Time{}}
+			w.Settled(context.Background(), a.now)
 			if st, _ := a.store.Read(); len(st.Merges) != 0 {
 				t.Errorf("the watch keeps a failed release settling: %+v", st.Merges)
 			}

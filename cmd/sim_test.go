@@ -10,6 +10,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/sim"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 const (
@@ -24,6 +25,9 @@ func simArgs(verb string, args ...string) []string { return append([]string{verb
 
 // TestSimCommands: model, run, observe and compare print their figures from
 // the configuration and the event log alone, and --json returns them.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestSimCommands(t *testing.T) {
 	a, out := supervisorApp(t)
 	now := time.Date(2026, 11, 8, 12, 0, 0, 0, time.UTC)
@@ -80,7 +84,7 @@ func TestSimCommands(t *testing.T) {
 		events = append(events, state.Event{At: at, By: loop.LoopParty, Verb: "supervisor.claim", Detail: "[go o/r#1@abc] w"})
 	}
 	for at := since; at.Before(now); at = at.Add(30 * time.Minute) {
-		events = append(events, state.Event{At: at, By: watchParty, Verb: "watch.usage", Detail: "USAGE: codex: 2 busy of ceiling 7, usage 7d 30%"})
+		events = append(events, state.Event{At: at, By: watch.WatchParty, Verb: "watch.usage", Detail: "USAGE: codex: 2 busy of ceiling 7, usage 7d 30%"})
 	}
 	events = append(events,
 		state.Event{At: t0, By: loop.LoopParty, Verb: "supervisor.failure", Detail: `[review o/r#2@abc] {"message":"o/r#2 already requested this head or review round","count":3}`},

@@ -17,8 +17,8 @@ import (
 // recipient has nothing else to reply to.
 func replyAddress(st *state.State, by state.Party) string {
 	for _, rl := range roles {
-		if h := rl.get(st).Holder; h != nil && h.Is(by) {
-			return rl.name
+		if h := rl.Get(st).Holder; h != nil && h.Is(by) {
+			return rl.Name
 		}
 	}
 	if i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(by) }); i >= 0 {
@@ -72,7 +72,7 @@ func (a *app) inboxPeer(session, name, msg string) (string, error) {
 	}
 	by := state.Party{Session: session, Name: session}
 	for _, rl := range roles {
-		if hd := rl.get(st).Holder; hd != nil && hd.Session == session {
+		if hd := rl.Get(st).Holder; hd != nil && hd.Session == session {
 			by = hd.Party
 		}
 	}

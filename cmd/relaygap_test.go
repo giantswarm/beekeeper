@@ -48,31 +48,34 @@ func useLauncher(t *testing.T, l platform.Launcher) {
 // A relay's successor whose first turn took the role and ended, and whose
 // reopen waits on a desktop window the person works in, is resumed headless
 // past the restart grace: the reopen is no turn.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestStandbyResumesASuccessorWhoseReopenWaitsOnTheFocus(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), true)
-	run := state.Party{Session: runSixtySeven, HostSession: "local_" + runSixtySeven, Name: guideRole.runName(67)}
+	run := state.Party{Session: runSixtySeven, HostSession: "local_" + runSixtySeven, Name: guideRole.RunName(67)}
 	l := &unitLauncher{stopping: []string{"beekeeper-agent-4579230b.service"}}
 	useLauncher(t, l)
 	var revived atomic.Int32
-	w.stand = standbyWatch{
-		turning: unitsTurning,
-		revive: func(_ context.Context, _ role, holder state.Party, msg string) error {
+	w.Stand = standbyWatch{
+		Turning: unitsTurning,
+		Revive: func(_ context.Context, _ role, holder state.Party, msg string) error {
 			if !holder.Is(run) || !strings.Contains(msg, "this desktop turn keeps") {
 				t.Errorf("revive %q: %q", holder.Name, msg)
 			}
 			revived.Add(1)
 			return nil
 		},
-		succeed: func(context.Context, role, state.Party) (state.Party, error) {
+		Succeed: func(context.Context, role, state.Party) (state.Party, error) {
 			t.Error("a fresh successor for a successor that can be resumed")
 			return state.Party{}, nil
 		},
 	}
-	t.Cleanup(w.stand.inflight.Wait)
-	w.now = relayNow
+	t.Cleanup(w.Stand.Inflight.Wait)
+	watchApp(w.Host).now = relayNow
 	supervisedBy(t, w, run, relayNow.Add(-3*time.Minute))
-	w.pending(context.Background(), nil)
-	eventually(2*time.Second, func() bool { return revived.Load() == 1 && !w.stand.starting.Load() })
+	w.Pending(context.Background(), nil)
+	eventually(2*time.Second, func() bool { return revived.Load() == 1 && !w.Stand.Starting.Load() })
 	if n := revived.Load(); n != 1 {
 		t.Fatalf("%d resumes, want 1:\n%s", n, out)
 	}
@@ -84,48 +87,54 @@ func TestStandbyResumesASuccessorWhoseReopenWaitsOnTheFocus(t *testing.T) {
 // A successor that asked for a desktop turn (agents desktop) is not resumed
 // headless while its start unit runs the reopen: the reopen goes ahead at
 // once and warms the desktop's CLI, which a resume would run beside.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestStandbyWaitsForAnUrgentReopen(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), true)
-	run := state.Party{Session: runSixtySeven, HostSession: "local_" + runSixtySeven, Name: guideRole.runName(67)}
+	run := state.Party{Session: runSixtySeven, HostSession: "local_" + runSixtySeven, Name: guideRole.RunName(67)}
 	useLauncher(t, &unitLauncher{stopping: []string{"beekeeper-agent-4579230b.service"}})
-	w.stand = standbyWatch{
-		turning:   unitsTurning,
-		reopening: unitsReopening,
-		revive: func(context.Context, role, state.Party, string) error {
+	w.Stand = standbyWatch{
+		Turning:   unitsTurning,
+		Reopening: unitsReopening,
+		Revive: func(context.Context, role, state.Party, string) error {
 			t.Error("resumed a holder whose reopen shows it at once")
 			return nil
 		},
 	}
-	w.now = relayNow
+	watchApp(w.Host).now = relayNow
 	supervisedBy(t, w, run, relayNow.Add(-3*time.Minute))
-	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+	if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Agents = append(st.Agents, state.Agent{Party: run, DesktopTurn: relayNow.Add(-time.Minute)})
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	w.pending(context.Background(), nil)
-	w.stand.inflight.Wait()
+	w.Pending(context.Background(), nil)
+	w.Stand.Inflight.Wait()
 	if strings.Contains(out.String(), "GONE") {
 		t.Errorf("an urgent reopen said gone:\n%s", out)
 	}
 }
 
 // While the headless turn of a start or wake runs, its holder is not gone.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestStandbyWaitsForARunningTurn(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), true)
-	run := state.Party{Session: runSixtySeven, Name: guideRole.runName(67)}
+	run := state.Party{Session: runSixtySeven, Name: guideRole.RunName(67)}
 	useLauncher(t, &unitLauncher{active: []string{wakeSixtySeven}})
-	w.stand = standbyWatch{
-		turning: unitsTurning,
-		revive: func(context.Context, role, state.Party, string) error {
+	w.Stand = standbyWatch{
+		Turning: unitsTurning,
+		Revive: func(context.Context, role, state.Party, string) error {
 			t.Error("resumed a holder whose turn runs")
 			return nil
 		},
 	}
-	w.now = relayNow
+	watchApp(w.Host).now = relayNow
 	supervisedBy(t, w, run, relayNow.Add(-3*time.Minute))
-	w.pending(context.Background(), nil)
+	w.Pending(context.Background(), nil)
 	if strings.Contains(out.String(), "GONE") {
 		t.Errorf("a running turn said gone:\n%s", out)
 	}
@@ -135,6 +144,9 @@ func TestStandbyWaitsForARunningTurn(t *testing.T) {
 // window yields to the headless resume the standby started meanwhile when
 // the desktop imported the session already: the desktop warms no second
 // CLI beside it.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestReopenYieldsToAHeadlessResume(t *testing.T) {
 	a, out := stubApp(t)
 	a.cfg.Desktop.TypingQuiet.Duration = -1
@@ -142,7 +154,7 @@ func TestReopenYieldsToAHeadlessResume(t *testing.T) {
 	a.cfg.Claude.DesktopDir = t.TempDir()
 	desktopRecord(t, a.cfg.Claude.DesktopDir, "local_"+id, id, false)
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-		p := state.Party{Session: id, Name: guideRole.runName(67)}
+		p := state.Party{Session: id, Name: guideRole.RunName(67)}
 		st.Starts = append(st.Starts, state.Start{Party: p, Mode: state.ModeBypass, At: time.Now()})
 		st.Agents = append(st.Agents, state.Agent{Party: p})
 		return nil, nil
@@ -223,6 +235,9 @@ func (l *wakeLaterLauncher) Running(context.Context, bool, ...string) []string {
 // A resume that starts while the reopen waits for the person's typing to
 // pause is found right before the show: the reopen yields, and the desktop
 // warms no CLI beside it.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestReopenYieldsToAResumeStartedDuringItsWait(t *testing.T) {
 	a, out := stubApp(t)
 	a.cfg.Desktop.TypingQuiet.Duration = -1
@@ -230,7 +245,7 @@ func TestReopenYieldsToAResumeStartedDuringItsWait(t *testing.T) {
 	a.cfg.Claude.DesktopDir = t.TempDir()
 	desktopRecord(t, a.cfg.Claude.DesktopDir, "local_"+id, id, false)
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-		p := state.Party{Session: id, Name: guideRole.runName(67)}
+		p := state.Party{Session: id, Name: guideRole.RunName(67)}
 		st.Starts = append(st.Starts, state.Start{Party: p, Mode: state.ModeBypass, At: time.Now()})
 		st.Agents = append(st.Agents, state.Agent{Party: p})
 		return nil, nil
@@ -280,11 +295,14 @@ func (o *recordingOpener) Open(_ context.Context, url string, _ bool) error {
 // person sees the role's holder only in the desktop's sidebar. The resume
 // stays frozen while the desktop reads the transcript and remains the
 // session's only CLI.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestReopenImportsBesideAHeadlessResume(t *testing.T) {
 	a, out := stubApp(t)
 	a.cfg.Desktop.TypingQuiet.Duration = -1
 	a.cfg.Claude.DesktopDir = t.TempDir()
-	id, name := runSixtySeven, guideRole.runName(67)
+	id, name := runSixtySeven, guideRole.RunName(67)
 	transcript := filepath.Join(a.cfg.Claude.ProjectsDir, "lab", id+".jsonl")
 	if err := os.MkdirAll(filepath.Dir(transcript), 0o700); err != nil {
 		t.Fatal(err)
@@ -403,9 +421,12 @@ func (o *importingOpener) Open(ctx context.Context, url string, running bool) er
 
 // A steward's send request names the desktop's session messaging, the
 // holder's desktop id and the message word for word.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestSendRequestDeliversTheMessageThroughTheDesktop(t *testing.T) {
 	host := "local_" + runSixtySeven
-	msg := guideRole.resumeMessage("the desktop runs your CLI now")
+	msg := guideRole.ResumeMessage("the desktop runs your CLI now")
 	got := sendRequest(host, msg)
 	for _, want := range []string{sendTool, `session_id "` + host + `"`, msg} {
 		if !strings.Contains(got, want) {
