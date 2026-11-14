@@ -179,7 +179,7 @@ func TestWatchSaysAGraphQLRefusalOnce(t *testing.T) {
 	a, out := budgetApp(t)
 	a.cfg.Merge.BudgetFresh.Duration = 0
 	a.cfg.Watch.Repeat.Duration = time.Hour
-	w := &watcher{app: a, last: map[string]time.Time{}}
+	w := &watcher{a: a, last: map[string]time.Time{}}
 	for range 2 {
 		w.budget(context.Background(), time.Now())
 	}

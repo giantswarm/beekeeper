@@ -106,7 +106,7 @@ func TestControlPlaneTimerFiresOnceRolledOut(t *testing.T) {
 				return nil
 			}
 			t.Cleanup(func() { wakeOwner = wasWake })
-			if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+			if err := w.a.store.Update(func(st *state.State) ([]state.Event, error) {
 				st.Agents = []state.Agent{{Party: state.Party{Session: "s9", Name: "BK 594"}}}
 				st.Timers = []state.Timer{{ID: 1, Due: relayNow.Add(-time.Minute), When: cpWhen, Wake: "BK 594", What: "upgrade the node pools"}}
 				return nil, nil
@@ -116,19 +116,19 @@ func TestControlPlaneTimerFiresOnceRolledOut(t *testing.T) {
 			live := []*claude.Session{}
 			w.pending(context.Background(), live)
 			w.bg.Wait()
-			st, _ := w.store.Read()
+			st, _ := w.a.store.Read()
 			if len(woke) != 0 || len(st.Timers) != 1 || st.Timers[0].Unreadable || !strings.Contains(st.Timers[0].Reason, "of 3 replicas") {
 				t.Fatalf("rolling: woke %v, timers %+v", woke, st.Timers)
 			}
 			obj = stages[1]
-			w.now = relayNow.Add(timerEvery)
+			w.a.now = relayNow.Add(timerEvery)
 			w.pending(context.Background(), live)
 			w.bg.Wait()
 			w.timerActs.Wait()
 			if len(woke) != 1 || woke[0] != "BK 594: beekeeper timer #1 ("+cpWhen+" holds): upgrade the node pools" {
 				t.Fatalf("woke %q", woke)
 			}
-			if st, _ := w.store.Read(); len(st.Timers) != 0 {
+			if st, _ := w.a.store.Read(); len(st.Timers) != 0 {
 				t.Fatalf("still open: %+v", st.Timers)
 			}
 			if strings.Contains(out.String(), "UNREADABLE") {
@@ -148,7 +148,7 @@ func TestUnreadableReferenceIsOneWatchLine(t *testing.T) {
 		return nil, errors.New(`exit status 1: error: context "admin@mc" does not exist`)
 	}
 	fakeRead(t, func(string) ([]byte, error) { return answer() })
-	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+	if err := w.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Timers = []state.Timer{{ID: 3, Due: relayNow.Add(-time.Minute), When: cpWhen, What: "look at wc1"}}
 		return nil, nil
 	}); err != nil {
@@ -156,7 +156,7 @@ func TestUnreadableReferenceIsOneWatchLine(t *testing.T) {
 	}
 	live := []*claude.Session{}
 	tick := func(n int) {
-		w.now = relayNow.Add(time.Duration(n) * timerEvery)
+		w.a.now = relayNow.Add(time.Duration(n) * timerEvery)
 		w.pending(context.Background(), live)
 		w.bg.Wait()
 	}
@@ -166,11 +166,11 @@ func TestUnreadableReferenceIsOneWatchLine(t *testing.T) {
 	if got := strings.Count(out.String(), "TIMER UNREADABLE"); got != 1 || !strings.Contains(out.String(), line) {
 		t.Fatalf("%d lines, watch said %q", got, out.String())
 	}
-	st, _ := w.store.Read()
+	st, _ := w.a.store.Read()
 	if len(st.Timers) != 1 || !st.Timers[0].Unreadable || !strings.Contains(st.Timers[0].Reason, "does not exist") {
 		t.Fatalf("timers %+v", st.Timers)
 	}
-	evs, err := w.store.Events(0, func(e state.Event) bool { return e.Verb == "timer.unreadable" })
+	evs, err := w.a.store.Events(0, func(e state.Event) bool { return e.Verb == "timer.unreadable" })
 	if err != nil || len(evs) != 1 {
 		t.Fatalf("events %+v, %v", evs, err)
 	}
@@ -183,7 +183,7 @@ func TestUnreadableReferenceIsOneWatchLine(t *testing.T) {
 	}
 	answer = func() ([]byte, error) { return []byte(kcpV1beta2Rolling), nil }
 	tick(3)
-	if st, _ := w.store.Read(); len(st.Timers) != 1 || st.Timers[0].Unreadable || st.Timers[0].Reason != "4 of 3 replicas, 4 ready, 1 up to date" {
+	if st, _ := w.a.store.Read(); len(st.Timers) != 1 || st.Timers[0].Unreadable || st.Timers[0].Reason != "4 of 3 replicas, 4 ready, 1 up to date" {
 		t.Fatalf("readable again: %+v", st.Timers)
 	}
 	answer = func() ([]byte, error) { return []byte(kcpV1beta2Rolled), nil }
@@ -302,7 +302,7 @@ func TestProbeOutputSaysHowItFailed(t *testing.T) {
 // runs it now and leaves the timer as it is.
 func TestTimerListAndCheckSayWhatTheCheckFound(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
-	a := w.app
+	a := w.a
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Timers = []state.Timer{
 			{ID: 1, Due: relayNow, When: cpWhen, Checked: relayNow.UTC(), Reason: "context gone", Unreadable: true, What: "a"},

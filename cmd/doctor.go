@@ -1104,7 +1104,7 @@ func (w *watcher) doctor(ctx context.Context) {
 	if !w.chores || !w.doctoring.CompareAndSwap(false, true) {
 		return
 	}
-	d := *w.app // the poll moves w.now on
+	d := *w.a // the poll moves w.now on
 	retry := func(host string) bool {
 		if d.now.Sub(w.retitled[host]) < retitleAgain {
 			return false

@@ -45,7 +45,7 @@ func TestLeaseReleaseWithdrawsTheCallersQueuedGrant(t *testing.T) {
 	if got := grantees(t, a, labOne); !slices.Equal(got, []string{claimFirst.Name}) {
 		t.Errorf("the queue after the withdrawal: %q", got)
 	}
-	if ag := agentOf(t, &watcher{app: a}); ag.Park != nil || ag.Task != parkTask {
+	if ag := agentOf(t, &watcher{a: a}); ag.Park != nil || ag.Task != parkTask {
 		t.Errorf("after the withdrawal: task %q park %+v", ag.Task, ag.Park)
 	}
 	if h, _ := lease.Dir(a.cfg.LeaseDir).Get(labOne); h == nil || !h.Party().Is(claimOther) {
@@ -123,6 +123,6 @@ func TestLeaseRevokeResumesTheParkedGrantee(t *testing.T) {
 	a.as = ""
 	settleParks(t, a)
 	settleParks(t, a)
-	assertFreshQueue(t, &watcher{app: a}, *woke, "no grant of it to you is left")
+	assertFreshQueue(t, &watcher{a: a}, *woke, "no grant of it to you is left")
 
 }

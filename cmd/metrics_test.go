@@ -18,23 +18,23 @@ func TestWatchSaysARunawayOnce(t *testing.T) {
 	dir := t.TempDir()
 	w, _, out := notifyingWatch(t, dir, false)
 	w.notifier = nil
-	w.cfg.LeaseDir = filepath.Join(dir, "leases")
-	w.now = time.Now()
-	ts := w.now.Add(-time.Minute).UTC().Format(time.RFC3339)
+	w.a.cfg.LeaseDir = filepath.Join(dir, "leases")
+	w.a.now = time.Now()
+	ts := w.a.now.Add(-time.Minute).UTC().Format(time.RFC3339)
 	tr := filepath.Join(dir, "s1.jsonl")
 	line := `{"type":"assistant","timestamp":"` + ts + `","message":{"id":"m1","model":"claude-opus-5-5","usage":{"input_tokens":10,"cache_read_input_tokens":950000},"content":[]}}` + "\n"
 	if err := os.WriteFile(tr, []byte(line), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	one := state.Party{Session: "s1", Name: sessionOne}
-	if err := w.store.Update(func(*state.State) ([]state.Event, error) {
+	if err := w.a.store.Update(func(*state.State) ([]state.Event, error) {
 		return []state.Event{event(one, "merge.queued", "o/r#1 in lane l"), event(one, testMergedWord, "o/r#1 exit 0, release v1")}, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	live := []*claude.Session{{ID: "s1", Name: sessionOne, Transcript: tr, LastActive: w.now}}
+	live := []*claude.Session{{ID: "s1", Name: sessionOne, Transcript: tr, LastActive: w.a.now}}
 
-	_, ms := w.sessionMetrics(live, nil, nil)
+	_, ms := w.a.sessionMetrics(live, nil, nil)
 	if m := ms[0]; m.Merges != (merges{Queued: 1, Merged: 1}) || m.Context != 950010 || m.LastHour.CostUSD == nil {
 		t.Errorf("metrics %+v", m)
 	}

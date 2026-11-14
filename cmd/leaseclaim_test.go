@@ -202,7 +202,7 @@ func claimAgent(t *testing.T, a *app) {
 func settleParks(t *testing.T, a *app) {
 	t.Helper()
 	a.cfg.Agents.AutoResume = true
-	w := &watcher{app: a, last: map[string]time.Time{}, reported: map[string]bool{}}
+	w := &watcher{a: a, last: map[string]time.Time{}, reported: map[string]bool{}}
 	for range 2 {
 		st, err := a.store.Read()
 		if err != nil {
@@ -245,7 +245,7 @@ func TestLeaseClaimParkWakesOnGrant(t *testing.T) {
 	}
 	settleParks(t, a)
 	settleParks(t, a)
-	assertFreshQueue(t, &watcher{app: a}, *woke, "free and yours")
+	assertFreshQueue(t, &watcher{a: a}, *woke, "free and yours")
 
 	if out, err := runLease(a, "claim", labOne, "-p", "my proof"); err != nil || !strings.HasPrefix(out, "held by you since") {
 		t.Errorf("the claim after the wake: %q, %v", out, err)
@@ -261,7 +261,7 @@ func TestLeaseClaimParkRefusedParksNothing(t *testing.T) {
 	if Code(err) != ExitRefused || !strings.HasPrefix(out, "refused: graveler is held") || !strings.Contains(out, "\nnot parked: no grant of graveler to you waits") {
 		t.Errorf("a refused claim with --park: %q, exit %d", out, Code(err))
 	}
-	if ag := agentOf(t, &watcher{app: a}); ag.Park != nil {
+	if ag := agentOf(t, &watcher{a: a}); ag.Park != nil {
 		t.Errorf("parked on a refused claim: %+v", ag.Park)
 	}
 }

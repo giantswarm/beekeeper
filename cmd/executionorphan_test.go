@@ -66,12 +66,12 @@ func TestExecutionOrphanInventoryStopsOnlyUnknownJournal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w := &watcher{app: a}
+	w := &watcher{a: a}
 	w.syncExecutions(context.Background(), st)
 	if fake.inventoryCalls != 2 {
 		t.Fatalf("inventory calls=%d", fake.inventoryCalls)
 	}
-	w.now = w.now.Add(time.Minute)
+	w.a.now = w.a.now.Add(time.Minute)
 	w.syncExecutions(context.Background(), st)
 	if fake.inventoryCalls != 2 {
 		t.Fatalf("settled idle host polled again: inventory calls=%d", fake.inventoryCalls)
@@ -262,7 +262,7 @@ func TestExecutionWatchFindsHostOnlyJournal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w := &watcher{app: a}
+	w := &watcher{a: a}
 	w.syncExecutions(context.Background(), st)
 	if stops != 1 {
 		t.Fatalf("host-only journal stops=%d; expected one", stops)

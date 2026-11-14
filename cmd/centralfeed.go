@@ -63,7 +63,7 @@ func (w *watcher) watchFeed(ctx context.Context) {
 	}()
 	defer func() { <-done }()
 	for ctx.Err() == nil {
-		err := w.app.hub().Listen(ctx, []string{resourceFeed}, func() {
+		err := w.a.hub().Listen(ctx, []string{resourceFeed}, func() {
 			w.clear(centralKey)
 			w.clear(feedKey)
 			resumed.Store(true)
@@ -77,9 +77,9 @@ func (w *watcher) watchFeed(ctx context.Context) {
 			return
 		}
 		if u := (*central.Unreachable)(nil); errors.As(err, &u) {
-			w.emit(centralKey, "CENTRAL UNREACHABLE %s: %s", w.cfg.Central.Context, u.Reason)
+			w.emit(centralKey, "CENTRAL UNREACHABLE %s: %s", w.a.cfg.Central.Context, u.Reason)
 		} else {
-			w.emit(feedKey, "CENTRAL FEED REFUSED %s: %v; subscribed again every %s", w.cfg.Central.Context, err, feedRetry)
+			w.emit(feedKey, "CENTRAL FEED REFUSED %s: %v; subscribed again every %s", w.a.cfg.Central.Context, err, feedRetry)
 		}
 		t := time.NewTimer(feedRetry)
 		select {
@@ -103,13 +103,13 @@ func (w *watcher) readFeed(ctx context.Context, resume bool) bool {
 	last := w.feedID
 	w.mu.Unlock()
 	var f feed.Feed
-	me := state.Party{Name: w.cfg.Identity.Person, Host: w.cfg.Identity.Host}
-	if _, err := w.callCentralRaw(ctx, me, nameReadFeed, map[string]any{paramAfter: last}, &f); err != nil {
+	me := state.Party{Name: w.a.cfg.Identity.Person, Host: w.a.cfg.Identity.Host}
+	if _, err := w.a.callCentralRaw(ctx, me, nameReadFeed, map[string]any{paramAfter: last}, &f); err != nil {
 		if u := (*central.Unreachable)(nil); errors.As(err, &u) {
-			w.emit(centralKey, "CENTRAL UNREACHABLE %s: %s", w.cfg.Central.Context, u.Reason)
+			w.emit(centralKey, "CENTRAL UNREACHABLE %s: %s", w.a.cfg.Central.Context, u.Reason)
 			return false
 		}
-		w.emit(feedKey, "CENTRAL FEED UNREADABLE %s: %v", w.cfg.Central.Context, err)
+		w.emit(feedKey, "CENTRAL FEED UNREADABLE %s: %v", w.a.cfg.Central.Context, err)
 		return false
 	}
 	w.clear(feedKey)
@@ -120,7 +120,7 @@ func (w *watcher) readFeed(ctx context.Context, resume bool) bool {
 		return true
 	}
 	if resume && f.Gap {
-		w.emitNow(feedKey, "CENTRAL FEED GAP %s: events after %s may be missing: the central instance no longer holds them", w.cfg.Central.Context, feedTime(last))
+		w.emitNow(feedKey, "CENTRAL FEED GAP %s: events after %s may be missing: the central instance no longer holds them", w.a.cfg.Central.Context, feedTime(last))
 	}
 	for _, ev := range f.Events {
 		if ev.ID <= last {

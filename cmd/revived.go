@@ -116,11 +116,11 @@ var desktopArchived = func(cfg *config.Config, host string) bool {
 // sessions that answer to their name: the running ones but the stopped and
 // the warmed.
 func (w *watcher) stopRevived(ctx context.Context, sessions []*claude.Session) []*claude.Session {
-	st, err := w.store.Peek()
+	st, err := w.a.store.Peek()
 	if err != nil {
 		return sessions
 	}
-	revived, warmed := revivedRuns(st, sessions, w.now)
+	revived, warmed := revivedRuns(st, sessions, w.a.now)
 	drop := map[*claude.Session]bool{}
 	for _, s := range warmed {
 		drop[s] = true
@@ -140,14 +140,14 @@ func (w *watcher) stopRevived(ctx context.Context, sessions []*claude.Session) [
 		}
 		drop[s] = true
 		lines := stopUnits(ctx, s.ID)
-		w.recordStoppedGates(ctx)
-		if s.HostID != "" && desktopArchived(w.cfg, s.HostID) {
-			_ = w.store.Record(event(watchParty, "agents.archive", "%s: session %s's CLI %d stopped: its desktop session %s is archived and %s carries its name",
+		w.a.recordStoppedGates(ctx)
+		if s.HostID != "" && desktopArchived(w.a.cfg, s.HostID) {
+			_ = w.a.store.Record(event(watchParty, "agents.archive", "%s: session %s's CLI %d stopped: its desktop session %s is archived and %s carries its name",
 				s.Name, s.ID, s.PID, s.HostID, r.by))
 			continue
 		}
-		_ = w.store.Update(func(st *state.State) ([]state.Event, error) {
-			oweArchive(st, s.Party(), "revived after "+r.by+" took its name", w.now)
+		_ = w.a.store.Update(func(st *state.State) ([]state.Event, error) {
+			oweArchive(st, s.Party(), "revived after "+r.by+" took its name", w.a.now)
 			return []state.Event{event(watchParty, "agents.revived", "%s: session %s, CLI %d, stopped: %s carries its name", s.Name, s.ID, s.PID, r.by)}, nil
 		})
 		units := ""

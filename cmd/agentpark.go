@@ -815,13 +815,13 @@ func (w *watcher) settledParks(ctx context.Context, st *state.State) []settledPa
 			continue
 		}
 		if res, ok := parkLease(p.On); ok {
-			if answer, ok := w.leaseSettled(st, ag, res); ok {
+			if answer, ok := w.a.leaseSettled(st, ag, res); ok {
 				out = append(out, settledPark{ag.Party, p.On, answer})
 			}
 			continue
 		}
 		if target, ok := parkHold(p.On); ok {
-			if !holdStands(st, target, w.now) {
+			if !holdStands(st, target, w.a.now) {
 				out = append(out, settledPark{ag.Party, p.On, fmt.Sprintf("nothing holds %s any more: run the refused command again", target)})
 			}
 			continue
@@ -831,12 +831,12 @@ func (w *watcher) settledParks(ctx context.Context, st *state.State) []settledPa
 				parked, closed = append(parked, ag), append(closed, id)
 			}
 		} else if ctx, _, ok := parkCentralNote(p.On); ok {
-			if w.centralNotesOn() && strings.EqualFold(ctx, w.cfg.Central.Context) {
+			if w.a.centralNotesOn() && strings.EqualFold(ctx, w.a.cfg.Central.Context) {
 				centralParked = append(centralParked, ag)
 			}
 		} else if r, ok := parseRef(p.On); ok {
 			parked = append(parked, ag)
-			if p.RefKind != github.RefPullRequest && !p.RefChecked.IsZero() && w.now.Sub(p.RefChecked) < parkRefRetry {
+			if p.RefKind != github.RefPullRequest && !p.RefChecked.IsZero() && w.a.now.Sub(p.RefChecked) < parkRefRetry {
 				continue
 			}
 			if !slices.Contains(refs, r) {
@@ -849,7 +849,7 @@ func (w *watcher) settledParks(ctx context.Context, st *state.State) []settledPa
 		return out
 	}
 	var states map[github.PR]github.RefState
-	if len(refs) > 0 && !loop.BoardBudgetLow(st.Budget, w.cfg.GitHub.Floor, w.now) {
+	if len(refs) > 0 && !loop.BoardBudgetLow(st.Budget, w.a.cfg.GitHub.Floor, w.a.now) {
 		// Back off issues and unresolved references even when GitHub fails. A failed batch leaves
 		// its agents parked; the others settle.
 		var s map[github.PR]github.RefState
@@ -864,7 +864,7 @@ func (w *watcher) settledParks(ctx context.Context, st *state.State) []settledPa
 				}
 			}
 			if len(attempts) > 0 {
-				w.cacheParkRefs(parked, attempts)
+				w.a.cacheParkRefs(parked, attempts)
 			}
 			var err error
 			s, err = refStates(ctx, refs)
@@ -872,7 +872,7 @@ func (w *watcher) settledParks(ctx context.Context, st *state.State) []settledPa
 		}
 		var err error
 		if w.loopOwned {
-			err = w.loopGitHub(ctx, "park-refs", read)
+			err = w.a.loopGitHub(ctx, "park-refs", read)
 		} else {
 			err = read()
 		}
@@ -885,12 +885,12 @@ func (w *watcher) settledParks(ctx context.Context, st *state.State) []settledPa
 		}
 		if len(s) > 0 {
 			states = s
-			w.cacheParkRefs(parked, s)
+			w.a.cacheParkRefs(parked, s)
 		}
 	}
 	var closes map[int]string
 	if len(closed) > 0 {
-		evs, err := w.store.Events(0, func(e state.Event) bool { return noteClosing(e.Verb) })
+		evs, err := w.a.store.Events(0, func(e state.Event) bool { return noteClosing(e.Verb) })
 		if err != nil {
 			return out // the next poll reads the notes again
 		}
@@ -960,10 +960,10 @@ func (w *watcher) settledCentralParks(ctx context.Context, parked []state.Agent)
 		return nil
 	}
 	const key = "park-central"
-	me := state.Party{Name: w.cfg.Identity.Person, Host: w.cfg.Identity.Host}
-	notes, err := w.centralNotes(ctx, me)
+	me := state.Party{Name: w.a.cfg.Identity.Person, Host: w.a.cfg.Identity.Host}
+	notes, err := w.a.centralNotes(ctx, me)
 	if err != nil {
-		w.fail(key, "cannot read the central instance's notes (%s) the parked agents wait on: %v", w.cfg.Central.Context, err)
+		w.fail(key, "cannot read the central instance's notes (%s) the parked agents wait on: %v", w.a.cfg.Central.Context, err)
 		return nil
 	}
 	open := map[int]bool{}
@@ -981,8 +981,8 @@ func (w *watcher) settledCentralParks(ctx context.Context, parked []state.Agent)
 		return nil
 	}
 	var f feed.Feed
-	if _, err := w.callCentralRaw(ctx, me, nameReadFeed, map[string]any{}, &f); err != nil {
-		w.fail(key, "cannot read the central feed (%s) for what closed the notes the parked agents wait on: %v", w.cfg.Central.Context, err)
+	if _, err := w.a.callCentralRaw(ctx, me, nameReadFeed, map[string]any{}, &f); err != nil {
+		w.fail(key, "cannot read the central feed (%s) for what closed the notes the parked agents wait on: %v", w.a.cfg.Central.Context, err)
 		return nil
 	}
 	w.clear(key)
@@ -993,7 +993,7 @@ func (w *watcher) settledCentralParks(ctx context.Context, parked []state.Agent)
 			evs = append(evs, state.Event{At: ev.Time, Verb: ev.Kind, Detail: detail, By: state.Party{Name: ev.Actor.Name, Person: ev.Actor.Person, Host: ev.Actor.Host}})
 		}
 	}
-	closes := noteCloses(evs, closed, w.cfg.Central.Context)
+	closes := noteCloses(evs, closed, w.a.cfg.Central.Context)
 	var out []settledPark
 	for _, ag := range parked {
 		if _, id, _ := parkCentralNote(ag.Park.On); !open[id] {
@@ -1080,7 +1080,7 @@ func markResumable(st *state.State, settled []settledPark, auto bool, now time.T
 // whose park is resumable; a resume that fails is a line, and the agent
 // stays parked for the next poll or agents resume.
 func (w *watcher) autoResume(ctx context.Context, st *state.State) {
-	if !w.cfg.Agents.AutoResume || st.Stop != nil {
+	if !w.a.cfg.Agents.AutoResume || st.Stop != nil {
 		return
 	}
 	for _, ag := range st.Agents {
@@ -1090,10 +1090,10 @@ func (w *watcher) autoResume(ctx context.Context, st *state.State) {
 			continue
 		}
 		cp := ag
-		if !freshPark(st, ag) && w.usageHighBlockForAgent(ctx, st, nil, &cp) != "" {
+		if !freshPark(st, ag) && w.a.usageHighBlockForAgent(ctx, st, nil, &cp) != "" {
 			continue
 		}
-		quiet := *w.app // the wake's own report is not a watch line
+		quiet := *w.a // the wake's own report is not a watch line
 		quiet.out = io.Discard
 		if err := quiet.resumeParked(ctx, watchParty, cmp.Or(ag.Session, ag.Name)); err != nil {
 			w.emit("park-resume-"+ag.Name, "AGENT RESUME FAILED %q: %v; beekeeper agents resume %q", ag.Name, err, ag.Name)
@@ -1104,10 +1104,10 @@ func (w *watcher) autoResume(ctx context.Context, st *state.State) {
 			continue
 		}
 		ag := state.Agent{Party: p.By}
-		if roleRun(st, p.By) && w.usageHighBlockForAgent(ctx, st, nil, &ag) != "" {
+		if roleRun(st, p.By) && w.a.usageHighBlockForAgent(ctx, st, nil, &ag) != "" {
 			continue
 		}
-		quiet := *w.app
+		quiet := *w.a
 		quiet.out = io.Discard
 		if err := quiet.resumeOffRoster(ctx, watchParty, p.By, false); err != nil {
 			id := cmp.Or(wakeID(p.By), p.By.Name)

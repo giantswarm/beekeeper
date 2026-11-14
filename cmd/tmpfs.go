@@ -107,7 +107,7 @@ func (a *app) freeTmpfs(dryRun bool, read func() (free.Machine, error)) tmpfsRun
 // TMPFS line.
 func (w *watcher) readFreeMark() freeMark {
 	var m freeMark
-	if found, _ := w.store.ReadFile(freeFile, &m); found {
+	if found, _ := w.a.store.ReadFile(freeFile, &m); found {
 		w.lastFree.Store(&m)
 	}
 	return m
@@ -117,7 +117,7 @@ func (w *watcher) readFreeMark() freeMark {
 // so the sample goes on. The freeing flag orders the runs as goCaching orders
 // the Go build cache's looks: freeNext is read only with the flag held.
 func (w *watcher) autoFree(now time.Time) {
-	every := w.cfg.Doctor.FreeEvery.Duration
+	every := w.a.cfg.Doctor.FreeEvery.Duration
 	if !w.freeOn || every <= 0 || !w.freeing.CompareAndSwap(false, true) {
 		return
 	}
@@ -125,7 +125,7 @@ func (w *watcher) autoFree(now time.Time) {
 		w.freeing.Store(false)
 		return
 	}
-	d := *w.app // reading the machine moves its now on
+	d := *w.a // reading the machine moves its now on
 	w.bg.Add(1)
 	go func() {
 		defer w.bg.Done()
@@ -143,7 +143,7 @@ func (w *watcher) freeDue(read func() (free.Machine, error), now time.Time, ever
 		w.freeNext = m.At.Add(every)
 		return
 	}
-	r := w.freeTmpfs(false, read)
+	r := w.a.freeTmpfs(false, read)
 	if r.locked {
 		w.freeNext = now.Add(goCacheRetry)
 		return
@@ -154,7 +154,7 @@ func (w *watcher) freeDue(read func() (free.Machine, error), now time.Time, ever
 		return
 	}
 	m := freeMark{At: now, Freed: r.what()}
-	_ = w.store.WriteFile(freeFile, m)
+	_ = w.a.store.WriteFile(freeFile, m)
 	w.lastFree.Store(&m)
 	if m.Freed != "" {
 		w.emitNow("free", "FREED in tmpfs: %s (doctor.freeEvery)", m.Freed)
@@ -164,7 +164,7 @@ func (w *watcher) freeDue(read func() (free.Machine, error), now time.Time, ever
 // lastFreeNote says, for the TMPFS line, when the automatic free ran last
 // and what it freed.
 func (w *watcher) lastFreeNote() string {
-	if w.cfg.Doctor.FreeEvery.Duration <= 0 {
+	if w.a.cfg.Doctor.FreeEvery.Duration <= 0 {
 		return "the automatic free is off (doctor.freeEvery)"
 	}
 	m := w.lastFree.Load()

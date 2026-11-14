@@ -347,15 +347,15 @@ func TestMessageByNameToAnAgentWithoutACLI(t *testing.T) {
 // The watch says once per wait which import waits, on what and until when.
 func TestWatchSaysAnImportWaits(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
-	w.now = relayNow
-	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+	w.a.now = relayNow
+	if err := w.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Agents = append(st.Agents, waitingAgent(relayNow))
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
 	for range 2 {
-		st, _ := w.store.Read()
+		st, _ := w.a.store.Read()
 		w.importWaits(st)
 	}
 	if n := strings.Count(out.String(), "IMPORT WAITS"); n != 1 {

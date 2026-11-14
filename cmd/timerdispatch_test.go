@@ -722,7 +722,7 @@ func TestIdleWatchHealthPassesDoNotWriteState(t *testing.T) {
 		t.Fatal(err)
 	}
 	w := a.newWatcher(false, true)
-	w.now = a.now
+	w.a.now = a.now
 	w.guideMonitor(t.Context(), st, nil)
 	if store.updates != 0 || store.records != 0 {
 		t.Fatalf("idle watch health passes wrote state updates=%d records=%d", store.updates, store.records)

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/alerts"
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	clk "github.com/giantswarm/beekeeper/internal/clock"
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/proc"
@@ -45,7 +46,7 @@ func (w *watcher) loopRunning() bool {
 		return true
 	}
 	var pid int
-	found, err := w.store.ReadFile(loop.LoopPIDFile, &pid)
+	found, err := w.a.store.ReadFile(loop.LoopPIDFile, &pid)
 	return err == nil && found && pid > 0 && proc.Alive(pid)
 }
 
@@ -57,7 +58,7 @@ type watchLevel struct {
 }
 
 func (w *watcher) publishLevel(kind string, value any) {
-	if w.store == nil {
+	if w.a.store == nil {
 		return
 	}
 	raw, err := json.Marshal(value)
@@ -66,23 +67,23 @@ func (w *watcher) publishLevel(kind string, value any) {
 	}
 	name := "watch-" + kind + ".json"
 	var old watchLevel
-	found, err := w.store.ReadFile(name, &old)
+	found, err := w.a.store.ReadFile(name, &old)
 	if err != nil {
 		return
 	}
 	next := watchLevel{At: clk.Now(), Value: raw}
-	if err := w.store.WriteFile(name, next); err != nil {
+	if err := w.a.store.WriteFile(name, next); err != nil {
 		return
 	}
 	changed := !bytes.Equal(old.Value, raw)
 	if kind == "disk-state" && found {
-		var before, after watchDiskReading
+		var before, after capacity.WatchDiskReading
 		if json.Unmarshal(old.Value, &before) == nil && json.Unmarshal(raw, &after) == nil {
 			changed = before.Low != after.Low
 		}
 	}
 	if !found || changed {
-		_ = w.store.Record(event(watchParty, "watch."+kind, "%s", raw))
+		_ = w.a.store.Record(event(watchParty, "watch."+kind, "%s", raw))
 	}
 }
 
@@ -96,8 +97,8 @@ func (a *app) readWatchLevel(kind string, value any) (time.Time, error) {
 }
 
 func (w *watcher) publishAlerts(firing []alerts.Firing) {
-	rules := w.alertRules()
-	rules.InPlay = w.inPlay(clk.Now())
+	rules := w.a.alertRules()
+	rules.InPlay = w.a.inPlay(clk.Now())
 	firing = slices.DeleteFunc(slices.Clone(firing), func(f alerts.Firing) bool { return !rules.Wakes(f.Installation, f.Alert) })
 	w.publishLevel("alert-state", firing)
 }
@@ -119,7 +120,9 @@ func (w *watcher) publishMachine() {
 	w.publishLevel("machine-state", active)
 }
 
-func (w *watcher) publishDisk(reading watchDiskReading) { w.publishLevel("disk-state", reading) }
+func (w *watcher) publishDisk(reading capacity.WatchDiskReading) {
+	w.publishLevel("disk-state", reading)
+}
 
 func (a *app) watchDisk() *watchDiskReading {
 	if a.store == nil {

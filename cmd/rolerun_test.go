@@ -36,18 +36,18 @@ func TestStandbyRecordsAGuideGoneWithItsWatch(t *testing.T) {
 			return state.Party{Session: "sG8", Name: guideEight}, nil
 		},
 	}
-	if err := w.store.Update(func(st *state.State) ([]state.Event, error) { st.Guide = rebootedGuide(); return nil, nil }); err != nil {
+	if err := w.a.store.Update(func(st *state.State) ([]state.Event, error) { st.Guide = rebootedGuide(); return nil, nil }); err != nil {
 		t.Fatal(err)
 	}
 	for _, at := range []time.Duration{0, 30 * time.Second, 2 * time.Minute} {
-		w.now = relayNow.Add(at)
+		w.a.now = relayNow.Add(at)
 		w.pending(context.Background(), nil)
 		w.stand.inflight.Wait()
 	}
 	if n := started.Load(); n != 1 {
 		t.Fatalf("%d successors, want 1 once the grace from the first poll ran out:\n%s", n, out)
 	}
-	st, _ := w.store.Read()
+	st, _ := w.a.store.Read()
 	if g := st.Guide.CLI.Gone; !g.Equal(relayNow) {
 		t.Errorf("gone recorded at %v, want the first poll %v", g, relayNow)
 	}

@@ -24,10 +24,10 @@ const feedbackEmoji = "eyes"
 // recordReportThread keeps the Slack thread of the report r posted, which
 // the feedback watch reads; a post whose result names no thread is said.
 func (w *watcher) recordReportThread(r state.Report) {
-	if !w.cfg.Feedback.Enabled() {
+	if !w.a.cfg.Feedback.Enabled() {
 		return
 	}
-	path := transcriptOf(w.cfg, r.Session)
+	path := transcriptOf(w.a.cfg, r.Session)
 	if path == "" {
 		return
 	}
@@ -40,11 +40,11 @@ func (w *watcher) recordReportThread(r state.Report) {
 		w.emitNow("feedback", "FEEDBACK %s: no thread to read: %v", r.Name, err)
 		return
 	}
-	_ = w.store.Update(func(st *state.State) ([]state.Event, error) {
+	_ = w.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		if slices.ContainsFunc(st.ReportThreads, func(t state.ReportThread) bool { return t.Channel == p.Channel && t.TS == p.TS }) {
 			return nil, nil
 		}
-		st.ReportThreads = append(st.ReportThreads, state.ReportThread{Report: r.Name, Channel: p.Channel, TS: p.TS, Posted: w.now.UTC()})
+		st.ReportThreads = append(st.ReportThreads, state.ReportThread{Report: r.Name, Channel: p.Channel, TS: p.TS, Posted: w.a.now.UTC()})
 		return nil, nil
 	})
 }
@@ -52,12 +52,12 @@ func (w *watcher) recordReportThread(r state.Report) {
 // tendFeedback reads the report threads once per feedback.every, in the
 // standby watch only, beside the poll: a slow muster never holds it up.
 func (w *watcher) tendFeedback(ctx context.Context) {
-	fc := w.cfg.Feedback
-	if !w.standby || !fc.Enabled() || w.now.Before(w.feedbackNext) || !w.feedbackBusy.CompareAndSwap(false, true) {
+	fc := w.a.cfg.Feedback
+	if !w.standby || !fc.Enabled() || w.a.now.Before(w.feedbackNext) || !w.feedbackBusy.CompareAndSwap(false, true) {
 		return
 	}
-	w.feedbackNext = w.now.Add(fc.Every.Duration)
-	quiet := *w.app
+	w.feedbackNext = w.a.now.Add(fc.Every.Duration)
+	quiet := *w.a
 	quiet.out = io.Discard
 	go func() {
 		defer w.feedbackBusy.Store(false)

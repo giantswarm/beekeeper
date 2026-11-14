@@ -83,7 +83,7 @@ func (p *person) watcher(out *bytes.Buffer) *watcher {
 	if err := a.load(); err != nil {
 		p.t.Fatal(err)
 	}
-	return &watcher{app: a, last: map[string]time.Time{}}
+	return &watcher{a: a, last: map[string]time.Time{}}
 }
 
 // Two people's machines share an installation through the central instance:

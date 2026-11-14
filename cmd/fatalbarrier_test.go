@@ -103,21 +103,21 @@ func TestFatalPublicationScopeAndRepair(t *testing.T) {
 func TestFatalRepairParkPersistsAndStatusShowsScope(t *testing.T) {
 	ref := fatalScopeRepo + "#7"
 	w := parkingWatch(t, map[string]string{ref: github.Open})
-	saveMainOutage(t, w.app)
+	saveMainOutage(t, w.a)
 	old := parkReviewHead
 	t.Cleanup(func() { parkReviewHead = old })
 	parkReviewHead = func(string) (string, string) { return loopHead, "" }
-	if _, err := w.park(state.Party{Name: agentOne}, ref, deskReviewWait); err != nil {
+	if _, err := w.a.park(state.Party{Name: agentOne}, ref, deskReviewWait); err != nil {
 		t.Fatal(err)
 	}
-	q, err := fatal.Read(w.store.Dir())
+	q, err := fatal.Read(w.a.store.Dir())
 	if err != nil || q.Incidents[0].Repair != ref {
 		t.Fatalf("repair not saved: %+v %v", q, err)
 	}
 	var out bytes.Buffer
-	c := w.fatalCmd()
+	c := w.a.fatalCmd()
 	c.SetOut(&out)
-	c.SetArgs([]string{fatalStateDirOption, w.store.Dir(), executionStatus})
+	c.SetArgs([]string{fatalStateDirOption, w.a.store.Dir(), executionStatus})
 	if err := c.ExecuteContext(t.Context()); err != nil {
 		t.Fatal(err)
 	}

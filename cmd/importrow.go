@@ -95,7 +95,7 @@ func (w *watcher) importRows(ctx context.Context, st *state.State) {
 	if w.stand.importRow == nil || w.stand.turning == nil || st.Stop != nil {
 		return
 	}
-	for _, ag := range w.rowless(ctx, st, w.stand.turning) {
+	for _, ag := range w.a.rowless(ctx, st, w.stand.turning) {
 		if _, busy := w.stand.importing.LoadOrStore(ag.Session, true); busy {
 			continue
 		}
@@ -272,13 +272,13 @@ func (a *app) launchReopen(unit, dir, arg, turn string) error {
 // desktop runs; before, the roster and the event log were its only signs.
 func (w *watcher) rowlessAgents(st *state.State) {
 	t := w.table
-	if t == nil || !w.desktopMode() || plat.Opener.Running(t).IsZero() {
+	if t == nil || !w.a.desktopMode() || plat.Opener.Running(t).IsZero() {
 		return
 	}
 	said := map[string]bool{}
 	var now []string
 	for _, ag := range st.Agents {
-		if _, ok := rowlessCandidate(st, ag, w.now); !ok || w.hasRow(ag.Session) {
+		if _, ok := rowlessCandidate(st, ag, w.a.now); !ok || w.a.hasRow(ag.Session) {
 			continue
 		}
 		said[ag.Session] = true
@@ -293,7 +293,7 @@ func (w *watcher) rowlessAgents(st *state.State) {
 	}
 	w.rowlessSaid = said
 	if len(now) > 0 {
-		w.emitNow("agents-rowless", "NO DESKTOP ROW: the desktop, running %d of its cap of %d CLIs, never imported %s", desktopCLIs(t), w.desktopCap(), strings.Join(now, ", "))
+		w.emitNow("agents-rowless", "NO DESKTOP ROW: the desktop, running %d of its cap of %d CLIs, never imported %s", desktopCLIs(t), w.a.desktopCap(), strings.Join(now, ", "))
 	}
 }
 

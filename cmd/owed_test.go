@@ -67,7 +67,7 @@ func laterWatch(t *testing.T, a *app, after time.Duration) *watcher {
 		t.Fatal(err)
 	}
 	a.now = time.Now().Add(after)
-	return &watcher{app: a}
+	return &watcher{a: a}
 }
 
 // A merge whose waiter was stopped while GitHub did not answer (its user
@@ -215,7 +215,7 @@ func TestTheWatchLeavesAnOutcomeItsMergeChildHandsOver(t *testing.T) {
 		t.Fatal(err)
 	}
 	a.now = time.Now()
-	(&watcher{app: a}).owedOutcomes(context.Background())
+	(&watcher{a: a}).owedOutcomes(context.Background())
 	if len(*woke) != 0 || len(ownedState(t, a)) != 1 {
 		t.Errorf("woke %q, owed %+v", *woke, ownedState(t, a))
 	}

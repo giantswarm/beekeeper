@@ -225,7 +225,7 @@ func TestAutomaticDiskDisablesLegacyGoCacheSchedule(t *testing.T) {
 	saved := goCacheDir
 	t.Cleanup(func() { goCacheDir = saved })
 	goCacheDir = func() string { return m.cache }
-	w := &watcher{app: a, goCacheOn: true, last: map[string]time.Time{}}
+	w := &watcher{a: a, goCacheOn: true, last: map[string]time.Time{}}
 	w.goCache(a.now)
 	w.bg.Wait()
 	var mark goCacheMark

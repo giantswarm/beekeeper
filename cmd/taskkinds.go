@@ -294,20 +294,20 @@ func kindSpendKey(kind string, day time.Time) string {
 // dailySpend: the day's spend so far in the machine's zone. The mark
 // outlives a restarted watch.
 func (w *watcher) kindSpending(now time.Time) {
-	if !slices.ContainsFunc(w.cfg.Agents.Kinds, func(k config.AgentKind) bool { return k.DailySpend > 0 }) {
+	if !slices.ContainsFunc(w.a.cfg.Agents.Kinds, func(k config.AgentKind) bool { return k.DailySpend > 0 }) {
 		return
 	}
-	zone, err := reportZone("", w.zone)
+	zone, err := reportZone("", w.a.zone)
 	if err != nil {
 		zone = time.Local
 	}
 	from, _ := kindDayWindow(now, zone)
-	st, err := w.store.Peek()
+	st, err := w.a.store.Peek()
 	if err != nil {
 		return
 	}
-	ts, err := w.spendTranscripts(from, now)
-	if w.context().Err() != nil {
+	ts, err := w.a.spendTranscripts(from, now)
+	if w.a.context().Err() != nil {
 		return
 	}
 	if err != nil {
@@ -324,7 +324,7 @@ func (w *watcher) kindSpending(now time.Time) {
 		}
 	}
 	w.mu.Unlock()
-	for _, d := range kindSpend(w.cfg, st, ts, from, now).Kinds {
+	for _, d := range kindSpend(w.a.cfg, st, ts, from, now).Kinds {
 		if d.DailySpend <= 0 || d.USD < d.DailySpend {
 			continue
 		}

@@ -393,7 +393,7 @@ type dockerMark = goCacheMark
 // failed read or prune, or one that leaves the images over their cap, is
 // DOCKER too.
 func (w *watcher) docker(now time.Time) {
-	if !w.dockerOn || dockerCLI == nil || (w.cfg.Doctor.DockerImagesMax() == 0 && w.cfg.Doctor.DockerBuildCacheMax() == 0) ||
+	if !w.dockerOn || dockerCLI == nil || (w.a.cfg.Doctor.DockerImagesMax() == 0 && w.a.cfg.Doctor.DockerBuildCacheMax() == 0) ||
 		!w.dockerPruning.CompareAndSwap(false, true) {
 		return
 	}
@@ -405,15 +405,15 @@ func (w *watcher) docker(now time.Time) {
 	go func() {
 		defer w.bg.Done()
 		defer w.dockerPruning.Store(false)
-		every := w.cfg.Doctor.DockerEvery.Duration
+		every := w.a.cfg.Doctor.DockerEvery.Duration
 		var m dockerMark
-		_, _ = w.store.ReadFile(dockerFile, &m)
+		_, _ = w.a.store.ReadFile(dockerFile, &m)
 		if m.Waiting.IsZero() && now.Sub(m.Checked) < every {
 			w.dockerNext = m.Checked.Add(every)
 			return
 		}
-		r := w.pruneDocker(false, w.dockerHolds)
-		if w.context().Err() != nil {
+		r := w.a.pruneDocker(false, w.a.dockerHolds)
+		if w.a.context().Err() != nil {
 			return
 		}
 		switch {
@@ -430,7 +430,7 @@ func (w *watcher) docker(now time.Time) {
 			w.dockerNext = now.Add(every)
 		}
 		m.Checked = now
-		_ = w.store.WriteFile(dockerFile, m)
+		_ = w.a.store.WriteFile(dockerFile, m)
 		waited := !m.Waiting.IsZero() && now.Sub(m.Waiting) >= every
 		w.check("docker", r.err != nil || r.blocked() || waited, "DOCKER: %s", r)
 	}()

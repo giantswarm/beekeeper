@@ -45,7 +45,7 @@ func (w *watcher) slotOrphans(now time.Time, t *proc.Table) {
 	if w.orphanSince == nil {
 		w.orphanSince = map[string]time.Time{}
 	}
-	dir, n := w.slotView()
+	dir, n := w.a.slotView()
 	o := guard.Options{SlotDir: dir}
 	found := map[string]bool{}
 	for i := 1; i <= n; i++ {
@@ -137,7 +137,7 @@ func (w *watcher) emptySlotHolders(now time.Time, t *proc.Table) {
 	if w.emptyHolderSince == nil {
 		w.emptyHolderSince = map[string]time.Time{}
 	}
-	dir, n := w.slotView()
+	dir, n := w.a.slotView()
 	found := map[string]bool{}
 	for _, slot := range machine.ReadSlots(dir, n) {
 		h, ok := guard.ParseHolder(slot.Holder)
@@ -156,7 +156,7 @@ func (w *watcher) emptySlotHolders(now time.Time, t *proc.Table) {
 		scope := h.Scope
 		ready := !h.StartDeadline.IsZero() && !now.Before(h.StartDeadline)
 		if !ready {
-			events, err := w.store.Events(1, func(e state.Event) bool {
+			events, err := w.a.store.Events(1, func(e state.Event) bool {
 				unit := guard.RunScope(e.Detail)
 				return e.Verb == guard.VerbStart && !e.At.Before(h.Since) && (strings.HasPrefix(unit, fmt.Sprintf("memcap-%d-", h.PID)) || strings.HasPrefix(unit, fmt.Sprintf("memcap-test-%d-", h.PID)))
 			})

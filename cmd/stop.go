@@ -528,5 +528,5 @@ func (w *watcher) sayStop(st *state.State) {
 		w.clear("stop")
 		return
 	}
-	w.check("stop", true, "STOPPED: %s; the sessions it ended: %s", w.stopText(st.Stop), listOrNone(st.Stop.Sessions))
+	w.check("stop", true, "STOPPED: %s; the sessions it ended: %s", w.a.stopText(st.Stop), listOrNone(st.Stop.Sessions))
 }

@@ -42,7 +42,7 @@ func TestWatchReplayedHourSaysEachFactOnceInBudget(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	w := &watcher{app: &app{out: &out, cfg: &config.Config{}}, last: map[string]time.Time{}, sessions: map[string]*claude.Session{}}
+	w := &watcher{a: &app{out: &out, cfg: &config.Config{}}, last: map[string]time.Time{}, sessions: map[string]*claude.Session{}}
 	live := map[string]*claude.Session{}
 	pid := 0
 	session := func(name string) *claude.Session {
@@ -146,7 +146,7 @@ func TestWatchSaysAConditionsStartAndEndOnce(t *testing.T) {
 	var out bytes.Buffer
 	cfg := &config.Config{}
 	cfg.Watch.Repeat.Duration = 10 * time.Minute
-	w := &watcher{app: &app{out: &out, cfg: cfg}, last: map[string]time.Time{}}
+	w := &watcher{a: &app{out: &out, cfg: cfg}, last: map[string]time.Time{}}
 	for range 40 {
 		w.check("avail", true, "LOW RAM: %d MiB available, swap %d MiB", 900, 12000)
 	}

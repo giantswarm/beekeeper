@@ -66,13 +66,13 @@ func reportingWatch(t *testing.T, dir string) (*watcher, *[]string, *bytes.Buffe
 	if err := os.WriteFile(brief, []byte("# Hourly status\n\nPost it."), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	w.cfg.Reporter = hourly()
-	w.cfg.Reporter.Brief, w.cfg.Reporter.Dir, w.cfg.Reporter.Person = brief, dir, "Ada"
-	w.cfg.Claude.ProjectsDir = filepath.Join(dir, "projects")
-	w.now = reportNow
+	w.a.cfg.Reporter = hourly()
+	w.a.cfg.Reporter.Brief, w.a.cfg.Reporter.Dir, w.a.cfg.Reporter.Person = brief, dir, "Ada"
+	w.a.cfg.Claude.ProjectsDir = filepath.Join(dir, "projects")
+	w.a.now = reportNow
 	var launched []string
 	w.turnEnded = func(context.Context, string) bool { return false }
-	w.zone = func() (*time.Location, error) { return time.LoadLocation("Europe/Athens") }
+	w.a.zone = func() (*time.Location, error) { return time.LoadLocation("Europe/Athens") }
 	w.runReport = func(unit, id, name, prompt string) error {
 		if !strings.HasPrefix(unit, "beekeeper-report-"+id[:8]) || !strings.Contains(prompt, "to Ada") || !strings.Contains(prompt, "–"+strings.TrimPrefix(name, "Status report ")+" EEST, every time in Europe/Athens") || !regexp.MustCompile("`beekeeper report --since \\S+\\+03:00 --until \\S+T"+strings.TrimPrefix(name, "Status report ")+":00\\+03:00`").MatchString(prompt) || !strings.Contains(prompt, "beekeeper reporter check") || !strings.HasSuffix(prompt, "Post it.") {
 			t.Errorf("launch %s %s %q", unit, name, prompt)
@@ -93,7 +93,7 @@ func TestReporterStartsOncePerSlotAcrossWatches(t *testing.T) {
 	if names := append(*la, *lb...); len(names) != 1 || names[0] != "Status report 02:00" {
 		t.Fatalf("started %v and %v, want one reporter, Status report 02:00", *la, *lb)
 	}
-	st, err := a.store.Read()
+	st, err := a.a.store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,8 +112,8 @@ func TestReporterSkipsTheNextSlotWhileItRuns(t *testing.T) {
 	w, launched, out := reportingWatch(t, dir)
 	ctx := context.Background()
 	w.tendReporter(ctx, nil)
-	w.cfg.Reporter.Timeout.Duration = 2 * time.Hour
-	w.now = reportNow.Add(time.Hour)
+	w.a.cfg.Reporter.Timeout.Duration = 2 * time.Hour
+	w.a.now = reportNow.Add(time.Hour)
 	w.tendReporter(ctx, nil)
 	w.tendReporter(ctx, nil)
 	if len(*launched) != 1 || strings.Count(out.String(), "is skipped") != 1 {
@@ -129,9 +129,9 @@ func TestReporterEndsOnThePost(t *testing.T) {
 	w, _, out := reportingWatch(t, dir)
 	ctx := context.Background()
 	w.tendReporter(ctx, nil)
-	st, _ := w.store.Read()
+	st, _ := w.a.store.Read()
 	id := st.Report.Session
-	proj := filepath.Join(w.cfg.Claude.ProjectsDir, "p")
+	proj := filepath.Join(w.a.cfg.Claude.ProjectsDir, "p")
 	if err := os.MkdirAll(proj, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -141,18 +141,18 @@ func TestReporterEndsOnThePost(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(proj, id+".jsonl"), []byte(post), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	w.now = reportNow.Add(3 * time.Minute)
+	w.a.now = reportNow.Add(3 * time.Minute)
 	w.tendReporter(ctx, nil)
-	st, _ = w.store.Read()
+	st, _ = w.a.store.Read()
 	if st.Report.Running() || st.Report.Outcome != "posted" || len(st.Agents) != 0 {
 		t.Errorf("report %+v, agents %+v", st.Report, st.Agents)
 	}
 	if !strings.Contains(out.String(), "posted: posted its report, off the roster") || verbs(t, w, "reporter.posted") != 1 {
 		t.Errorf("out:\n%s", out)
 	}
-	w.now = reportNow.Add(time.Hour)
+	w.a.now = reportNow.Add(time.Hour)
 	w.tendReporter(ctx, nil)
-	if st, _ = w.store.Read(); !st.Report.Running() || st.Report.Session == id {
+	if st, _ = w.a.store.Read(); !st.Report.Running() || st.Report.Session == id {
 		t.Errorf("the next slot's report %+v", st.Report)
 	}
 }
@@ -162,9 +162,9 @@ func TestReporterTimesOut(t *testing.T) {
 	w, _, out := reportingWatch(t, dir)
 	ctx := context.Background()
 	w.tendReporter(ctx, nil)
-	w.now = reportNow.Add(20 * time.Minute)
+	w.a.now = reportNow.Add(20 * time.Minute)
 	w.tendReporter(ctx, nil)
-	st, _ := w.store.Read()
+	st, _ := w.a.store.Read()
 	if st.Report.Running() || st.Report.Outcome != "timeout" || len(st.Agents) != 0 {
 		t.Errorf("report %+v, agents %+v", st.Report, st.Agents)
 	}
@@ -184,7 +184,7 @@ func TestReporterOnlyInTheStandbyWatch(t *testing.T) {
 
 func TestReporterNotStartedSaysWhyOnce(t *testing.T) {
 	w, _, out := reportingWatch(t, t.TempDir())
-	w.cfg.Reporter.Brief = filepath.Join(t.TempDir(), "missing.md")
+	w.a.cfg.Reporter.Brief = filepath.Join(t.TempDir(), "missing.md")
 	for range 2 {
 		w.tendReporter(context.Background(), nil)
 	}
@@ -208,7 +208,7 @@ func TestTurnPIDs(t *testing.T) {
 // verbs counts the events of verb in w's log.
 func verbs(t *testing.T, w *watcher, verb string) int {
 	t.Helper()
-	evs, err := w.store.Events(0, func(e state.Event) bool { return e.Verb == verb })
+	evs, err := w.a.store.Events(0, func(e state.Event) bool { return e.Verb == verb })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,9 +220,9 @@ func TestReporterEndsATurnThatEndedWithoutAPost(t *testing.T) {
 	ctx := context.Background()
 	w.tendReporter(ctx, nil)
 	w.turnEnded = func(context.Context, string) bool { return true }
-	w.now = reportNow.Add(2 * time.Minute)
+	w.a.now = reportNow.Add(2 * time.Minute)
 	w.tendReporter(ctx, nil)
-	st, _ := w.store.Read()
+	st, _ := w.a.store.Read()
 	if st.Report.Running() || st.Report.Outcome != "unposted" || len(st.Agents) != 0 || verbs(t, w, "reporter.unposted") != 1 {
 		t.Errorf("report %+v, agents %+v; out:\n%s", st.Report, st.Agents, out)
 	}
@@ -265,9 +265,9 @@ func TestReporterFinalThenPaused(t *testing.T) {
 	ctx := context.Background()
 	w.tendReporter(ctx, nil) // 02:00 EEST
 	w.turnEnded = func(context.Context, string) bool { return true }
-	w.now = reportNow.Add(time.Minute)
+	w.a.now = reportNow.Add(time.Minute)
 	w.tendReporter(ctx, nil) // ended
-	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+	if err := w.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.ReportPause = &state.ReportPause{Final: reportNow.Add(45 * time.Minute)}
 		return nil, nil
 	}); err != nil {
@@ -279,23 +279,23 @@ func TestReporterFinalThenPaused(t *testing.T) {
 		prompt = p
 		return nil
 	}
-	w.now = reportNow.Add(30 * time.Minute)
+	w.a.now = reportNow.Add(30 * time.Minute)
 	w.tendReporter(ctx, nil)
-	w.now = reportNow.Add(45 * time.Minute)
+	w.a.now = reportNow.Add(45 * time.Minute)
 	w.tendReporter(ctx, nil)
 	if len(*launched) != 2 || (*launched)[1] != "Status report 02:45" || !strings.Contains(prompt, "Report 02:00–02:45 EEST") ||
 		!strings.Contains(prompt, "last report before the 1h00m reports pause") {
 		t.Fatalf("launched %v, prompt %q; out:\n%s", *launched, prompt, out)
 	}
 	w.tendReporter(ctx, nil) // ended
-	w.now = reportNow.Add(3 * time.Hour)
+	w.a.now = reportNow.Add(3 * time.Hour)
 	w.tendReporter(ctx, nil)
 	w.tendReporter(ctx, nil)
-	st, _ := w.store.Read()
+	st, _ := w.a.store.Read()
 	if len(*launched) != 2 || !st.ReportPause.Paused() || verbs(t, w, "reporter.pause") != 1 {
 		t.Errorf("after the final: launched %v, pause %+v", *launched, st.ReportPause)
 	}
-	if err := w.store.Update(func(st *state.State) ([]state.Event, error) { st.ReportPause = nil; return nil, nil }); err != nil {
+	if err := w.a.store.Update(func(st *state.State) ([]state.Event, error) { st.ReportPause = nil; return nil, nil }); err != nil {
 		t.Fatal(err)
 	}
 	w.tendReporter(ctx, nil)

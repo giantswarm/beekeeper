@@ -234,7 +234,7 @@ func (r *goCacheRun) holdForRuns(parent context.Context) (release func(), ok boo
 // next look's time is read only with the flag held, after the look that
 // wrote it gave the flag back.
 func (w *watcher) goCache(now time.Time) {
-	if w.cfg.Disk.Auto() || !w.goCacheOn || w.cfg.Doctor.GoCacheMax() == 0 || !w.goCaching.CompareAndSwap(false, true) {
+	if w.a.cfg.Disk.Auto() || !w.goCacheOn || w.a.cfg.Doctor.GoCacheMax() == 0 || !w.goCaching.CompareAndSwap(false, true) {
 		return
 	}
 	if now.Before(w.goCacheNext) {
@@ -257,14 +257,14 @@ func (w *watcher) goCache(now time.Time) {
 // how long the trim has waited, until it is under the cap. A failed read or
 // trim is GO CACHE too.
 func (w *watcher) goCacheLook(now time.Time, builds func() []int) {
-	every := w.cfg.Doctor.GoCacheEvery.Duration
+	every := w.a.cfg.Doctor.GoCacheEvery.Duration
 	var m goCacheMark
-	_, _ = w.store.ReadFile(goCacheFile, &m)
+	_, _ = w.a.store.ReadFile(goCacheFile, &m)
 	if m.Waiting.IsZero() && now.Sub(m.Checked) < every {
 		w.goCacheNext = m.Checked.Add(every)
 		return
 	}
-	r := w.trimGoCache(false, builds)
+	r := w.a.trimGoCache(false, builds)
 	switch {
 	case r.locked:
 		w.goCacheNext = now.Add(goCacheRetry)
@@ -280,6 +280,6 @@ func (w *watcher) goCacheLook(now time.Time, builds func() []int) {
 		w.goCacheNext = now.Add(every)
 	}
 	m.Checked = now
-	_ = w.store.WriteFile(goCacheFile, m)
+	_ = w.a.store.WriteFile(goCacheFile, m)
 	w.check("gocache", r.err != nil || (r.waited > 0 && r.waited >= every), "GO CACHE: %s", r)
 }

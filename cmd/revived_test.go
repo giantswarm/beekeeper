@@ -47,15 +47,15 @@ func useEndRevived(t *testing.T) *[]int {
 func TestTheWatchStopsARevivedPredecessor(t *testing.T) {
 	const name = "BK 37984 serve on gazelle"
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
-	w.now = time.Now()
+	w.a.now = time.Now()
 	l := &stopLauncher{units: []string{"beekeeper-reopen-9b9ca177-1"}}
 	useLauncher(t, l)
 	ended := useEndRevived(t)
 
 	old := state.Party{Session: "9b9ca177-old", HostSession: "local_9b9ca177-old", Name: name}
 	next := state.Party{Session: "b8a904ab-new", HostSession: "local_b8a904ab-new", Name: name}
-	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Starts = []state.Start{{Party: old, At: w.now.Add(-3 * time.Hour)}, {Party: next, At: w.now.Add(-time.Minute)}}
+	if err := w.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Starts = []state.Start{{Party: old, At: w.a.now.Add(-3 * time.Hour)}, {Party: next, At: w.a.now.Add(-time.Minute)}}
 		st.Agents = []state.Agent{{Party: next, Task: "serve"}}
 		return nil, nil
 	}); err != nil {
@@ -81,14 +81,14 @@ func TestTheWatchStopsARevivedPredecessor(t *testing.T) {
 	if s := out.String(); !strings.Contains(s, `REVIVED "BK 37984 serve on gazelle": session 9b9ca177-old's CLI 1580801`) || !strings.Contains(s, "session b8a904ab-new") {
 		t.Errorf("output:\n%s", s)
 	}
-	st, err := w.store.Read()
+	st, err := w.a.store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(st.Archives) != 1 || st.Archives[0].Host != old.HostSession {
 		t.Errorf("archives %+v, want the predecessor's desktop session owed", st.Archives)
 	}
-	evs, err := w.store.Events(0, func(e state.Event) bool { return e.Verb == "agents.revived" })
+	evs, err := w.a.store.Events(0, func(e state.Event) bool { return e.Verb == "agents.revived" })
 	if err != nil || len(evs) != 1 {
 		t.Errorf("agents.revived events %v, %v", evs, err)
 	}
@@ -114,17 +114,17 @@ func TestTheWatchStopsARevivedPredecessor(t *testing.T) {
 func TestTheWatchLeavesACLIWarmedForItsArchive(t *testing.T) {
 	const name = "BS 2867 provider connect prompt"
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
-	w.now = time.Now()
+	w.a.now = time.Now()
 	useLauncher(t, &stopLauncher{})
 	ended := useEndRevived(t)
 
 	old := state.Party{Session: "6d5d9d3c-old", HostSession: "local_6d5d9d3c-old", Name: name}
 	next := state.Party{Session: "a1b2c3d4-new", HostSession: "local_a1b2c3d4-new", Name: name}
-	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Starts = []state.Start{{Party: old, At: w.now.Add(-3 * time.Hour)}, {Party: next, At: w.now.Add(-time.Minute)}}
+	if err := w.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Starts = []state.Start{{Party: old, At: w.a.now.Add(-3 * time.Hour)}, {Party: next, At: w.a.now.Add(-time.Minute)}}
 		st.Agents = []state.Agent{{Party: next, Task: "connect prompt"}}
-		oweArchive(st, old, "handed over to session "+next.Session, w.now)
-		st.Archives[0].Warmed = w.now.Add(-time.Minute)
+		oweArchive(st, old, "handed over to session "+next.Session, w.a.now)
+		st.Archives[0].Warmed = w.a.now.Add(-time.Minute)
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -146,7 +146,7 @@ func TestTheWatchLeavesACLIWarmedForItsArchive(t *testing.T) {
 		t.Errorf("output:\n%s", s)
 	}
 
-	w.now = w.now.Add(archiveWarmGrace)
+	w.a.now = w.a.now.Add(archiveWarmGrace)
 	w.stopRevived(t.Context(), []*claude.Session{oldCLI, nextCLI})
 	if len(*ended) != 1 || (*ended)[0] != oldCLI.PID {
 		t.Errorf("stopped %v past the grace, want the warmed CLI %d", *ended, oldCLI.PID)
@@ -163,7 +163,7 @@ func TestTheWatchLeavesARelievedRunRunning(t *testing.T) {
 	taken := time.Now()
 	out := state.Party{Session: "sup-81", HostSession: "local_sup-81", Name: "Guide run 81"}
 	succ := state.Party{Session: "sup-82", HostSession: "local_sup-82", Name: "Guide run 82"}
-	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+	if err := w.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Starts = []state.Start{{Party: out, At: taken.Add(-time.Hour), Role: guideName}, {Party: succ, At: taken.Add(-time.Minute), Role: guideName}}
 		guideRole.set(st, state.Role{
 			Holder:   &state.Supervisor{Party: succ, Since: taken},
@@ -177,13 +177,13 @@ func TestTheWatchLeavesARelievedRunRunning(t *testing.T) {
 	outCLI := &claude.Session{PID: 81, ID: out.Session, HostID: out.HostSession, Name: out.Name}
 	succCLI := &claude.Session{PID: 82, ID: succ.Session, HostID: succ.HostSession, Name: succ.Name}
 	for _, at := range []time.Duration{4 * time.Second, 2 * time.Minute, 48 * time.Hour} {
-		w.now = taken.Add(at)
+		w.a.now = taken.Add(at)
 		left := w.stopRevived(t.Context(), []*claude.Session{outCLI, succCLI})
 		if len(*ended) != 0 || len(left) != 2 {
 			t.Fatalf("%s after the relay: stopped %v, left %d CLIs", at, *ended, len(left))
 		}
 	}
-	st, err := w.store.Read()
+	st, err := w.a.store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +198,7 @@ func TestTheWatchLeavesARelievedRunRunning(t *testing.T) {
 func TestTheWatchStopsAnArchivedSessionsCLIQuietly(t *testing.T) {
 	const name = "WS 38113 backstage workspaces"
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
-	w.now = time.Now()
+	w.a.now = time.Now()
 	useLauncher(t, &stopLauncher{})
 	ended := useEndRevived(t)
 	old := state.Party{Session: "16140721-old", HostSession: "local_16140721-old", Name: name}
@@ -206,8 +206,8 @@ func TestTheWatchStopsAnArchivedSessionsCLIQuietly(t *testing.T) {
 	orig := desktopArchived
 	t.Cleanup(func() { desktopArchived = orig })
 	desktopArchived = func(_ *config.Config, host string) bool { return host == old.HostSession }
-	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Starts = []state.Start{{Party: old, At: w.now.Add(-3 * time.Hour)}, {Party: next, At: w.now.Add(-time.Minute)}}
+	if err := w.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Starts = []state.Start{{Party: old, At: w.a.now.Add(-3 * time.Hour)}, {Party: next, At: w.a.now.Add(-time.Minute)}}
 		st.Agents = []state.Agent{{Party: next, Task: "workspaces"}}
 		return nil, nil
 	}); err != nil {
@@ -226,15 +226,15 @@ func TestTheWatchStopsAnArchivedSessionsCLIQuietly(t *testing.T) {
 	if s := out.String(); strings.Contains(s, "REVIVED") {
 		t.Errorf("output:\n%s", s)
 	}
-	st, err := w.store.Read()
+	st, err := w.a.store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(st.Archives) != 0 {
 		t.Errorf("archives %+v, want none owed for an archived session", st.Archives)
 	}
-	revived, _ := w.store.Events(0, func(e state.Event) bool { return e.Verb == "agents.revived" })
-	archive, _ := w.store.Events(0, func(e state.Event) bool { return e.Verb == "agents.archive" })
+	revived, _ := w.a.store.Events(0, func(e state.Event) bool { return e.Verb == "agents.revived" })
+	archive, _ := w.a.store.Events(0, func(e state.Event) bool { return e.Verb == "agents.archive" })
 	if len(revived) != 0 || len(archive) != 1 || !strings.Contains(archive[0].Detail, "is archived") {
 		t.Errorf("agents.revived %v, agents.archive %v", revived, archive)
 	}

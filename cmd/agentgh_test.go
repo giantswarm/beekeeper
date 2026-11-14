@@ -52,7 +52,7 @@ func TestTheWatchSaysAnUnbrokeredGH(t *testing.T) {
 	}
 	set(map[string]string{own: filepath.Join(link, "gh"), plain: "/usr/bin/gh", missing: ghNone})
 	var out bytes.Buffer
-	w := &watcher{app: &app{cfg: cfg, store: store, now: now, out: &out}, last: map[string]time.Time{}}
+	w := &watcher{a: &app{cfg: cfg, store: store, now: now, out: &out}, last: map[string]time.Time{}}
 	w.unbrokered()
 	w.unbrokered()
 	s := out.String()

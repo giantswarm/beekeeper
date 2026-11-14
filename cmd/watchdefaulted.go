@@ -12,14 +12,14 @@ import (
 // tellDefaulted batches a pass by its current recipients. Each note still
 // follows the usual mailbox, role fallback and delivery-status handling.
 func (w *watcher) tellDefaulted(ctx context.Context, notes []state.Note) {
-	st, err := w.store.Read()
+	st, err := w.a.store.Read()
 	if err != nil {
 		w.fail("state-read", "cannot read the state: %v", err)
 		return
 	}
 	// Normalize roster names and session IDs to the same recipient.
 	recipient := func(q string) string {
-		if ag, _, err := w.wakeParty(st, q); err == nil {
+		if ag, _, err := w.a.wakeParty(st, q); err == nil {
 			return cmp.Or(wakeID(ag.Party), ag.Name)
 		}
 		return q
@@ -53,6 +53,6 @@ func (w *watcher) tellDefaulted(ctx context.Context, notes []state.Note) {
 		return err
 	}
 	for _, n := range notes {
-		w.tellFilerWithWake(ctx, watchParty, &n, defaultedLine(&n), wake)
+		w.a.tellFilerWithWake(ctx, watchParty, &n, defaultedLine(&n), wake)
 	}
 }

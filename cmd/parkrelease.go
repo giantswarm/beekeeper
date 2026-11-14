@@ -50,7 +50,7 @@ var readParkRelease = func(ctx context.Context, repo, version string) ([]byte, e
 }
 
 func (w *watcher) settledReleaseParks(ctx context.Context, st *state.State) []settledPark {
-	if loop.BoardBudgetLow(st.Budget, w.cfg.GitHub.Floor, w.now) {
+	if loop.BoardBudgetLow(st.Budget, w.a.cfg.GitHub.Floor, w.a.now) {
 		return nil
 	}
 	checked := map[string]bool{}
@@ -84,7 +84,7 @@ func (w *watcher) settledReleaseParks(ctx context.Context, st *state.State) []se
 			}
 			var err error
 			if w.loopOwned {
-				err = w.loopGitHub(ctx, "park-release", read)
+				err = w.a.loopGitHub(ctx, "park-release", read)
 			} else {
 				err = read()
 			}

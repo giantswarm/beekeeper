@@ -1082,16 +1082,16 @@ func (w *watcher) handoversDue(st *state.State, sessions []*claude.Session) {
 	said := func(p state.Party) bool { return w.reported[key(p)] }
 	contextOf := func(ag state.Agent, s *claude.Session) int64 {
 		if s == nil {
-			s = &claude.Session{Transcript: transcriptOf(w.cfg, ag.Session)}
+			s = &claude.Session{Transcript: transcriptOf(w.a.cfg, ag.Session)}
 		}
 		return transcriptContext(s)
 	}
-	for _, d := range handoversDue(st, sessions, w.cfg.Agents, w.now, said, contextOf, proc.Alive) {
+	for _, d := range handoversDue(st, sessions, w.a.cfg.Agents, w.a.now, said, contextOf, proc.Alive) {
 		if d.held != "" {
 			if k := "handover-held " + d.agent.Session; !w.reported[k] {
 				w.reported[k], w.dirty = true, true
 				w.emitNow("handover", "HANDOVER HELD %q at %s: last step, report expected (%s); due at %s or at %s",
-					d.agent.Name, tokensText(d.context), d.held, d.until.Local().Format("15:04"), tokensText(int64(w.cfg.Agents.LastStepCeiling)))
+					d.agent.Name, tokensText(d.context), d.held, d.until.Local().Format("15:04"), tokensText(int64(w.a.cfg.Agents.LastStepCeiling)))
 			}
 			continue
 		}

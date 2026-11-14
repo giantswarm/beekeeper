@@ -5,7 +5,7 @@ import (
 )
 
 func (w *watcher) staleMerges() {
-	st, err := w.store.Peek()
+	st, err := w.a.store.Peek()
 	if err != nil {
 		return
 	}

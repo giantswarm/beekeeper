@@ -34,7 +34,7 @@ func TestStaleWatches(t *testing.T) {
 
 	var out bytes.Buffer
 	replaced := map[int]bool{}
-	w := &watcher{app: &app{out: &out, cfg: &config.Config{}}, last: map[string]time.Time{}}
+	w := &watcher{a: &app{out: &out, cfg: &config.Config{}}, last: map[string]time.Time{}}
 	w.owners.Store(&map[int]string{10: "Supervisor 3"})
 	w.replaced = func(pid int) (string, bool) { return path, replaced[pid] }
 	w.versionOf = func(_ context.Context, file string) string {
@@ -82,7 +82,7 @@ func TestStaleWatches(t *testing.T) {
 func TestWatchReportsFailedGateAfterInstall(t *testing.T) {
 	const path = "/home/u/.go/bin/beekeeper"
 	var out bytes.Buffer
-	w := &watcher{app: &app{out: &out, cfg: &config.Config{}}, last: map[string]time.Time{}}
+	w := &watcher{a: &app{out: &out, cfg: &config.Config{}}, last: map[string]time.Time{}}
 	w.replaced = func(int) (string, bool) { return path, true }
 	w.versionOf = func(context.Context, string) string { return "v8.8.8" }
 	w.gateOf = func(context.Context, string) error {

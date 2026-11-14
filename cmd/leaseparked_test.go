@@ -61,7 +61,7 @@ func TestParkedLeaseHolder(t *testing.T) {
 			}
 			var out strings.Builder
 			a.out = &out
-			w := &watcher{app: a, reported: map[string]bool{}, last: map[string]time.Time{}}
+			w := &watcher{a: a, reported: map[string]bool{}, last: map[string]time.Time{}}
 			w.staleLeases(context.Background(), sessions)
 			stale := strings.Contains(out.String(), "STALE LEASE")
 			if stale != (tc.want == holderGone) {

@@ -346,7 +346,7 @@ func settleTimersMatching(st *state.State, found map[int]checkResult, now time.T
 // they are, so a look by hand neither wakes nor closes another's timer.
 func (w *watcher) wouldFireTimers(st *state.State, found map[int]checkResult) {
 	scratch := state.State{Timers: slices.Clone(st.Timers), Stop: st.Stop}
-	lines, _, _, _ := settleTimers(&scratch, found, w.now)
+	lines, _, _, _ := settleTimers(&scratch, found, w.a.now)
 	for _, l := range lines {
 		if head, rest, ok := strings.Cut(l, ": "); ok {
 			l = head + " (--once writes nothing): " + rest
@@ -393,7 +393,7 @@ func (w *watcher) wakeTimers(ctx context.Context, fires []timerFire) {
 	// A timer may have fired before the agent replaced its wait. Read the
 	// current park at delivery, including parks off the roster; a stale
 	// repeating timer must never turn a session waiting on a person.
-	st, err := w.store.Read()
+	st, err := w.a.store.Read()
 	if err != nil {
 		outcomes := make([]timerWakeOutcome, 0, len(fires))
 		for _, f := range fires {
@@ -443,11 +443,11 @@ func (w *watcher) wakeTimers(ctx context.Context, fires []timerFire) {
 				continue // The worker has already left or replaced this CI wait.
 			}
 		}
-		if p := wakeTargetPark(st, f.t.Wake); p != nil && !timerSettlesPark(f.t, p, w.cfg.Guide.Person) {
+		if p := wakeTargetPark(st, f.t.Wake); p != nil && !timerSettlesPark(f.t, p, w.a.cfg.Guide.Person) {
 			immediate = append(immediate, timerWakeOutcome{
 				fire:  original,
 				rearm: true,
-				line:  fmt.Sprintf("TIMER WAKE SKIPPED: #%d for %q: %s; its current wake condition has not fired", f.t.ID, f.t.Wake, parkedText(p, w.now)),
+				line:  fmt.Sprintf("TIMER WAKE SKIPPED: #%d for %q: %s; its current wake condition has not fired", f.t.ID, f.t.Wake, parkedText(p, w.a.now)),
 			})
 			continue
 		}
@@ -486,7 +486,7 @@ func (w *watcher) deliverWakeTimer(ctx context.Context, st *state.State, origina
 			}
 		}
 		if !handed {
-			quiet := *w.app
+			quiet := *w.a
 			quiet.out = io.Discard
 			if err := quiet.queueContinuation(watchParty, ag, f.message()); err != nil {
 				return timerWakeOutcome{
@@ -498,7 +498,7 @@ func (w *watcher) deliverWakeTimer(ctx context.Context, st *state.State, origina
 		return timerWakeOutcome{fire: original, closeCI: true}
 	}
 
-	quiet := *w.app // the wake's own report is not a watch line
+	quiet := *w.a // the wake's own report is not a watch line
 	quiet.out = io.Discard
 	if !f.t.Due.IsZero() {
 		quiet.executionRequestID = fmt.Sprintf("timer/%d/%s/%s", f.t.ID, f.t.Due.UTC().Format(time.RFC3339Nano), execution.Digest([]byte(f.message())))
@@ -535,10 +535,10 @@ func (w *watcher) deliverWakeTimer(ctx context.Context, st *state.State, origina
 }
 
 func (w *watcher) timerRetryNow() time.Time {
-	if w.clock != nil || w.polls.Load() > 0 || w.now.IsZero() {
+	if w.clock != nil || w.polls.Load() > 0 || w.a.now.IsZero() {
 		return w.clk().Now().UTC()
 	}
-	return w.now.UTC()
+	return w.a.now.UTC()
 }
 
 func (w *watcher) settleWakeOutcomes(outcomes []timerWakeOutcome) {
@@ -558,7 +558,7 @@ func (w *watcher) settleWakeOutcomes(outcomes []timerWakeOutcome) {
 		}
 		return
 	}
-	err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+	err := w.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		checkedAt := w.timerRetryNow()
 		var evs []state.Event
 		for _, o := range outcomes {
@@ -622,7 +622,7 @@ func rearmTimerInState(st *state.State, f timerFire, held string, checkedAt time
 // runTimer runs a fired timer's command, its output in timers/<id>.log of
 // the state directory, and logs and says its exit code.
 func (w *watcher) runTimer(ctx context.Context, f timerFire) {
-	path := filepath.Join(w.store.Dir(), "timers", fmt.Sprintf("%d.log", f.t.ID))
+	path := filepath.Join(w.a.store.Dir(), "timers", fmt.Sprintf("%d.log", f.t.ID))
 	rctx, cancel := context.WithTimeout(ctx, timerRunTimeout)
 	defer cancel()
 	c := proc.CommandContext(rctx, "sh", "-c", f.t.Run) //nolint:gosec // the command its timer's setter gave on this machine
@@ -658,7 +658,7 @@ func (w *watcher) runTimer(ctx context.Context, f timerFire) {
 		}
 		return
 	}
-	_ = w.store.Log(event(watchParty, "timer.ran", "#%d exit %d (%s): %s", f.t.ID, rc, path, f.t.Run))
+	_ = w.a.store.Log(event(watchParty, "timer.ran", "#%d exit %d (%s): %s", f.t.ID, rc, path, f.t.Run))
 	w.emitNow("timer", "TIMER RAN: #%d exit %d, output in %s: %s", f.t.ID, rc, path, truncate(f.t.What, 200))
 }
 
@@ -670,7 +670,7 @@ func (w *watcher) rearmInterruptedTimer(f timerFire) (bool, error) {
 // rearmTimer restores an undelivered occurrence without replacing a newer edit.
 func (w *watcher) rearmTimer(f timerFire, held string) (bool, error) {
 	rearmed := false
-	err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+	err := w.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		retry := f.t
 		retry.Checked, retry.Fired = time.Time{}, time.Time{}
 		retry.Held = held

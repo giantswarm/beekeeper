@@ -158,10 +158,10 @@ func TestWatchRestartsAfterBackgroundRuns(t *testing.T) {
 	w, _ := loopWatcher(t, "1h", "", nil)
 	at := time.Now().Add(-time.Second)
 	tab := &proc.Table{ByPID: map[int]*proc.Process{3: {PID: 3, Comm: project.Name, Args: []string{project.Name, watchName}}}}
-	if _, err := requestRestarts(&bytes.Buffer{}, w.cfg.StateDir, restartExe, tab, func(int) (string, bool) { return restartExe, true }, at, false); err != nil {
+	if _, err := requestRestarts(&bytes.Buffer{}, w.a.cfg.StateDir, restartExe, tab, func(int) (string, bool) { return restartExe, true }, at, false); err != nil {
 		t.Fatal(err)
 	}
-	w.restart = &restartWatch{file: filepath.Join(w.cfg.StateDir, restartFile), since: at.Add(-time.Hour),
+	w.restart = &restartWatch{file: filepath.Join(w.a.cfg.StateDir, restartFile), since: at.Add(-time.Hour),
 		binary: func() (string, bool) { return restartExe, true }}
 	saving := make(chan struct{})
 	w.bg.Go(func() { <-saving })
@@ -193,7 +193,7 @@ func TestWatchWithoutRequestRunsOn(t *testing.T) {
 	w, _ := loopWatcher(t, "1h", "", nil)
 	clk := newFakeClock(t)
 	w.clock = clk
-	w.restart = &restartWatch{file: filepath.Join(w.cfg.StateDir, restartFile), since: clk.Now(),
+	w.restart = &restartWatch{file: filepath.Join(w.a.cfg.StateDir, restartFile), since: clk.Now(),
 		binary: func() (string, bool) { return restartExe, true }}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -403,7 +403,7 @@ func TestWatchCancellationSkipsBackgroundStartAndPendingSteps(t *testing.T) {
 	w, _ := loopWatcher(t, "1h", "", nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	w.ctx = ctx
+	w.a.ctx = ctx
 	ranBg := false
 	w.inFlight(ctx, 0, &w.sweeping, func(context.Context) { ranBg = true })
 	w.bg.Wait()

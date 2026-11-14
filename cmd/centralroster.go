@@ -36,11 +36,11 @@ type publishedAgent struct {
 // ENDED line once it answers again; what was not published is published
 // then.
 func (w *watcher) syncRoster(ctx context.Context) {
-	st, err := w.store.Peek()
+	st, err := w.a.store.Peek()
 	if err != nil {
 		return
 	}
-	host := w.cfg.Identity.Host
+	host := w.a.cfg.Identity.Host
 	want := map[string]publishedAgent{}
 	for _, ag := range st.Agents {
 		if cmp.Or(ag.Host, host) == host {
@@ -48,12 +48,12 @@ func (w *watcher) syncRoster(ctx context.Context) {
 		}
 	}
 	pub := map[string]publishedAgent{}
-	if _, err := w.store.ReadFile(centralRosterFile, &pub); err != nil {
+	if _, err := w.a.store.ReadFile(centralRosterFile, &pub); err != nil {
 		pub = map[string]publishedAgent{}
 	}
 	var down *central.Unreachable
 	call := func(name, tool string, args map[string]any) bool {
-		_, err := w.callCentralRaw(ctx, state.Party{Name: name, Host: host}, tool, args, nil)
+		_, err := w.a.callCentralRaw(ctx, state.Party{Name: name, Host: host}, tool, args, nil)
 		if errors.As(err, &down) {
 			return false
 		}
@@ -82,16 +82,16 @@ func (w *watcher) syncRoster(ctx context.Context) {
 	}
 	if calls == 0 && time.Since(w.centralChecked) >= centralProbe {
 		calls++
-		_, err := w.callCentralRaw(ctx, state.Party{Name: w.cfg.Identity.Person, Host: host}, "lease_list", map[string]any{}, nil)
+		_, err := w.a.callCentralRaw(ctx, state.Party{Name: w.a.cfg.Identity.Person, Host: host}, "lease_list", map[string]any{}, nil)
 		errors.As(err, &down)
 	}
 	if calls > 0 {
 		w.centralChecked = time.Now()
 	}
-	_ = w.store.WriteFile(centralRosterFile, pub)
+	_ = w.a.store.WriteFile(centralRosterFile, pub)
 	reason := ""
 	if down != nil {
 		reason = down.Reason
 	}
-	w.check(centralKey, down != nil, "CENTRAL UNREACHABLE %s: %s", w.cfg.Central.Context, reason)
+	w.check(centralKey, down != nil, "CENTRAL UNREACHABLE %s: %s", w.a.cfg.Central.Context, reason)
 }

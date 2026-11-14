@@ -78,10 +78,10 @@ func ownedBy(what string, owner *alerts.Owner, now time.Time) string {
 // while this watch owns their baseline, at the same pace on a strained
 // machine: a reading is two muster calls, and a page waits for none.
 func (w *watcher) watchPagerDuty(ctx context.Context) {
-	store := alerts.NewPagerDutyStore(w.cfg.StateDir)
+	store := alerts.NewPagerDutyStore(w.a.cfg.StateDir)
 	defer func() { _ = store.Release() }()
 	other := 0
-	w.loop(ctx, w.cfg.Alerts.PagerDuty.Every.Duration, false, func(ctx context.Context) {
+	w.loop(ctx, w.a.cfg.Alerts.PagerDuty.Every.Duration, false, func(ctx context.Context) {
 		owned, owner, err := store.Own()
 		switch {
 		case err != nil:
@@ -98,7 +98,7 @@ func (w *watcher) watchPagerDuty(ctx context.Context) {
 				other = 0
 				w.emitNow("pagerduty", "PAGERDUTY taken over by this watch")
 			}
-			for _, l := range w.pagerDutyCycle(ctx, store, w.musterRun) {
+			for _, l := range w.a.pagerDutyCycle(ctx, store, w.musterRun) {
 				w.emitNow("pagerduty", "%s", l)
 			}
 		}

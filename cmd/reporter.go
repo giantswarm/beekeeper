@@ -77,11 +77,11 @@ func reportDue(r *state.Report, pause *state.ReportPause, rc config.Reporter, no
 // starts one per slot, skips a slot while the last one runs, and takes a
 // reporter that posted, ended or timed out off the roster and stops it.
 func (w *watcher) tendReporter(ctx context.Context, sessions []*claude.Session) {
-	rc := w.cfg.Reporter
+	rc := w.a.cfg.Reporter
 	if !w.standby || !rc.Enabled() {
 		return
 	}
-	st, err := w.store.Peek()
+	st, err := w.a.store.Peek()
 	if err != nil {
 		return // pending says it
 	}
@@ -95,7 +95,7 @@ func (w *watcher) tendReporter(ctx context.Context, sessions []*claude.Session) 
 		posted = w.reportPosted(r.Session)
 		ended = !posted && turnEnded(ctx, r.Unit)
 	}
-	switch action := reportDue(r, st.ReportPause, rc, w.now, posted, ended); action {
+	switch action := reportDue(r, st.ReportPause, rc, w.a.now, posted, ended); action {
 	case reportStart, reportFinal:
 		err := w.startReport(ctx, sessions, action)
 		w.check("reporter", err != nil, "REPORTER not started: %v", err)
@@ -113,7 +113,7 @@ func (w *watcher) tendReporter(ctx context.Context, sessions []*claude.Session) 
 
 // reportPosted reports whether the session's transcript holds the post.
 func (w *watcher) reportPosted(id string) bool {
-	path := transcriptOf(w.cfg, id)
+	path := transcriptOf(w.a.cfg, id)
 	if path == "" {
 		return false
 	}
@@ -126,22 +126,22 @@ func (w *watcher) reportPosted(id string) bool {
 // with the brief's first line. It is not imported into the desktop: the
 // command-line turn has the connectors, and the person's window stays put.
 func (w *watcher) startReport(ctx context.Context, sessions []*claude.Session, action reportAction) error {
-	rc := w.cfg.Reporter
+	rc := w.a.cfg.Reporter
 	brief, err := readBrief(rc.Brief)
 	if err != nil {
 		return err
 	}
-	zone, err := reportZone(rc.TZ, w.zone)
+	zone, err := reportZone(rc.TZ, w.a.zone)
 	if err != nil {
 		return err
 	}
-	slot := reportSlot(rc.Every.Duration, w.now)
+	slot := reportSlot(rc.Every.Duration, w.a.now)
 	final := action == reportFinal
 	// A scheduled report covers the interval before its slot; the final one
 	// the time since the last report started, up to now.
 	from, to := slot.Add(-rc.Every.Duration), slot
 	if final {
-		from, to = w.now.Add(-rc.Every.Duration), w.now
+		from, to = w.a.now.Add(-rc.Every.Duration), w.a.now
 	}
 	id := uuid.NewString()
 	p := state.Party{Session: id, Name: "Status report " + to.In(zone).Format("15:04")}
@@ -151,8 +151,8 @@ func (w *watcher) startReport(ctx context.Context, sessions []*claude.Session, a
 		return ok
 	}
 	started := false
-	err = w.store.Update(func(st *state.State) ([]state.Event, error) {
-		if reportDue(st.Report, st.ReportPause, rc, w.now, false, false) != action {
+	err = w.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		if reportDue(st.Report, st.ReportPause, rc, w.a.now, false, false) != action {
 			return nil, nil // another watch started it
 		}
 		if st.Stop != nil {
@@ -162,14 +162,14 @@ func (w *watcher) startReport(ctx context.Context, sessions []*claude.Session, a
 			if st.Report != nil {
 				from = st.Report.Started
 			}
-			st.ReportPause.Final, st.ReportPause.Since = time.Time{}, w.now.UTC()
+			st.ReportPause.Final, st.ReportPause.Since = time.Time{}, w.a.now.UTC()
 		}
-		s := state.Start{Party: p, Mode: state.ModeBypass, Dir: rc.Dir, By: reporterParty, At: w.now.UTC()}
-		reg, err := w.recordStart(st, s, briefTask(brief), "", live)
+		s := state.Start{Party: p, Mode: state.ModeBypass, Dir: rc.Dir, By: reporterParty, At: w.a.now.UTC()}
+		reg, err := w.a.recordStart(st, s, briefTask(brief), "", live)
 		if err != nil {
 			return nil, err
 		}
-		st.Report = &state.Report{Party: p, Unit: unit, Slot: slot, Started: w.now.UTC()}
+		st.Report = &state.Report{Party: p, Unit: unit, Slot: slot, Started: w.a.now.UTC()}
 		started = true
 		evs := []state.Event{event(reporterParty, "reporter.start", "%s: session %s for %s, busy with %q", p.Name, id, rc.Person, reg.task)}
 		if final {
@@ -196,7 +196,7 @@ func (w *watcher) startReport(ctx context.Context, sessions []*claude.Session, a
 // ExecStopPost: nothing reopens it in the desktop. Its settings add the
 // report check as a PreToolUse hook on the post, for this session only.
 func (w *watcher) launchReport(unit, id, name, prompt string) error {
-	if err := w.requireClaudeLogin(); err != nil {
+	if err := w.a.requireClaudeLogin(); err != nil {
 		return err
 	}
 
@@ -208,8 +208,8 @@ func (w *watcher) launchReport(unit, id, name, prompt string) error {
 	if err != nil {
 		return err
 	}
-	return launch(unit, w.cfg.Reporter.Dir, w.explicitConfig(), nil,
-		agentArgv(bin, id, name, w.cfg.Reporter.Model, prompt, "--settings", reportSettings(self)))
+	return launch(unit, w.a.cfg.Reporter.Dir, w.a.explicitConfig(), nil,
+		agentArgv(bin, id, name, w.a.cfg.Reporter.Model, prompt, "--settings", reportSettings(self)))
 }
 
 // hookTypeCommand is a settings hook that runs a command; hooksKey holds a
@@ -254,14 +254,14 @@ func reportPrompt(rc config.Reporter, from, to time.Time, zone *time.Location, f
 // started because the last one still runs.
 func (w *watcher) skipReport() {
 	var line string
-	_ = w.store.Update(func(st *state.State) ([]state.Event, error) {
+	_ = w.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		r := st.Report
-		slot := reportSlot(w.cfg.Reporter.Every.Duration, w.now)
+		slot := reportSlot(w.a.cfg.Reporter.Every.Duration, w.a.now)
 		if !r.Running() || r.Skipped.Equal(slot) {
 			return nil, nil
 		}
 		r.Skipped = slot
-		line = fmt.Sprintf("%s still runs (since %s): the %s report is skipped", r.Name, clock(w.now, r.Started), slot.Local().Format("15:04"))
+		line = fmt.Sprintf("%s still runs (since %s): the %s report is skipped", r.Name, clock(w.a.now, r.Started), slot.Local().Format("15:04"))
 		return []state.Event{event(reporterParty, "reporter.skip", "%s", line)}, nil
 	})
 	if line != "" {
@@ -273,11 +273,11 @@ func (w *watcher) skipReport() {
 // roster, then stops what still runs of its turn by PID.
 func (w *watcher) endReport(ctx context.Context, outcome, detail string) {
 	var r state.Report
-	err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+	err := w.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		if !st.Report.Running() {
 			return nil, nil
 		}
-		st.Report.Ended, st.Report.Outcome = w.now.UTC(), outcome
+		st.Report.Ended, st.Report.Outcome = w.a.now.UTC(), outcome
 		r = *st.Report
 		st.Agents = slices.DeleteFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(r.Party) })
 		return []state.Event{event(reporterParty, "reporter."+outcome, "%s: %s", r.Name, detail)}, nil

@@ -151,7 +151,7 @@ func (d *timerDispatchSession) pass(a *app) (*watcher, error) {
 	if stopped {
 		d.close()
 		d.ctx, d.cancel = context.WithCancel(d.parent)
-		return &watcher{app: a.snapshotAtNow()}, nil
+		return &watcher{a: a.snapshotAtNow()}, nil
 	}
 	w, err := a.dispatchTimerPass(d.ctx)
 	if err != nil {
@@ -183,7 +183,7 @@ func (a *app) dispatchTimerPass(ctx context.Context) (*watcher, error) {
 		return nil, err
 	}
 	batch := a.snapshotAtNow()
-	w := &watcher{app: batch, clock: wallClock{}}
+	w := &watcher{a: batch, clock: wallClock{}}
 	if st.Stop != nil {
 		return w, nil
 	}

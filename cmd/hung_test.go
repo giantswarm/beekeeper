@@ -64,12 +64,12 @@ func stubPulls(t *testing.T, pulls map[int]github.Pull) {
 // request is open, or that merged recently, runs on.
 func TestWatchEndsAHungMerge(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
-	w.now = relayNow
-	hungAfter := w.cfg.Merge.HungAfter.Duration
+	w.a.now = relayNow
+	hungAfter := w.a.cfg.Merge.HungAfter.Duration
 	// The watch has been observing continuously for a full grace period.
 	w.lastHungCheck = relayNow.Add(-time.Second)
 	w.hungGrace = relayNow.Add(-hungAfter - time.Minute)
-	dir := w.store.Dir()
+	dir := w.a.store.Dir()
 	stubPulls(t, map[int]github.Pull{
 		1: {State: github.Merged, MergedAt: relayNow.Add(-hungAfter - time.Minute)},
 		2: {State: github.Open},
@@ -77,7 +77,7 @@ func TestWatchEndsAHungMerge(t *testing.T) {
 	})
 	hung, open, fresh := hungChild(t, dir, hungRepo, 1), hungChild(t, dir, openRepo, 2), hungChild(t, dir, freshRepo, 3)
 	long := relayNow.Add(-2 * hungAfter)
-	err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+	err := w.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Merges = []state.Merge{
 			// Its gate was killed with its caller; devctl runs on.
 			{Repo: hungRepo, PR: 1, Lane: hungLane, By: four, Child: hung, Phase: state.Running, Started: long},
@@ -90,7 +90,7 @@ func TestWatchEndsAHungMerge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w.hungMerges(context.Background(), w.now)
+	w.hungMerges(context.Background(), w.a.now)
 	if l := out.String(); strings.Count(l, "MERGE HUNG") != 1 || !strings.Contains(l, `MERGE HUNG: o/hung#1 in lane scratch by "Agent four": merged at`) {
 		t.Fatalf("watch lines:\n%s", l)
 	}
@@ -104,7 +104,7 @@ func TestWatchEndsAHungMerge(t *testing.T) {
 	if l := out.String(); !strings.Contains(l, "MERGE RECORDED: o/hung#1 exit 137, release unconfirmed (merged per GitHub)") {
 		t.Fatalf("watch lines:\n%s", l)
 	}
-	st, err := w.store.Read()
+	st, err := w.a.store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +114,7 @@ func TestWatchEndsAHungMerge(t *testing.T) {
 			t.Errorf("%s is %s, want %s", m.Key(), m.Phase, want)
 		}
 	}
-	if evs, err := w.store.Events(10, func(e state.Event) bool { return e.Verb == "merge.hung" }); err != nil || len(evs) != 1 {
+	if evs, err := w.a.store.Events(10, func(e state.Event) bool { return e.Verb == "merge.hung" }); err != nil || len(evs) != 1 {
 		t.Errorf("merge.hung events: %d, %v", len(evs), err)
 	}
 }
@@ -123,13 +123,13 @@ func TestWatchEndsAHungMerge(t *testing.T) {
 // wait into a hung merge. Continuous awake checks still end it afterwards.
 func TestWatchHungMergeAcrossSuspend(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
-	w.now = relayNow
-	after := w.cfg.Merge.HungAfter.Duration
-	child := hungChild(t, w.store.Dir(), hungRepo, 1)
+	w.a.now = relayNow
+	after := w.a.cfg.Merge.HungAfter.Duration
+	child := hungChild(t, w.a.store.Dir(), hungRepo, 1)
 	stubPulls(t, map[int]github.Pull{
 		1: {State: github.Merged, MergedAt: relayNow.Add(-after - time.Minute)},
 	})
-	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+	if err := w.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Merges = []state.Merge{{Repo: hungRepo, PR: 1, Lane: hungLane, By: four,
 			Child: child, Phase: state.Running, Started: relayNow.Add(-time.Hour)}}
 		return nil, nil
@@ -168,7 +168,7 @@ func TestWatchHungMergeAcrossSuspend(t *testing.T) {
 // devctl runs on, and records it; one whose pull request is open is refused.
 func TestLanesDropEndsAHungRun(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
-	a := w.app
+	a := w.a
 	a.as, a.now = "Agent four", time.Now()
 	dir := a.store.Dir()
 	stubPulls(t, map[int]github.Pull{
@@ -225,18 +225,18 @@ func TestLanesDropEndsAHungRun(t *testing.T) {
 func TestWatchKeepsActiveReleasePipeline(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
 	now := relayNow
-	after := w.cfg.Merge.HungAfter.Duration
+	after := w.a.cfg.Merge.HungAfter.Duration
 	started := now.Add(-3 * after)
 	// Model continuous watch observations, without a suspend grace reset.
 	w.hungGrace = started
 	w.lastHungCheck = now.Add(-time.Second)
 	stubPulls(t, map[int]github.Pull{1: {State: github.Merged, MergedAt: started}})
-	child := hungChild(t, w.store.Dir(), hungRepo, 1)
-	base := gate.MergeBase(w.store.Dir(), hungRepo, 1)
+	child := hungChild(t, w.a.store.Dir(), hungRepo, 1)
+	base := gate.MergeBase(w.a.store.Dir(), hungRepo, 1)
 	p := newMergeProgress(base, []string{"--release-timeout=30m"}, started)
 	p.observe("release: waiting for the release of abc\n", started.Add(time.Minute))
 	p.observe("pipeline 123: workflow build running\n", now.Add(-time.Minute))
-	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+	if err := w.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Merges = []state.Merge{{Repo: hungRepo, PR: 1, Lane: hungLane, Child: child, Phase: state.Running, Started: started}}
 		return nil, nil
 	}); err != nil {

@@ -27,16 +27,16 @@ func TestParkWakeQueuesFreshContinuationWithoutHarness(t *testing.T) {
 	for _, harness := range []string{claudeComm, config.CodexHarness, capacity.HarnessAgy} {
 		t.Run(harness, func(t *testing.T) {
 			w := parkingWatch(t, nil)
-			if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+			if err := w.a.store.Update(func(st *state.State) ([]state.Event, error) {
 				st.Agents[0].Harness = harness
 				st.Agents[0].Task = recoveryTask
-				st.Agents[0].Park = &state.Park{At: w.now, On: "#3", Waits: "answer"}
+				st.Agents[0].Park = &state.Park{At: w.a.now, On: "#3", Waits: "answer"}
 				return nil, nil
 			}); err != nil {
 				t.Fatal(err)
 			}
 			for range 2 {
-				if err := w.wakeAgent(context.Background(), state.Party{Name: resumer}, agentOne, parkAnswer, ""); err != nil {
+				if err := w.a.wakeAgent(context.Background(), state.Party{Name: resumer}, agentOne, parkAnswer, ""); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -118,13 +118,13 @@ func TestContinuationTransfersOwnershipOnlyAfterAcceptedStart(t *testing.T) {
 
 func TestContinuationRefusesNewEventsDuringStartup(t *testing.T) {
 	w := parkingWatch(t, nil)
-	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Agents[0].Park = &state.Park{At: w.now, Continuing: true}
+	if err := w.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents[0].Park = &state.Park{At: w.a.now, Continuing: true}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	err := w.queueContinuation(state.Party{Name: resumer}, agentOf(t, w), parkAnswer)
+	err := w.a.queueContinuation(state.Party{Name: resumer}, agentOf(t, w), parkAnswer)
 	if err == nil || !strings.Contains(err.Error(), "retry event delivery") {
 		t.Fatalf("event acknowledged without delivery: %v", err)
 	}
@@ -133,8 +133,8 @@ func TestContinuationRefusesNewEventsDuringStartup(t *testing.T) {
 func TestReviewWaitIgnoresLegacyMechanicalTimers(t *testing.T) {
 	w := parkingWatch(t, nil)
 	woke := stubWakes(t)
-	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Agents[0].Park = &state.Park{At: w.now, On: loopPR, ReviewHead: loopHead, Waits: deskReviewWait}
+	if err := w.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents[0].Park = &state.Park{At: w.a.now, On: loopPR, ReviewHead: loopHead, Waits: deskReviewWait}
 		recordAgentReviewPark(st, st.Agents[0])
 		return nil, nil
 	}); err != nil {
@@ -315,7 +315,7 @@ func TestContinuationOfOpenPullPassesRealStartGates(t *testing.T) {
 			}
 			const message = "Guide run 32: verify #888.\n```\nSee https://github.com/other/repo/issues/99\n```"
 			if fromTimer {
-				w := &watcher{app: r.a}
+				w := &watcher{a: r.a}
 				w.wakeTimer(t.Context(), timerFire{t: state.Timer{ID: 42, By: party, Wake: party.Name, Due: r.a.now, What: message}, reason: paramDue})
 			} else if err := r.a.queueContinuation(loop.LoopParty, old, message); err != nil {
 				t.Fatal(err)

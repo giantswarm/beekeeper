@@ -43,7 +43,7 @@ func pageApp(t *testing.T, start time.Time) (*app, *bytes.Buffer) {
 func pollPages(w *watcher, out *bytes.Buffer, start time.Time, sessions []*claude.Session, minutes ...int) []string {
 	out.Reset()
 	for _, m := range minutes {
-		w.now = start.Add(time.Duration(m) * time.Minute)
+		w.a.now = start.Add(time.Duration(m) * time.Minute)
 		w.unownedPages(context.Background(), sessions)
 	}
 	var lines []string

@@ -15,9 +15,9 @@ import (
 // watchResolver deliberately queries the same name through the stub and the
 // configured uplinks. No public fallback resolver can establish uplink health.
 type watchResolver interface {
-	servers(context.Context) ([]string, error)
-	lookup(context.Context, string) error
-	reset(context.Context) error
+	Servers(context.Context) ([]string, error)
+	Lookup(context.Context, string) error
+	Reset(context.Context) error
 }
 
 type resolverWatch struct {
@@ -53,17 +53,17 @@ func (w *watcher) resolverFailure(line string) bool {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	servers, err := resolver.servers(ctx)
+	servers, err := resolver.Servers(ctx)
 	if err != nil || len(servers) == 0 {
 		return false
 	}
-	if resolver.lookup(ctx, "127.0.0.53") == nil {
+	if resolver.Lookup(ctx, "127.0.0.53") == nil {
 		return false
 	}
 	r.suppress = true
 	upstream := false
 	for _, server := range servers {
-		if resolver.lookup(ctx, server) == nil {
+		if resolver.Lookup(ctx, server) == nil {
 			upstream = true
 			break
 		}
@@ -73,10 +73,10 @@ func (w *watcher) resolverFailure(line string) bool {
 		return true
 	}
 	result := "reset succeeded"
-	if err := resolver.reset(ctx); err != nil {
+	if err := resolver.Reset(ctx); err != nil {
 		result = "reset failed"
 	}
-	if resolver.lookup(ctx, "127.0.0.53") == nil {
+	if resolver.Lookup(ctx, "127.0.0.53") == nil {
 		result += "; stub answers afterwards"
 	} else {
 		result += "; stub still failing afterwards"
@@ -87,7 +87,7 @@ func (w *watcher) resolverFailure(line string) bool {
 
 type systemWatchResolver struct{}
 
-func (systemWatchResolver) servers(context.Context) ([]string, error) {
+func (systemWatchResolver) Servers(context.Context) ([]string, error) {
 	stub, err := os.ReadFile("/etc/resolv.conf")
 	if err != nil {
 		return nil, err
@@ -121,7 +121,7 @@ func (systemWatchResolver) servers(context.Context) ([]string, error) {
 	return servers, nil
 }
 
-func (systemWatchResolver) lookup(ctx context.Context, server string) error {
+func (systemWatchResolver) Lookup(ctx context.Context, server string) error {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	r := &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
@@ -135,6 +135,6 @@ func (systemWatchResolver) lookup(ctx context.Context, server string) error {
 	return err
 }
 
-func (systemWatchResolver) reset(ctx context.Context) error {
+func (systemWatchResolver) Reset(ctx context.Context) error {
 	return proc.CommandContext(ctx, "busctl", "call", "org.freedesktop.resolve1", "/org/freedesktop/resolve1", "org.freedesktop.resolve1.Manager", "ResetServerFeatures").Run()
 }

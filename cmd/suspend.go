@@ -49,7 +49,7 @@ func (w *watcher) suspends(ctx context.Context, since time.Time, sessions []*cla
 		if w.suspendEntry.IsZero() || record.At.Before(w.suspendEntry) {
 			continue
 		}
-		st, err := w.store.Peek()
+		st, err := w.a.store.Peek()
 		if err != nil {
 			return
 		} // retry the pair on the next poll
@@ -62,7 +62,7 @@ func (w *watcher) suspends(ctx context.Context, since time.Time, sessions []*cla
 		w.suspendThrough = record.At
 		w.suspendEntry = time.Time{}
 	}
-	w.suspendChecked = w.now
+	w.suspendChecked = w.a.now
 }
 
 func (w *watcher) resumed(st *state.State, sessions []*claude.Session, entry, exit time.Time) {
@@ -121,7 +121,7 @@ func (w *watcher) recoverSuspend(ctx context.Context) {
 	if !w.standby || len(w.suspendRecovery) == 0 || !w.stand.busy.CompareAndSwap(false, true) {
 		return
 	}
-	now := w.now
+	now := w.a.now
 	pending := w.suspendRecovery
 	w.suspendRecovery = nil
 	w.stand.inflight.Add(1)
@@ -132,7 +132,7 @@ func (w *watcher) recoverSuspend(ctx context.Context) {
 		for _, wake := range pending {
 			// Recheck authority immediately before each delivery: a relay may
 			// have completed while the batch waited for the delivery slot.
-			st, err := w.store.Read()
+			st, err := w.a.store.Read()
 			if err != nil {
 				w.emitNow("suspend-recovery", "RESUME FAILED: %q: read current state: %v", wake.party.Name, err)
 				continue
@@ -158,7 +158,7 @@ func (w *watcher) recoverSuspend(ctx context.Context) {
 			} else if wake.guide && w.stand.revive != nil {
 				err = w.stand.revive(ctx, guideRole, wake.party, wake.message)
 			} else {
-				err = w.wakeAgent(ctx, watchParty, wake.party.Name, wake.message, "")
+				err = w.a.wakeAgent(ctx, watchParty, wake.party.Name, wake.message, "")
 			}
 			if err != nil {
 				w.emitNow("suspend-recovery", "RESUME FAILED: %q: %v", wake.party.Name, err)

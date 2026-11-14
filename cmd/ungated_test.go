@@ -95,7 +95,7 @@ func TestUngatedMerges(t *testing.T) {
 // and its parent, and its end once, as one ENDED line with the same label.
 func TestTheWatchSaysAnUngatedMerge(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
-	w.now = time.Now()
+	w.a.now = time.Now()
 	sessions := []*claude.Session{{PID: 10, ID: workerSession, Name: ungatedWorker}}
 	tb := ungatedTable()
 	w.ungated(sessions, tb)
@@ -228,7 +228,7 @@ func TestUngatedMergesUnderRunners(t *testing.T) {
 		t.Errorf("doctor's ungated lines:\n got %q\nwant %q", got, want)
 	}
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
-	w.now = time.Now()
+	w.a.now = time.Now()
 	w.ungated(sessions, runnerTable())
 	s := out.String()
 	for _, l := range want {
@@ -255,7 +255,7 @@ func TestUngatedMergesInShellCode(t *testing.T) {
 				t.Fatalf("doctor's ungated lines = %q", got)
 			}
 			w, _, out := notifyingWatch(t, t.TempDir(), false)
-			w.now = time.Now()
+			w.a.now = time.Now()
 			w.ungated(sessions, tb)
 			if strings.Count(out.String(), "UNGATED MERGE "+want) != 1 {
 				t.Fatalf("watch did not report the script's merge: %s", out.String())

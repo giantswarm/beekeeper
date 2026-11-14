@@ -111,7 +111,7 @@ func TestAnnotationHookPanicsLogAndStayOpen(t *testing.T) {
 			}
 			a.store = store
 			a.now = events[0].At.Add(-time.Second)
-			w := &watcher{app: a, last: map[string]time.Time{}, refusedSince: a.now}
+			w := &watcher{a: a, last: map[string]time.Time{}, refusedSince: a.now}
 			w.refusals()
 			w.refusals()
 			if strings.Count(out.String(), "HOOK PANIC") != 1 || !strings.Contains(out.String(), hook) {

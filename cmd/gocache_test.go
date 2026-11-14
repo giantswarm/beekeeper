@@ -240,7 +240,7 @@ func TestGoCacheLookWithABuildAlwaysRunning(t *testing.T) {
 	a.out = out
 	a.cfg.Doctor.GoCacheEvery.Duration = time.Hour
 	a.cfg.Watch.Repeat.Duration = time.Hour
-	w := &watcher{app: a, last: map[string]time.Time{}}
+	w := &watcher{a: a, last: map[string]time.Time{}}
 	t0 := time.Now()
 	for _, at := range []time.Duration{0, goCacheRetry, 55 * time.Minute} {
 		w.goCacheLook(t0.Add(at), building)

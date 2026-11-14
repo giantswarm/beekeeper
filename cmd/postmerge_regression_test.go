@@ -32,7 +32,7 @@ func TestParkPostMergeCanExplicitlyClearWork(t *testing.T) {
 			if err := park(t, w, append(args, deskReviewWait)...); err != nil {
 				t.Fatal(err)
 			}
-			st, err := w.store.Read()
+			st, err := w.a.store.Read()
 			if err != nil {
 				t.Fatal(err)
 			}

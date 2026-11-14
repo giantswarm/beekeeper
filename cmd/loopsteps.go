@@ -251,7 +251,7 @@ func loopFireTimers(l *loop.Loop, ctx context.Context, st *state.State) error {
 		return err
 	}
 	// Each batch keeps its own time while later passes advance the clock.
-	w := &watcher{app: a.snapshotAtNow()}
+	w := &watcher{a: a.snapshotAtNow()}
 	for _, line := range lines {
 		w.outputEvent(line)
 	}

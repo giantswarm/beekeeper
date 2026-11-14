@@ -131,7 +131,7 @@ func TestDiskPruneExternalOutputOnlyForEndedOwner(t *testing.T) {
 func TestDiskPrunePressureScheduleAndAsk(t *testing.T) {
 	a, m := diskFixture(t)
 	a.cfg.Disk = config.Disk{Prune: config.DiskPruneAuto, Every: config.Duration{Duration: time.Hour}}
-	w := &watcher{app: a, diskPruneOn: true, last: map[string]time.Time{}}
+	w := &watcher{a: a, diskPruneOn: true, last: map[string]time.Time{}}
 	saved := liveDisk
 	defer func() { liveDisk = saved }()
 	calls := 0
@@ -165,7 +165,7 @@ func TestDiskPrunePressureScheduleAndAsk(t *testing.T) {
 func TestLowDiskStartsDiskPrune(t *testing.T) {
 	a, m := diskFixture(t)
 	a.cfg.Disk.Prune = config.DiskPruneAuto
-	w := &watcher{app: a, diskPruneOn: true, last: map[string]time.Time{}}
+	w := &watcher{a: a, diskPruneOn: true, last: map[string]time.Time{}}
 	saved := liveDisk
 	defer func() { liveDisk = saved }()
 	calls := 0
@@ -265,7 +265,7 @@ func TestDiskFillingStartsPruneBeforeLowDisk(t *testing.T) {
 	if err := a.store.WriteFile(diskPruneFile, worktreesMark{At: now}); err != nil {
 		t.Fatal(err)
 	}
-	w := &watcher{app: a, diskPruneOn: true, last: map[string]time.Time{}}
+	w := &watcher{a: a, diskPruneOn: true, last: map[string]time.Time{}}
 	saved := liveDisk
 	defer func() { liveDisk = saved }()
 	calls := 0

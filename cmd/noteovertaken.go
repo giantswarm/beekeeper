@@ -217,7 +217,7 @@ func findOrphaned(st *state.State, archived map[string]bool) []overtake {
 	for _, n := range st.Notes {
 		by := n.By
 		if overtakable(n, asking) && len(n.Refs) == 0 && (archived[by.HostSession] || archived[by.Session]) && !roleRun(st, by) {
-			out = append(out, overtake{n.ID, fmt.Sprintf("its filing session %q is archived", by.Name)})
+			out = append(out, overtake{id: n.ID, reason: fmt.Sprintf("its filing session %q is archived", by.Name)})
 		}
 	}
 	return out
@@ -233,7 +233,7 @@ func (w *watcher) overtakenNow(ctx context.Context, st *state.State) (over, kept
 	refs := overtakeRefs(st)
 	switch {
 	case len(refs) == 0:
-	case lowBudget(st.Budget, w.cfg.GitHub.Floor, w.now):
+	case lowBudget(st.Budget, w.a.cfg.GitHub.Floor, w.a.now):
 		if !w.chores {
 			w.emitNow("pending", "NOTE REFS NOT READ (--once): the GitHub budget is under its floor until %s; no note is overtaken or kept",
 				st.Budget.Reset.Local().Format("15:04"))

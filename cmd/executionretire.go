@@ -77,7 +77,7 @@ func (a *app) executionHostRetirable(st *state.State, r *state.ExecutionRecord) 
 // backoff and independently of the host's reconciliation schedule: a host
 // that stays down never holds back another host's retirement or any revocation.
 func (w *watcher) retireEndedExecutions(ctx context.Context, st *state.State) *state.State {
-	now := w.now
+	now := w.a.now
 	if now.IsZero() {
 		now = time.Now()
 	}
@@ -97,13 +97,13 @@ func (w *watcher) retireEndedExecutions(ctx context.Context, st *state.State) *s
 			continue
 		}
 		// Revoked and waiting for the host's part: nothing to do this tick.
-		if r.Retirement != nil && !r.Retirement.RevokedAt.IsZero() && !w.executionHostRetirable(st, r) {
+		if r.Retirement != nil && !r.Retirement.RevokedAt.IsZero() && !w.a.executionHostRetirable(st, r) {
 			continue
 		}
 		ran++
 		// A host on an older release keeps its retirement open on the backoff;
 		// it is not a failure to raise until the host is updated.
-		if err := w.retireExecution(ctx, r.Handle.Ref, trigger, now, down[r.Selector]); err != nil && !errors.Is(err, execution.ErrUnsupported) {
+		if err := w.a.retireExecution(ctx, r.Handle.Ref, trigger, now, down[r.Selector]); err != nil && !errors.Is(err, execution.ErrUnsupported) {
 			failures = append(failures, err)
 			if isUnreachable(err) {
 				down[r.Selector] = true
@@ -123,7 +123,7 @@ func (w *watcher) retireEndedExecutions(ctx context.Context, st *state.State) *s
 	if ran == 0 {
 		return st
 	}
-	if updated, err := w.store.Read(); err == nil {
+	if updated, err := w.a.store.Read(); err == nil {
 		return updated
 	}
 	return st

@@ -102,7 +102,7 @@ func TestEndMergedKeepsSameNameOtherSessionRequest(t *testing.T) {
 func TestIdleDoneKeepsOtherOpenRequest(t *testing.T) {
 	w := parkingWatch(t, nil)
 	agent := state.Party{Session: "done-session", HostSession: "local_done-session", Name: agentOne}
-	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+	if err := w.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Agents[0].Party = agent
 		st.Records = []state.Record{{Session: agent}}
 		st.ReviewParks = []state.ReviewPark{{On: multiParkSecondPR, At: relayNow, ReviewHead: loopHead, Agent: agentOne, Party: agent}}
@@ -110,14 +110,14 @@ func TestIdleDoneKeepsOtherOpenRequest(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	c := w.agentsCmd()
-	c.SetOut(w.out)
-	c.SetErr(w.out)
+	c := w.a.agentsCmd()
+	c.SetOut(w.a.out)
+	c.SetErr(w.a.out)
 	c.SetArgs([]string{stateIdle, flagDone, flagReport, "first pull request done", flagProblem, noProblems})
 	if err := c.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	st, err := w.store.Read()
+	st, err := w.a.store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}

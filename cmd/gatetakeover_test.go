@@ -138,7 +138,7 @@ func TestLanesAndWatchSayStaleMergeOnce(t *testing.T) {
 		t.Fatal(out.String())
 	}
 	out.Reset()
-	w := &watcher{app: gateApp(g.Host), last: map[string]time.Time{}}
+	w := &watcher{a: gateApp(g.Host), last: map[string]time.Time{}}
 	w.staleMerges()
 	w.staleMerges()
 	if strings.Count(out.String(), "MERGE STALE:") != 1 {

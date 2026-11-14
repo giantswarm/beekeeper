@@ -18,7 +18,7 @@ func (w *watcher) guideMonitor(ctx context.Context, st *state.State, sessions []
 	if st.Stop != nil || st.Guide == nil || st.Guide.Holder == nil {
 		return
 	}
-	events, err := w.store.Follow("independent-guide-reports", func(e state.Event) bool { return e.Verb == loop.LoopFileVerb })
+	events, err := w.a.store.Follow("independent-guide-reports", func(e state.Event) bool { return e.Verb == loop.LoopFileVerb })
 	if err != nil {
 		w.fail("guide-monitor", "cannot read guide reports: %v", err)
 		return
@@ -49,10 +49,10 @@ func (w *watcher) guideMonitor(ctx context.Context, st *state.State, sessions []
 		if since.IsZero() {
 			since = r.Holder.Since
 		}
-		grace := max(2*time.Minute, 3*w.cfg.Watch.Interval.Duration)
+		grace := max(2*time.Minute, 3*w.a.cfg.Watch.Interval.Duration)
 		// Both consumers retain reports under the same lock; the first owns
 		// delivery and the other observes the durable report key.
-		for _, e := range guideReportEvents(st, events, w.now) {
+		for _, e := range guideReportEvents(st, events, w.a.now) {
 			key, text, ok := loop.Keyed(e.Detail)
 			if !ok || !strings.Contains(text, loop.FileReportSeparator) {
 				continue
@@ -60,16 +60,16 @@ func (w *watcher) guideMonitor(ctx context.Context, st *state.State, sessions []
 			retainGuideReport(st, key, text, e.At, r.Holder.Party)
 		}
 
-		if !since.IsZero() && w.now.Sub(since) > grace {
+		if !since.IsZero() && w.a.now.Sub(since) > grace {
 			notice("watch:"+since.String(), "GUIDE WATCH LAPSED: the independent desk watch has seen no guide feed heartbeat since "+since.Format(time.RFC3339)+"; re-arm `beekeeper guide watch` and read `beekeeper guide work`.")
 		}
 		for _, n := range st.Notes {
-			if guides(w.cfg.Guide.Person, &n) && !slices.Contains(r.Fed, fmt.Sprintf("note#%d", n.ID)) {
+			if guides(w.a.cfg.Guide.Person, &n) && !slices.Contains(r.Fed, fmt.Sprintf("note#%d", n.ID)) {
 				notice(fmt.Sprintf("note:%d:%s", n.ID, n.At.String()), fmt.Sprintf("GUIDE DECISION: note %d is waiting; run `beekeeper guide next` and ask in conversation without a blocking tool.", n.ID))
 			}
 		}
 		for _, work := range st.GuideWork {
-			if guideWorkBlocks(work, w.now) && !slices.Contains(r.Fed, "problem:"+work.Source) {
+			if guideWorkBlocks(work, w.a.now) && !slices.Contains(r.Fed, "problem:"+work.Source) {
 				notice(fmt.Sprintf("work:%d:%s", work.ID, work.Due.String()), fmt.Sprintf("GUIDE WORK DUE: %d [%s] %s; run `beekeeper guide work`.", work.ID, work.Kind, escapedLine(work.Text)))
 			}
 		}
@@ -77,7 +77,7 @@ func (w *watcher) guideMonitor(ctx context.Context, st *state.State, sessions []
 		return !reportsSince.Equal(st.GuideReportsSince) || workText != guideWorkText(st) || reportCount != len(st.GuideReports) || len(r.Delivered) != deliveredBefore
 	}
 	if step(st) {
-		err = w.store.Update(func(st *state.State) ([]state.Event, error) {
+		err = w.a.store.Update(func(st *state.State) ([]state.Event, error) {
 			step(st)
 			return nil, nil
 		})
@@ -101,10 +101,10 @@ func (w *watcher) guideMonitor(ctx context.Context, st *state.State, sessions []
 	}
 	w.sendAsync(ctx, to, strings.Join(lines, "\n"), func(err error) {
 		if err != nil {
-			_ = w.store.Record(state.Event{At: time.Now(), By: watchParty, Verb: "guide.delivery.failed", Detail: err.Error()})
+			_ = w.a.store.Record(state.Event{At: time.Now(), By: watchParty, Verb: "guide.delivery.failed", Detail: err.Error()})
 			return
 		}
-		if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+		if err := w.a.store.Update(func(st *state.State) ([]state.Event, error) {
 			if st.Guide != nil && st.Guide.Holder != nil && st.Guide.Holder.Is(holder) {
 				for _, key := range keys {
 					if !slices.Contains(st.Guide.Delivered, key) {
@@ -114,7 +114,7 @@ func (w *watcher) guideMonitor(ctx context.Context, st *state.State, sessions []
 			}
 			return nil, nil
 		}); err != nil {
-			_ = w.store.Record(state.Event{At: time.Now(), By: watchParty, Verb: "guide.delivery.failed", Detail: err.Error()})
+			_ = w.a.store.Record(state.Event{At: time.Now(), By: watchParty, Verb: "guide.delivery.failed", Detail: err.Error()})
 		}
 	})
 }

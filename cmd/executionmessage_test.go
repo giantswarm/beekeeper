@@ -138,7 +138,7 @@ func TestExecutionWakeNoteAnswerAndTimerShareDurableDelivery(t *testing.T) {
 	}
 	n := &state.Note{ID: 1, By: state.Party{Session: r.ConversationID, Name: r.Name}}
 	a.tellFiler(ctx, by, n, "the note answer")
-	w := &watcher{app: a}
+	w := &watcher{a: a}
 	w.wakeTimer(ctx, timerFire{t: state.Timer{ID: 1, Wake: r.Name, What: "the timer"}, reason: paramDue})
 	st, _ := a.store.Read()
 	if len(st.Starts[0].Execution.Messages) != 3 {
@@ -172,7 +172,7 @@ func TestExecutionDistinctIdenticalSendsAreNotDeduplicated(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	w := &watcher{app: a}
+	w := &watcher{a: a}
 	timer := state.Timer{ID: 7, Repeat: "daily", Wake: r.Name, What: "continue", Due: a.now}
 	w.wakeTimer(ctx, timerFire{t: timer, reason: paramDue})
 	// Retrying this particular fire must reuse its receipt.

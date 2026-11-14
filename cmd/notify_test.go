@@ -59,7 +59,7 @@ func TestWatchNotifiesEachDueOnceAcrossWatches(t *testing.T) {
 	dir := t.TempDir()
 	a, da, _ := notifyingWatch(t, dir, false)
 	b, db, _ := notifyingWatch(t, dir, false)
-	if err := a.store.Update(func(st *state.State) ([]state.Event, error) { *st = *pendingState(); return nil, nil }); err != nil {
+	if err := a.a.store.Update(func(st *state.State) ([]state.Event, error) { *st = *pendingState(); return nil, nil }); err != nil {
 		t.Fatal(err)
 	}
 	live := []*claude.Session{{ID: "s4", HostID: hostFour, Name: agentFour}}
@@ -150,7 +150,7 @@ func TestStaleUpgradeHoldIsMarked(t *testing.T) {
 func TestMachineLinesNeverNotify(t *testing.T) {
 	needsPlatform(t)
 	w, d, out := notifyingWatch(t, t.TempDir(), false)
-	th := &w.cfg.Watch
+	th := &w.a.cfg.Watch
 	th.AvailMinMiB, th.LoadMax = 1<<30, 0.001
 	w.sample(context.Background())
 	for _, l := range []string{"LOW RAM", "HIGH LOAD"} {
@@ -194,7 +194,7 @@ func TestSwapTrendOverTheWindow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w := &watcher{app: &app{cfg: cfg}}
+	w := &watcher{a: &app{cfg: cfg}}
 	at := func(used, zswapped, avail int) machine.Mem {
 		return machine.Mem{SwapUsedMiB: used, ZswappedMiB: zswapped, AvailableMiB: avail}
 	}
@@ -225,7 +225,7 @@ func TestSwapTrendCountsZswapWritebackApart(t *testing.T) {
 	at := func(used, zswapped, writtenBack int) machine.Mem {
 		return machine.Mem{SwapUsedMiB: used, ZswappedMiB: zswapped, ZswapWrittenBackMiB: writtenBack, AvailableMiB: 30000}
 	}
-	w := &watcher{app: &app{cfg: cfg}}
+	w := &watcher{a: &app{cfg: cfg}}
 	w.swapTrend(relayNow, at(10000, 4000, 50000))
 	// 300 MiB written back in 6 minutes, swap in use flat: disk 6000 → 6300.
 	tr := w.swapTrend(relayNow.Add(6*time.Minute), at(10000, 3700, 50300))
@@ -240,7 +240,7 @@ func TestSwapTrendCountsZswapWritebackApart(t *testing.T) {
 		t.Errorf("the guard reacts to writeback: %q %v", line, blocks)
 	}
 	// The same writeback and 100 MiB swapped out to disk past zswap.
-	w = &watcher{app: &app{cfg: cfg}}
+	w = &watcher{a: &app{cfg: cfg}}
 	w.swapTrend(relayNow, at(10000, 4000, 50000))
 	tr = w.swapTrend(relayNow.Add(6*time.Minute), at(10100, 3700, 50300))
 	if tr.DiskPerHourMiB != 1000 || tr.WritebackPerHourMiB != 3000 {
@@ -259,7 +259,7 @@ func TestOomdImminentNeedsAWatchedCgroupAndDiskGrowth(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w := &watcher{app: &app{cfg: cfg}}
+	w := &watcher{a: &app{cfg: cfg}}
 	full := machine.Mem{SwapTotalMiB: 16383, SwapUsedMiB: 16383, ZswappedMiB: 14000}
 	grow := swapTrend{DiskPerHourMiB: 100, UsedPerHourMiB: 100, AvailFalling: true, Rated: true}
 	watched := &machine.OOMDSwap{LimitPercent: 90, Monitored: []string{swapCgroup}}

@@ -24,7 +24,7 @@ func (w *watcher) handCITimerToReview(ctx context.Context, f timerFire, ag state
 	}
 	if w.loopOwned {
 		var handed bool
-		err := w.loopGitHub(ctx, "ci-review", func() error {
+		err := w.a.loopGitHub(ctx, "ci-review", func() error {
 			var err error
 			handed, err = w.handCITimerToReviewRead(ctx, f, ag, ref)
 			return err
@@ -48,7 +48,7 @@ func (w *watcher) handCITimerToReviewRead(ctx context.Context, f timerFire, ag s
 		return false, nil
 	}
 	if ag.Execution != nil {
-		st, err := w.store.Read()
+		st, err := w.a.store.Read()
 		if err != nil {
 			return false, err
 		}
@@ -59,7 +59,7 @@ func (w *watcher) handCITimerToReviewRead(ctx context.Context, f timerFire, ag s
 	} else if ag.Park.ReviewHead != p.Head {
 		return false, nil
 	}
-	err = w.store.Update(func(st *state.State) ([]state.Event, error) {
+	err = w.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		for i := range st.Agents {
 			cur := &st.Agents[i]
 			if !cur.Is(ag.Party) {

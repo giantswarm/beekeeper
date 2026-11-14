@@ -15,10 +15,10 @@ type fakeWatchResolver struct {
 	resets, stubReads, upstreamReads int
 }
 
-func (f *fakeWatchResolver) servers(context.Context) ([]string, error) {
+func (f *fakeWatchResolver) Servers(context.Context) ([]string, error) {
 	return []string{"192.0.2.1"}, nil
 }
-func (f *fakeWatchResolver) lookup(_ context.Context, server string) error {
+func (f *fakeWatchResolver) Lookup(_ context.Context, server string) error {
 	ok := f.upstreamOK
 	if server == "127.0.0.53" {
 		f.stubReads++
@@ -31,7 +31,7 @@ func (f *fakeWatchResolver) lookup(_ context.Context, server string) error {
 	}
 	return errors.New("DNS timeout")
 }
-func (f *fakeWatchResolver) reset(context.Context) error { f.resets++; return f.resetErr }
+func (f *fakeWatchResolver) Reset(context.Context) error { f.resets++; return f.resetErr }
 
 func TestWatchResolverDiscrimination(t *testing.T) {
 	for _, tc := range []struct {

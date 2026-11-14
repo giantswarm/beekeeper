@@ -34,9 +34,9 @@ func overtakingWatch(t *testing.T, refs map[string]string) (*watcher, *bytes.Buf
 	dir := t.TempDir()
 	w, _, out := notifyingWatch(t, dir, false)
 	w.chores = true
-	w.as = agentOne         // the note commands run outside a Claude session in CI
+	w.a.as = agentOne       // the note commands run outside a Claude session in CI
 	w.doctoring.Store(true) // the doctor is not under test
-	w.cfg.Claude.DesktopDir = filepath.Join(dir, "desktop")
+	w.a.cfg.Claude.DesktopDir = filepath.Join(dir, "desktop")
 	prev := refStates
 	t.Cleanup(func() { refStates = prev })
 	refStates = func(_ context.Context, rs []github.PR) (map[github.PR]github.RefState, error) {
@@ -58,7 +58,7 @@ const keywordClosed = github.Closed + " by " + refTwo
 // keptEvents are the note.kept events of w's log.
 func keptEvents(t *testing.T, w *watcher) []state.Event {
 	t.Helper()
-	evs, err := w.store.Events(0, func(e state.Event) bool { return e.Verb == noteKept })
+	evs, err := w.a.store.Events(0, func(e state.Event) bool { return e.Verb == noteKept })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,10 +69,10 @@ func keptEvents(t *testing.T, w *watcher) []state.Event {
 func listedFor(t *testing.T, w *watcher, person string) string {
 	t.Helper()
 	var out bytes.Buffer
-	prev := w.out
-	w.out = &out
-	defer func() { w.out = prev }()
-	c := w.noteCmd()
+	prev := w.a.out
+	w.a.out = &out
+	defer func() { w.a.out = prev }()
+	c := w.a.noteCmd()
 	c.SetArgs([]string{"list", flagFor, person})
 	c.SilenceUsage = true
 	if err := c.Execute(); err != nil {
@@ -114,7 +114,7 @@ func TestWorkerNoteIsKeptWhileItsTaskRunsAndOvertakenOnceDone(t *testing.T) {
 	refs := map[string]string{refOne: keywordClosed, refTwo: github.Closed}
 	w, out := overtakingWatch(t, refs)
 	worker := state.Party{Name: agentOne}
-	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+	if err := w.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Agents = []state.Agent{{Party: worker, Task: "the task"}}
 		return nil, nil
 	}); err != nil {
@@ -146,9 +146,9 @@ func TestWorkerNoteIsKeptWhileItsTaskRunsAndOvertakenOnceDone(t *testing.T) {
 		{verbIdle, flagDone, flagReport, "merged https://github.com/o/r/pull/2", flagProblem, noProblems},
 		{"assign", agentOne, "another task"},
 	} {
-		c := w.agentsCmd()
+		c := w.a.agentsCmd()
 		c.SetArgs(args)
-		c.SetOut(w.out)
+		c.SetOut(w.a.out)
 		if err := c.Execute(); err != nil {
 			t.Fatal(err)
 		}
@@ -175,14 +175,14 @@ func TestWorkerNoteClosedAfterItsTaskEndedIsOvertaken(t *testing.T) {
 
 func setNotes(t *testing.T, w *watcher, notes ...state.Note) {
 	t.Helper()
-	if err := w.store.Update(func(st *state.State) ([]state.Event, error) { st.Notes = notes; return nil, nil }); err != nil {
+	if err := w.a.store.Update(func(st *state.State) ([]state.Event, error) { st.Notes = notes; return nil, nil }); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func openIDs(t *testing.T, w *watcher) []int {
 	t.Helper()
-	st, err := w.store.Read()
+	st, err := w.a.store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +195,7 @@ func openIDs(t *testing.T, w *watcher) []int {
 
 func overtakenEvents(t *testing.T, w *watcher) []state.Event {
 	t.Helper()
-	evs, err := w.store.Events(0, func(e state.Event) bool { return e.Verb == noteOvertaken })
+	evs, err := w.a.store.Events(0, func(e state.Event) bool { return e.Verb == noteOvertaken })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,15 +252,15 @@ func TestAnsweredNoteIsNeverOvertaken(t *testing.T) {
 		state.Note{ID: 1, Kind: noteDecision, For: personTimo, Text: askedQ, Refs: []string{refOne}},
 		state.Note{ID: 2, Kind: noteDecision, For: personTimo, Text: "asked now", Refs: []string{refOne}},
 	)
-	c := w.noteCmd()
+	c := w.a.noteCmd()
 	c.SetArgs([]string{verbAnswer, "1", "yes"})
-	c.SetOut(w.out)
+	c.SetOut(w.a.out)
 	c.SilenceUsage = true
 	if err := c.Execute(); err != nil {
 		t.Fatal(err)
 	}
 	// The guide asks #2 now: its answer must find it open.
-	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+	if err := w.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		guideRole.update(st, func(r *state.Role) { r.Asking = 2 })
 		return nil, nil
 	}); err != nil {
@@ -308,7 +308,7 @@ func archivedNotes(t *testing.T, dir string) []state.Note {
 
 func TestNoteWithoutRefsStaysOpenOnceItsSessionIsArchived(t *testing.T) {
 	w, out := overtakingWatch(t, nil)
-	setNotes(t, w, archivedNotes(t, w.cfg.Claude.DesktopDir)...)
+	setNotes(t, w, archivedNotes(t, w.a.cfg.Claude.DesktopDir)...)
 	for range 2 {
 		w.pending(context.Background(), nil)
 	}
@@ -347,7 +347,7 @@ func TestWatchOnceNamesOvertakenNotesAndWritesNothing(t *testing.T) {
 	setNotes(t, w, state.Note{ID: 7, Kind: noteDecision, For: personTimo, Text: askedQ, Refs: []string{refOne}},
 		state.Note{ID: 8, Kind: noteDecision, For: personTimo, Text: askedQ, Refs: []string{refTwo}})
 	w.pending(context.Background(), nil)
-	st, _ := w.store.Read()
+	st, _ := w.a.store.Read()
 	if ids := openIDs(t, w); !slices.Equal(ids, []int{7, 8}) || len(overtakenEvents(t, w)) != 0 || len(keptEvents(t, w)) != 0 || st.Notes[1].Kept != "" {
 		t.Fatalf("--once wrote: open %v, kept %q", ids, st.Notes[1].Kept)
 	}
@@ -471,7 +471,7 @@ func TestTodoIsNeverOvertakenByItsRef(t *testing.T) {
 	if said := out.String(); strings.Contains(said, "NOTE OVERTAKEN") || strings.Contains(said, "NOTE KEPT") {
 		t.Fatalf("watch said %q", said)
 	}
-	st, err := w.store.Read()
+	st, err := w.a.store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -502,8 +502,8 @@ func TestReopenRestoresAnOvertakenNote(t *testing.T) {
 		t.Fatalf("not overtaken: open %v", ids)
 	}
 	var out bytes.Buffer
-	w.out = &out
-	c := w.noteCmd()
+	w.a.out = &out
+	c := w.a.noteCmd()
 	c.SetArgs([]string{noteShowName, "1"})
 	if err := c.Execute(); err != nil {
 		t.Fatal(err)
@@ -513,10 +513,10 @@ func TestReopenRestoresAnOvertakenNote(t *testing.T) {
 			t.Fatalf("note show lacks %q: %q", want, out.String())
 		}
 	}
-	if err := reopenNote(w.app, "1"); err != nil {
+	if err := reopenNote(w.a, "1"); err != nil {
 		t.Fatal(err)
 	}
-	st, err := w.store.Read()
+	st, err := w.a.store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}

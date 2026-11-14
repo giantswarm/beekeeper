@@ -35,7 +35,7 @@ func TestWatchSaysUpstreamRefusals(t *testing.T) {
 	a := &app{cfg: cfg, store: store, out: &out}
 	a.recordRefusal("s0", "gh pr create -R o/before --fill", "o/before")
 	a.now = time.Now()
-	w := &watcher{app: a, last: map[string]time.Time{}}
+	w := &watcher{a: a, last: map[string]time.Time{}}
 	w.refusals() // the baseline
 	time.Sleep(time.Millisecond)
 	a.recordRefusal("s1", "gh pr create -R o/r --fill", "o/r")

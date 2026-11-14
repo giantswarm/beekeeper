@@ -27,8 +27,8 @@ const (
 // answer may resume the agent.
 func TestPersonParkEightHoursWithoutTurns(t *testing.T) {
 	w := parkingWatch(t, nil)
-	w.cfg.Agents.AutoResume = true
-	w.cfg.Guide.Person = personTimo
+	w.a.cfg.Agents.AutoResume = true
+	w.a.cfg.Guide.Person = personTimo
 	woke := stubWakes(t)
 	fakeRead(t, func(cmd string) ([]byte, error) {
 		if cmd == probeHolds {
@@ -39,7 +39,7 @@ func TestPersonParkEightHoursWithoutTurns(t *testing.T) {
 	if err := park(t, w, "--on", "#3", "Alex's answer"); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+	if err := w.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Agents[0].Session = "parked-eight-hours"
 		st.Owed = []state.Owed{{Owner: st.Agents[0].Party, Line: "completed unrelated command", Since: relayNow}}
 		st.Timers = []state.Timer{
@@ -52,10 +52,10 @@ func TestPersonParkEightHoursWithoutTurns(t *testing.T) {
 		t.Fatal(err)
 	}
 	for elapsed := time.Duration(0); elapsed <= 8*time.Hour; elapsed += 5 * time.Minute {
-		w.now = relayNow.Add(elapsed)
+		w.a.now = relayNow.Add(elapsed)
 		w.pending(t.Context(), nil)
 		w.timerActs.Wait()
-		st, err := w.store.Read()
+		st, err := w.a.store.Read()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -63,8 +63,8 @@ func TestPersonParkEightHoursWithoutTurns(t *testing.T) {
 		if len(st.Owed) != 1 {
 			t.Fatalf("command result was lost: %+v", st.Owed)
 		}
-		w.payOwed(t.Context(), st.Owed[0])
-		if err := w.quietWake(t.Context(), watchParty, agentOne, "an unrelated note defaulted"); err != nil {
+		w.a.payOwed(t.Context(), st.Owed[0])
+		if err := w.a.quietWake(t.Context(), watchParty, agentOne, "an unrelated note defaulted"); err != nil {
 			t.Fatal(err)
 		}
 		w.tellBusyWorkersUsageHigh(t.Context(), st, []*claude.Session{{Name: agentOne}}, &capacity.UsageView{High: true}, "park-usage.json", nil)
@@ -109,10 +109,10 @@ func TestTimerRechecksTheCurrentParkAtDelivery(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w, _, _ := notifyingWatch(t, t.TempDir(), false)
-			w.cfg.Guide.Person = personTimo
+			w.a.cfg.Guide.Person = personTimo
 			woke := stubWakes(t)
 			q := agentOne
-			if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+			if err := w.a.store.Update(func(st *state.State) ([]state.Event, error) {
 				p := state.Park{By: state.Party{Name: agentOne, Session: "park-fixture-session"}, At: relayNow, On: tc.on, Waits: tc.waits}
 				if tc.offRoster {
 					st.Parks = []state.Park{p}
@@ -130,7 +130,7 @@ func TestTimerRechecksTheCurrentParkAtDelivery(t *testing.T) {
 			}
 			fakeRead(t, func(string) ([]byte, error) { return ciAnswer("OPEN", ciLintRed), nil })
 			w.wakeTimer(t.Context(), timerFire{t: state.Timer{ID: 1, Wake: q, When: tc.when}, reason: "holds"})
-			st, _ := w.store.Read()
+			st, _ := w.a.store.Read()
 			delivered := len(*woke) == 1
 			for _, ag := range st.Agents {
 				delivered = delivered || ag.Park != nil && len(ag.Park.Continuation) == 1
@@ -171,7 +171,7 @@ func TestPersonMessageStillReachesParkedSession(t *testing.T) {
 	if err := park(t, w, "--on", "#3", "Alex's answer"); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.quietWake(t.Context(), state.Party{Name: personTimo}, agentOne, parkAnswer); err != nil {
+	if err := w.a.quietWake(t.Context(), state.Party{Name: personTimo}, agentOne, parkAnswer); err != nil {
 		t.Fatal(err)
 	}
 	if len(*woke) != 1 || !strings.Contains((*woke)[0], parkAnswer) {
@@ -187,7 +187,7 @@ func TestMailboxDefaultLeavesPersonParkAsleep(t *testing.T) {
 		slackReply(t, 2, address, parkAnswer),
 	}}
 	w, sent, _ := mailboxWatch(t, mb)
-	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+	if err := w.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Agents = []state.Agent{{Party: state.Party{Name: target}, Task: parkTask, Park: &state.Park{On: parkedCentralNote, At: relayNow}}}
 		return nil, nil
 	}); err != nil {
@@ -207,26 +207,26 @@ func TestCommandOutcomeWaitsForPersonPark(t *testing.T) {
 			woke := stubWakes(t)
 			owner := state.Party{Name: agentOne, Session: "owed-park-fixture"}
 			o := state.Owed{Owner: owner, Line: "old command completed", Since: relayNow}
-			if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+			if err := w.a.store.Update(func(st *state.State) ([]state.Event, error) {
 				st.Agents = []state.Agent{{Party: owner, Task: parkTask, Park: &state.Park{On: on, At: relayNow}}}
 				st.Owed = []state.Owed{o}
 				return nil, nil
 			}); err != nil {
 				t.Fatal(err)
 			}
-			w.payOwed(t.Context(), o)
-			st, err := w.store.Read()
+			w.a.payOwed(t.Context(), o)
+			st, err := w.a.store.Read()
 			if err != nil || len(*woke) != 0 || len(st.Owed) != 1 {
 				t.Fatalf("pending park: deliveries=%v state=%+v error=%v", *woke, st, err)
 			}
-			if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+			if err := w.a.store.Update(func(st *state.State) ([]state.Event, error) {
 				st.Agents[0].Park = nil
 				return nil, nil
 			}); err != nil {
 				t.Fatal(err)
 			}
-			w.payOwed(t.Context(), o)
-			st, err = w.store.Read()
+			w.a.payOwed(t.Context(), o)
+			st, err = w.a.store.Read()
 			if err != nil || len(*woke) != 1 || len(st.Owed) != 0 {
 				t.Fatalf("ended park: deliveries=%v state=%+v error=%v", *woke, st, err)
 			}
@@ -241,14 +241,14 @@ func TestCommandOutcomeCanCompletePullRequestWait(t *testing.T) {
 	woke := stubWakes(t)
 	owner := state.Party{Name: agentOne, Session: "ci-wait-fixture"}
 	o := state.Owed{Owner: owner, Line: "devctl pr wait o/r 7 exit 1: red", Since: relayNow}
-	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+	if err := w.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Agents = []state.Agent{{Party: owner, Task: parkTask, Park: &state.Park{On: claimIssue, At: relayNow, Waits: "CI completion"}}}
 		st.Owed = []state.Owed{o}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	w.payOwed(t.Context(), o)
+	w.a.payOwed(t.Context(), o)
 	if len(*woke) != 1 || !strings.Contains((*woke)[0], o.Line) {
 		t.Fatalf("the CI result did not reach its waiting caller: %v", *woke)
 	}
@@ -257,12 +257,12 @@ func TestCommandOutcomeCanCompletePullRequestWait(t *testing.T) {
 func TestTimerGuideRoleFollowsRelay(t *testing.T) {
 	w, _, _ := notifyingWatch(t, t.TempDir(), false)
 	woke := stubWakes(t)
-	timer, err := w.timerFrom(timerSpec{wake: theGuide}, relayNow)
+	timer, err := w.a.timerFrom(timerSpec{wake: theGuide}, relayNow)
 	if err != nil || timer.Wake != theGuide {
 		t.Fatalf("role timer: %+v, %v", timer, err)
 	}
 	for _, name := range []string{"previous guide", "successor guide"} {
-		if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+		if err := w.a.store.Update(func(st *state.State) ([]state.Event, error) {
 			holder := state.Party{Name: name, Session: name + "-session"}
 			st.Agents = append(st.Agents, state.Agent{Party: holder})
 			guideRole.set(st, state.Role{Holder: &state.Supervisor{Party: holder, Since: relayNow}})
@@ -282,7 +282,7 @@ func TestTimerGuideRoleFollowsRelay(t *testing.T) {
 
 func TestTimerSupervisorExplainsServiceRole(t *testing.T) {
 	w, _, _ := notifyingWatch(t, t.TempDir(), false)
-	if _, err := w.timerFrom(timerSpec{wake: resumer}, relayNow); err != errSupervisorMessage {
+	if _, err := w.a.timerFrom(timerSpec{wake: resumer}, relayNow); err != errSupervisorMessage {
 		t.Fatalf("want supervisor service explanation, got %v", err)
 	}
 }
@@ -306,7 +306,7 @@ func TestTimerUndeliveredWakeRetries(t *testing.T) {
 				t.Run("repeat="+repeat, func(t *testing.T) {
 					w, _, _ := notifyingWatch(t, t.TempDir(), false)
 					w.clock = timerRetryClock{w: w}
-					w.cfg.Guide.Person = personTimo
+					w.a.cfg.Guide.Person = personTimo
 					old := wakeOwner
 					calls := 0
 					wakeOwner = func(*app, context.Context, state.Party, string, string, string) error {
@@ -317,7 +317,7 @@ func TestTimerUndeliveredWakeRetries(t *testing.T) {
 						return nil
 					}
 					t.Cleanup(func() { wakeOwner = old })
-					if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+					if err := w.a.store.Update(func(st *state.State) ([]state.Event, error) {
 						p := &state.Park{At: relayNow, On: "#3", Waits: verbAnswer}
 						if fail {
 							p.On, p.Waits = "", "Timer 42: proof running"
@@ -331,8 +331,8 @@ func TestTimerUndeliveredWakeRetries(t *testing.T) {
 					fire := func() {
 						t.Helper()
 						var fires []timerFire
-						if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
-							_, events, f, _ := settleTimers(st, nil, w.now)
+						if err := w.a.store.Update(func(st *state.State) ([]state.Event, error) {
+							_, events, f, _ := settleTimers(st, nil, w.a.now)
 							fires = f
 							return events, nil
 						}); err != nil {
@@ -343,20 +343,20 @@ func TestTimerUndeliveredWakeRetries(t *testing.T) {
 						}
 					}
 					fire()
-					st, err := w.store.Read()
+					st, err := w.a.store.Read()
 					if err != nil || len(st.Timers) != 1 || !st.Timers[0].Due.Equal(relayNow) {
 						t.Fatalf("undelivered occurrence lost: %+v, %v", st, err)
 					}
-					if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+					if err := w.a.store.Update(func(st *state.State) ([]state.Event, error) {
 						st.Agents[0].Park.On, st.Agents[0].Park.Waits = "", "Timer 42: proof running"
 						return nil, nil
 					}); err != nil {
 						t.Fatal(err)
 					}
 					// Delivery retries retain the occurrence but wait one interval.
-					w.now = relayNow.Add(timerEvery)
+					w.a.now = relayNow.Add(timerEvery)
 					fire()
-					st, err = w.store.Read()
+					st, err = w.a.store.Read()
 					wantCalls := 1
 					if fail {
 						wantCalls++
@@ -374,7 +374,7 @@ func TestSkippedConditionalTimerStaysOpenPastExpiry(t *testing.T) {
 	w, _, _ := notifyingWatch(t, t.TempDir(), false)
 	w.clock = timerRetryClock{w: w}
 	woke := stubWakes(t)
-	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+	if err := w.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Agents = []state.Agent{{Party: state.Party{Name: agentOne}, Park: &state.Park{On: "#3", Waits: verbAnswer, At: relayNow}}}
 		st.Timers = []state.Timer{{ID: 42, Due: relayNow, Wake: agentOne, Probe: probeHolds, Until: relayNow.Add(time.Minute), Expire: true}}
 		return nil, nil
@@ -382,8 +382,8 @@ func TestSkippedConditionalTimerStaysOpenPastExpiry(t *testing.T) {
 		t.Fatal(err)
 	}
 	var fires []timerFire
-	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
-		_, events, f, _ := settleTimers(st, map[int]checkResult{42: {holds: true}}, w.now)
+	if err := w.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		_, events, f, _ := settleTimers(st, map[int]checkResult{42: {holds: true}}, w.a.now)
 		fires = f
 		return events, nil
 	}); err != nil {
@@ -393,14 +393,14 @@ func TestSkippedConditionalTimerStaysOpenPastExpiry(t *testing.T) {
 		t.Fatalf("expected one fire: %+v", fires)
 	}
 	w.wakeTimer(t.Context(), fires[0])
-	st, err := w.store.Read()
-	if err != nil || len(st.Timers) != 1 || st.Timers[0].Expire || !st.Timers[0].Checked.Equal(w.now) || len(*woke) != 0 {
+	st, err := w.a.store.Read()
+	if err != nil || len(st.Timers) != 1 || st.Timers[0].Expire || !st.Timers[0].Checked.Equal(w.a.now) || len(*woke) != 0 {
 		t.Fatalf("skip lost retry: %+v error=%v wakes=%v", st, err, *woke)
 	}
-	w.now = relayNow.Add(timerEvery)
-	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Agents[0].Park = &state.Park{Waits: "Timer 42: review proof running", At: w.now}
-		_, events, f, _ := settleTimers(st, nil, w.now)
+	w.a.now = relayNow.Add(timerEvery)
+	if err := w.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents[0].Park = &state.Park{Waits: "Timer 42: review proof running", At: w.a.now}
+		_, events, f, _ := settleTimers(st, nil, w.a.now)
 		fires = f
 		return events, nil
 	}); err != nil {
@@ -424,10 +424,10 @@ func TestConditionalWakeRetryKeepsFiredOccurrence(t *testing.T) {
 			w.clock = timerRetryClock{w: w}
 			woke := stubWakes(t)
 			var initial timerFire
-			if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+			if err := w.a.store.Update(func(st *state.State) ([]state.Event, error) {
 				st.Agents = []state.Agent{{Party: state.Party{Name: agentOne}, Park: &state.Park{On: "#3", Waits: verbAnswer, At: relayNow}}}
 				st.Timers = []state.Timer{{ID: 42, Due: relayNow, Wake: agentOne, Probe: probeHolds, Repeat: repeat}}
-				_, events, fires, _ := settleTimers(st, map[int]checkResult{42: {holds: true}}, w.now)
+				_, events, fires, _ := settleTimers(st, map[int]checkResult{42: {holds: true}}, w.a.now)
 				if len(fires) != 1 {
 					t.Fatalf("expected initial fire: %+v", fires)
 				}
@@ -438,11 +438,11 @@ func TestConditionalWakeRetryKeepsFiredOccurrence(t *testing.T) {
 			}
 			// The initial occurrence was claimed; delivery is rejected by the note park.
 			w.wakeTimer(t.Context(), initial)
-			w.now = relayNow.Add(timerEvery)
+			w.a.now = relayNow.Add(timerEvery)
 			var fires []timerFire
-			if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
-				st.Agents[0].Park = &state.Park{Waits: "Timer 42: running", At: w.now}
-				_, events, f, _ := settleTimers(st, map[int]checkResult{42: {holds: false}}, w.now)
+			if err := w.a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Agents[0].Park = &state.Park{Waits: "Timer 42: running", At: w.a.now}
+				_, events, f, _ := settleTimers(st, map[int]checkResult{42: {holds: false}}, w.a.now)
 				fires = f
 				return events, nil
 			}); err != nil {
@@ -452,7 +452,7 @@ func TestConditionalWakeRetryKeepsFiredOccurrence(t *testing.T) {
 				t.Fatalf("lost the fired occurrence: %+v", fires)
 			}
 			w.wakeTimer(t.Context(), fires[0])
-			st, err := w.store.Read()
+			st, err := w.a.store.Read()
 			if err != nil || len(*woke) != 1 {
 				t.Fatalf("wake not delivered: %v, %v", *woke, err)
 			}
@@ -469,7 +469,7 @@ type timerRetryClock struct {
 	w *watcher
 }
 
-func (c timerRetryClock) Now() time.Time { return c.w.now }
+func (c timerRetryClock) Now() time.Time { return c.w.a.now }
 
 func TestDelayedWakeRetryUsesDeliveryTime(t *testing.T) {
 	w, _, _ := notifyingWatch(t, t.TempDir(), false)
@@ -481,7 +481,7 @@ func TestDelayedWakeRetryUsesDeliveryTime(t *testing.T) {
 	if err != nil || !rearmed {
 		t.Fatalf("rearm: %v, %v", rearmed, err)
 	}
-	st, err := w.store.Read()
+	st, err := w.a.store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}

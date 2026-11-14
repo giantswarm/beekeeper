@@ -45,14 +45,14 @@ func TestWatchSaysASlotHeldLong(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	w := &watcher{app: &app{cfg: cfg, out: &out}, last: map[string]time.Time{}}
+	w := &watcher{a: &app{cfg: cfg, out: &out}, last: map[string]time.Time{}}
 
-	w.now = time.Date(2026, 10, 9, 20, 50, 0, 0, time.UTC)
+	w.a.now = time.Date(2026, 10, 9, 20, 50, 0, 0, time.UTC)
 	w.slotHolds()
 	if out.Len() != 0 {
 		t.Errorf("a slot held 23m, under the bound, was said:\n%s", out.String())
 	}
-	w.now = time.Date(2026, 10, 9, 23, 20, 0, 0, time.UTC)
+	w.a.now = time.Date(2026, 10, 9, 23, 20, 0, 0, time.UTC)
 	w.slotHolds()
 	w.slotHolds()
 	want := "SLOT HELD LONG: slot 1 past memcap.holdBound (30m), held by Agent four (pid 4711) since 20:27Z (2h53m0s): python3 benchmark_preset.py"

@@ -17,7 +17,7 @@ const gibMiB = 1024
 
 func diskWatcher(out *bytes.Buffer, writes map[int]int64) *watcher {
 	cfg := &config.Config{Watch: config.Watch{DiskFillWithin: config.Duration{Duration: 2 * time.Hour}}}
-	w := &watcher{app: &app{out: out, cfg: cfg}, last: map[string]time.Time{}}
+	w := &watcher{a: &app{out: out, cfg: cfg}, last: map[string]time.Time{}}
 	w.disk.readPaths = func(context.Context) []diskPath { return nil }
 	w.disk.readWrites = func(pid int) (int64, error) {
 		b, ok := writes[pid]

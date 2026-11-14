@@ -59,7 +59,7 @@ func TestLanesAndWatchSayAStall(t *testing.T) {
 	}
 
 	out.Reset()
-	w := &watcher{app: a, last: map[string]time.Time{}}
+	w := &watcher{a: a, last: map[string]time.Time{}}
 	w.stalls()
 	w.stalls()
 	if lines := strings.Count(out.String(), "LANE STALLED ap: stalled for"); lines != 1 {
@@ -110,7 +110,7 @@ func TestWatchSettlesALaneReadyAfterTheSettleTimeout(t *testing.T) {
 	var out bytes.Buffer
 	a := &app{cfg: cfg, store: store, now: now, out: &out}
 	raw, readErr := gazelleHRs("4.78.0", "True"), error(nil)
-	w := &watcher{app: a, last: map[string]time.Time{}, readHRs: func(context.Context, config.Lane) ([]merge.HelmRelease, error) {
+	w := &watcher{a: a, last: map[string]time.Time{}, readHRs: func(context.Context, config.Lane) ([]merge.HelmRelease, error) {
 		if readErr != nil {
 			return nil, readErr
 		}
@@ -169,7 +169,7 @@ func TestWatchUnknownReleaseNamesRecoveryAndRegistration(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	w := &watcher{app: &app{cfg: cfg, store: store, out: &out, now: now}, last: map[string]time.Time{}, readHRs: func(context.Context, config.Lane) ([]merge.HelmRelease, error) { return nil, nil }}
+	w := &watcher{a: &app{cfg: cfg, store: store, out: &out, now: now}, last: map[string]time.Time{}, readHRs: func(context.Context, config.Lane) ([]merge.HelmRelease, error) { return nil, nil }}
 	w.settled(context.Background(), now)
 	for _, want := range []string{"LANE STUCK", "devctl release wait o/r --pr 7", "beekeeper lanes settle o/r 7 --release <version>"} {
 		if !strings.Contains(out.String(), want) {

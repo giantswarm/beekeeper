@@ -46,7 +46,7 @@ func TestExecutionCIParkSurvivesLostReplyAndWakesOnResult(t *testing.T) {
 			if p == nil || !p.Checks || p.ReviewHead != "" || p.PostMerge != nil || st.Starts[0].Execution.Completed || len(st.ReviewParks) != 0 || len(st.Timers) != 1 {
 				t.Fatalf("CI wait became review/completion or duplicated: park %+v, timers %+v", p, st.Timers)
 			}
-			w := &watcher{app: a}
+			w := &watcher{a: a}
 			if settled := w.settledParks(context.Background(), st); len(settled) != 0 {
 				t.Fatalf("ordinary PR settlement handled CI park: %+v", settled)
 			}
@@ -89,7 +89,7 @@ func TestExecutionCIParkSurvivesLostReplyAndWakesOnResult(t *testing.T) {
 			if len(fires) != 1 {
 				t.Fatal("restart lost the CI wake before outbox insertion")
 			}
-			w = &watcher{app: a}
+			w = &watcher{a: a}
 			// A replaced park cannot consume an old timer's wake.
 			if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 				st.Agents[0].Park.At = p.At.Add(time.Second)

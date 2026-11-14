@@ -18,9 +18,9 @@ import (
 
 func TestWatchSettlesALostMerge(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
-	w.now = relayNow
+	w.a.now = relayNow
 	stubGitHub(t, "", "") // GitHub does not answer: nothing can judge it
-	err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+	err := w.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Merges = []state.Merge{
 			// Its gate died with the machine.
 			{Repo: "o/lost", PR: 1, Lane: "scratch", By: four, PID: 0, Phase: state.Running, Started: relayNow.Add(-2 * time.Hour)},
@@ -37,7 +37,7 @@ func TestWatchSettlesALostMerge(t *testing.T) {
 	if n := strings.Count(out.String(), "MERGE LOST: o/lost#1 in lane scratch"); n != 1 {
 		t.Fatalf("MERGE LOST said %d times:\n%s", n, out)
 	}
-	st, err := w.store.Read()
+	st, err := w.a.store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +47,7 @@ func TestWatchSettlesALostMerge(t *testing.T) {
 			t.Errorf("%s is %s, want %s", m.Key(), m.Phase, want)
 		}
 	}
-	evs, err := w.store.Events(10, func(e state.Event) bool { return e.Verb == "merge.lost" })
+	evs, err := w.a.store.Events(10, func(e state.Event) bool { return e.Verb == "merge.lost" })
 	if err != nil || len(evs) != 1 {
 		t.Errorf("merge.lost events: %d, %v", len(evs), err)
 	}
@@ -57,9 +57,9 @@ func TestWatchSettlesALostMerge(t *testing.T) {
 // The merge base has no internal/gate package, so these tests cannot build there.
 func TestWatchRecordsAMergeWhoseGateIsGone(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
-	w.now = relayNow
+	w.a.now = relayNow
 	stubGitHub(t, github.Merged, "")
-	err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+	err := w.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Merges = []state.Merge{
 			// Killed with its caller; devctl finished and left its document.
 			{Repo: "o/doc", PR: 1, Lane: "doc", By: four, PID: 0, Child: 0, Phase: state.Running, Started: relayNow},
@@ -71,7 +71,7 @@ func TestWatchRecordsAMergeWhoseGateIsGone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	base := gate.MergeBase(w.store.Dir(), "o/doc", 1)
+	base := gate.MergeBase(w.a.store.Dir(), "o/doc", 1)
 	if err := os.MkdirAll(filepath.Dir(base), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +84,7 @@ func TestWatchRecordsAMergeWhoseGateIsGone(t *testing.T) {
 		t.Fatalf("watch lines:\n%s", l)
 	}
 	// The merge GitHub judged, its release unconfirmed, settles its lane.
-	if st, _ := w.store.Read(); len(st.Merges) != 1 || st.Merges[0].Repo != "o/gh" || st.Merges[0].Phase != state.Settling {
+	if st, _ := w.a.store.Read(); len(st.Merges) != 1 || st.Merges[0].Repo != "o/gh" || st.Merges[0].Phase != state.Settling {
 		t.Errorf("merges left: %+v", st.Merges)
 	}
 	if _, err := os.Stat(base + ".json"); err == nil {

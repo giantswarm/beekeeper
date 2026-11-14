@@ -33,13 +33,13 @@ func TestTimerAddNowWithDayAndWeekDeadline(t *testing.T) {
 	for _, until := range []string{"7d", "1w", "168h"} {
 		t.Run(until, func(t *testing.T) {
 			a, _, _ := notifyingWatch(t, t.TempDir(), false)
-			a.as = "timer-test"
-			c := a.timerCmd()
+			a.a.as = "timer-test"
+			c := a.a.timerCmd()
 			c.SetArgs([]string{"add", "now", "check readiness", "--probe", "true", untilFlag, until})
 			if err := c.Execute(); err != nil {
 				t.Fatal(err)
 			}
-			st, err := a.store.Read()
+			st, err := a.a.store.Read()
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -47,7 +47,7 @@ func TestTimerAddNowWithDayAndWeekDeadline(t *testing.T) {
 				t.Fatalf("timers = %+v", st.Timers)
 			}
 			timer := st.Timers[0]
-			if !timer.Due.Equal(a.now) || !timer.Until.Equal(a.now.Add(168*time.Hour)) {
+			if !timer.Due.Equal(a.a.now) || !timer.Until.Equal(a.a.now.Add(168*time.Hour)) {
 				t.Fatalf("timer = %+v", timer)
 			}
 		})

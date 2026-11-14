@@ -40,7 +40,7 @@ func TestWatchLeaseRound(t *testing.T) {
 	}
 	var out strings.Builder
 	a.out = &out
-	w := &watcher{app: a, reported: map[string]bool{}, last: map[string]time.Time{}}
+	w := &watcher{a: a, reported: map[string]bool{}, last: map[string]time.Time{}}
 	w.staleLeases(context.Background(), nil)
 	if out.Len() != 0 {
 		t.Fatalf("not past round: %q", out.String())

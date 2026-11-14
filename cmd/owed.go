@@ -214,11 +214,11 @@ func (a *app) failedPay(o state.Owed, why string) {
 // owedRetry under the state's lock, so one watch tries it: a caller that
 // heard it drops it, and one owed past owedFor is given up.
 func (w *watcher) owedOutcomes(ctx context.Context) {
-	st, err := w.store.Peek()
+	st, err := w.a.store.Peek()
 	if err != nil || len(st.Owed) == 0 {
 		return
 	}
-	now := w.now.UTC()
+	now := w.a.now.UTC()
 	due := func(o state.Owed) bool {
 		busy := (proc.Alive(o.Gate) || proc.Alive(o.Child)) && now.Sub(o.Since) < owedBusy
 		return !busy && now.Sub(o.Tried) >= owedRetry
@@ -227,7 +227,7 @@ func (w *watcher) owedOutcomes(ctx context.Context) {
 		return
 	}
 	var claimed []state.Owed
-	_ = w.store.Update(func(st *state.State) ([]state.Event, error) {
+	_ = w.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		for i, o := range st.Owed {
 			if due(o) {
 				st.Owed[i].Tried = now
@@ -239,11 +239,11 @@ func (w *watcher) owedOutcomes(ctx context.Context) {
 	for _, o := range claimed {
 		switch {
 		case heard(o):
-			w.paid(o)
+			w.a.paid(o)
 		case now.Sub(o.Since) > owedFor:
-			w.paid(o, fmt.Sprintf("owed to %q since %s and never handed over (%s): given up", o.Owner.Name, clock(now, o.Since), o.Why))
+			w.a.paid(o, fmt.Sprintf("owed to %q since %s and never handed over (%s): given up", o.Owner.Name, clock(now, o.Since), o.Why))
 		default:
-			w.payOwed(ctx, o)
+			w.a.payOwed(ctx, o)
 		}
 	}
 }

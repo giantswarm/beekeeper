@@ -175,13 +175,13 @@ func writeRC(t *testing.T, dir, repo string, pr, rc int) {
 // over, the run is recorded, nothing merged, and leaves the lane.
 func TestAKilledGateLeavesNoPlaceAfterOneTick(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
-	w.now = relayNow
-	dir := w.store.Dir()
+	w.a.now = relayNow
+	dir := w.a.store.Dir()
 	stubPulls(t, map[int]github.Pull{1: {State: github.Open}, 2: {State: github.Open}})
 	writeRC(t, dir, hungRepo, 1, 143)
 	lingering := hungChild(t, dir, openRepo, 2)
 	writeRC(t, dir, openRepo, 2, 143)
-	err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+	err := w.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Merges = []state.Merge{
 			{Repo: hungRepo, PR: 1, Lane: hungLane, By: four, Phase: state.Running, Started: relayNow},
 			{Repo: openRepo, PR: 2, Lane: openLane, By: four, Child: lingering, Phase: state.Running, Started: relayNow},
@@ -198,7 +198,7 @@ func TestAKilledGateLeavesNoPlaceAfterOneTick(t *testing.T) {
 			t.Errorf("no %q in the watch lines:\n%s", want, l)
 		}
 	}
-	if st, err := w.store.Read(); err != nil || len(st.Merges) != 0 {
+	if st, err := w.a.store.Read(); err != nil || len(st.Merges) != 0 {
 		t.Errorf("places left after one tick: %+v (%v)", st.Merges, err)
 	}
 }
@@ -209,7 +209,7 @@ func TestAKilledGateLeavesNoPlaceAfterOneTick(t *testing.T) {
 // gate, is left alone.
 func TestTaskStopEndsTheGatesMerge(t *testing.T) {
 	w, _, _ := notifyingWatch(t, t.TempDir(), false)
-	a := w.app
+	a := w.a
 	dir := a.store.Dir()
 	stubPulls(t, map[int]github.Pull{1: {State: github.Open}})
 	child := hungChild(t, dir, hungRepo, 1)
@@ -349,7 +349,7 @@ func TestAncestorOutputStopsAtTheCLI(t *testing.T) {
 // it says so, never "nothing merged".
 func TestTaskStopSaysAMergeLandedBeforeIt(t *testing.T) {
 	w, _, _ := notifyingWatch(t, t.TempDir(), false)
-	a := w.app
+	a := w.a
 	at := time.Date(2026, 10, 9, 4, 4, 20, 0, time.UTC)
 	stubPulls(t, map[int]github.Pull{1: {State: github.Merged, MergedAt: at}})
 	child := hungChild(t, a.store.Dir(), hungRepo, 1)

@@ -356,7 +356,7 @@ func (a *app) runWatcher(ctx context.Context, w *watcher, once, notifyDesktop bo
 }
 
 type watcher struct {
-	*app
+	a *app
 	// batchEvery is immutable once the loops start; batch is guarded by mu.
 	batchEvery time.Duration
 	batch      []string
@@ -649,9 +649,9 @@ func (w *watcher) run(ctx context.Context, once bool) error {
 	if once {
 		w.batchEvery = 0
 	} else if w.batchEvery == 0 {
-		w.batchEvery = w.cfg.Watch.BatchInterval.Duration
+		w.batchEvery = w.a.cfg.Watch.BatchInterval.Duration
 	}
-	w.lastPoll = w.clk().Now().Add(-w.cfg.Watch.Interval.Duration)
+	w.lastPoll = w.clk().Now().Add(-w.a.cfg.Watch.Interval.Duration)
 	s, err := plat.Machine.DesktopScope()
 	if s != nil {
 		w.scopeOOM = s.OOMKills
@@ -659,9 +659,9 @@ func (w *watcher) run(ctx context.Context, once bool) error {
 	if !w.unavailable(secScope, err) {
 		w.check("noscope", s == nil, "no Claude Desktop scope found; watching the machine numbers only")
 	}
-	interval := w.cfg.Watch.Interval.Duration
+	interval := w.a.cfg.Watch.Interval.Duration
 	if once {
-		w.ctx = ctx
+		w.a.ctx = ctx
 		w.upgradeCycle(ctx)
 		w.sample(ctx)
 		w.lastSweep = clk.Now() // swept here, not in the poll's background
@@ -683,7 +683,7 @@ func (w *watcher) run(ctx context.Context, once bool) error {
 	w.readFreeMark()
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
-	w.ctx = ctx
+	w.a.ctx = ctx
 	var wg sync.WaitGroup
 	if w.standby {
 		w.guideRecovery = true
@@ -714,15 +714,15 @@ func (w *watcher) run(ctx context.Context, once bool) error {
 	})
 	if !w.standby {
 		wg.Go(func() { w.watchAlerts(ctx) })
-		if w.cfg.Alerts.PagerDuty.Enabled() {
+		if w.a.cfg.Alerts.PagerDuty.Enabled() {
 			wg.Go(func() { w.watchPagerDuty(ctx) })
 		}
-		if w.cfg.Alerts.Discover.Enabled() {
+		if w.a.cfg.Alerts.Discover.Enabled() {
 			wg.Go(func() { w.watchDiscovery(ctx) })
 		}
 	}
-	if w.cfg.Central.Enabled() {
-		w.hub() // made before the feed, the mailbox and the roster sync share it
+	if w.a.cfg.Central.Enabled() {
+		w.a.hub() // made before the feed, the mailbox and the roster sync share it
 		wg.Go(func() { w.watchFeed(ctx) })
 		if w.standby {
 			wg.Go(func() { w.watchMailbox(ctx) })
@@ -857,15 +857,15 @@ func (w *watcher) inFlight(ctx context.Context, wait time.Duration, running *ato
 // baseline; another watch that owns it is said once, and this one takes over
 // when it ends.
 func (w *watcher) watchAlerts(ctx context.Context) {
-	store := alerts.NewStore(w.cfg.StateDir)
+	store := alerts.NewStore(w.a.cfg.StateDir)
 	defer func() { _ = store.Release() }()
 	// One port-forward per installation, kept from tick to tick: a tick
 	// is then HTTP requests, not kubectl and tsh processes.
-	reader := w.alertReader()
+	reader := w.a.alertReader()
 	reader.Keep = true
 	defer reader.Close()
 	other := 0
-	w.loop(ctx, w.cfg.Alerts.Every.Duration, true, func(ctx context.Context) {
+	w.loop(ctx, w.a.cfg.Alerts.Every.Duration, true, func(ctx context.Context) {
 		owned, owner, err := store.Own()
 		switch {
 		case err != nil:
@@ -886,7 +886,7 @@ func (w *watcher) watchAlerts(ctx context.Context) {
 				other = 0
 				w.emitNow("alerts", "ALERTS taken over by this watch")
 			}
-			lines, noContext := w.alertCycle(ctx, store, reader)
+			lines, noContext := w.a.alertCycle(ctx, store, reader)
 			if base, err := store.Load(); err == nil {
 				w.publishAlerts(base.Firing(""))
 			}
@@ -909,7 +909,7 @@ func (w *watcher) emit(key, format string, args ...any) string {
 		w.active = map[string]condition{}
 	}
 	_, active := w.active[key]
-	if active && now.Sub(w.last[key]) < w.cfg.Watch.Repeat.Duration {
+	if active && now.Sub(w.last[key]) < w.a.cfg.Watch.Repeat.Duration {
 		w.mu.Unlock()
 		return ""
 	}
@@ -960,8 +960,8 @@ func (w *watcher) clear(key string) {
 	w.dirty = w.dirty || active
 	w.mu.Unlock()
 	if active {
-		if w.store != nil {
-			_ = w.store.Record(event(watchParty, "watch.clear", "%s", key))
+		if w.a.store != nil {
+			_ = w.a.store.Record(event(watchParty, "watch.clear", "%s", key))
 		}
 		w.emitNow("ended", "ENDED %s (since %s)", c.Label, c.Since.Local().Format("15:04"))
 	}
@@ -1029,7 +1029,7 @@ type watchMark struct {
 // watch (seen.watch.<caller>.json): it says no open condition or event
 // again. --once and a watch outside a Claude session keep none.
 func (a *app) newWatcher(standby, keep bool) *watcher {
-	w := &watcher{app: a, standby: standby, last: map[string]time.Time{}, seenKills: map[string]bool{},
+	w := &watcher{a: a, standby: standby, last: map[string]time.Time{}, seenKills: map[string]bool{},
 		reported: map[string]bool{}, active: map[string]condition{}, chores: keep, retitled: map[string]time.Time{}, doctored: map[string]bool{},
 		upgrades: upgrade.Readings{}}
 	if keep {
@@ -1059,13 +1059,13 @@ func (w *watcher) saveMark() {
 		return
 	}
 	w.dirty = false
-	_ = w.store.WriteFile(w.markFile, watchMark{Conditions: w.active, Reported: w.reported, FeedID: w.feedID, UsageReported: w.usageReported})
+	_ = w.a.store.WriteFile(w.markFile, watchMark{Conditions: w.active, Reported: w.reported, FeedID: w.feedID, UsageReported: w.usageReported})
 }
 
 // notify sends one event that needs a person (--notify): a lasting kind
 // takes no key.
 func (w *watcher) notify(ctx context.Context, kind, key, summary, body string) {
-	w.notifyAt(ctx, w.now, kind, key, summary, body)
+	w.notifyAt(ctx, w.a.now, kind, key, summary, body)
 }
 
 // notifyAt is notify for a loop of its own, which keeps its own time.
@@ -1107,7 +1107,7 @@ func (t swapTrend) pressing() bool { return t.Rated && t.DiskPerHourMiB > 0 && t
 // swapTrend records a reading and returns the movement over
 // watch.swapWindow.
 func (w *watcher) swapTrend(now time.Time, m machine.Mem) swapTrend {
-	window := w.cfg.Watch.SwapWindow.Duration
+	window := w.a.cfg.Watch.SwapWindow.Duration
 	w.swapSamples = append(w.swapSamples, swapSample{now, m.SwapUsedMiB, m.DiskSwapMiB(), m.ZswapWrittenBackMiB, m.AvailableMiB})
 	i := 0
 	for i < len(w.swapSamples)-1 && now.Sub(w.swapSamples[i].at) > window {
@@ -1175,7 +1175,7 @@ func (w *watcher) oomdImminent(m machine.Mem, oomd *machine.OOMDSwap, t swapTren
 	if oomd == nil || !oomd.Watched() || !t.pressing() {
 		return false
 	}
-	th := w.cfg.Watch
+	th := w.a.cfg.Watch
 	headroom := oomd.HeadroomMiB(m)
 	if headroom < th.OOMDHeadroomMin(m.SwapTotalMiB) {
 		return true
@@ -1186,15 +1186,15 @@ func (w *watcher) oomdImminent(m machine.Mem, oomd *machine.OOMDSwap, t swapTren
 // modelServer says the host models no model-server lease covers and
 // unloads those a lab loaded or a budget exceeds, unless ollama.nameOnly.
 func (w *watcher) modelServer(ctx context.Context, models []machine.HostModel) {
-	holders, err := lease.Dir(w.cfg.LeaseDir).List()
+	holders, err := lease.Dir(w.a.cfg.LeaseDir).List()
 	if err != nil {
 		return
 	}
-	bs := modelBreaches(models, holders, w.cfg.Resources, w.cfg.Ollama.BudgetGiB)
+	bs := modelBreaches(models, holders, w.a.cfg.Resources, w.a.cfg.Ollama.BudgetGiB)
 	unloaded := map[string]error{}
 	for _, b := range bs {
-		if b.Unload && !w.cfg.Ollama.NameOnly {
-			unloaded[b.Model.Name] = b.Model.Unload(ctx, serverURL(w.cfg, b.Model))
+		if b.Unload && !w.a.cfg.Ollama.NameOnly {
+			unloaded[b.Model.Name] = b.Model.Unload(ctx, serverURL(w.a.cfg, b.Model))
 		}
 	}
 	w.check("modelserver", len(bs) > 0, "MODEL SERVER: %s", modelServerLine(bs, unloaded))
@@ -1215,8 +1215,8 @@ func (w *watcher) emitLinesNow(key string, lines []string) {
 		kept = append(kept, line)
 		evs = append(evs, event(watchParty, "watch."+key, "%s", line))
 	}
-	if w.store != nil && len(evs) > 0 {
-		_ = w.store.Record(evs...)
+	if w.a.store != nil && len(evs) > 0 {
+		_ = w.a.store.Record(evs...)
 	}
 	for _, line := range kept {
 		w.outputEvent(line)
@@ -1228,14 +1228,14 @@ func (w *watcher) emitLinesNow(key string, lines []string) {
 // is strained. It keeps its own time: it runs in a loop of its own.
 func (w *watcher) sample(ctx context.Context) {
 	now := clk.Now()
-	if st, err := w.readSnapshot(); err == nil {
-		w.sayAppDrifts(w.appDrifts(ctx, st.Apps))
+	if st, err := w.a.readSnapshot(); err == nil {
+		w.sayAppDrifts(w.a.appDrifts(ctx, st.Apps))
 	}
-	th := w.cfg.Watch
+	th := w.a.cfg.Watch
 
 	// GTT is RAM the iGPU pins outside every cgroup: above its threshold
 	// it is named as the cause of low memory, with the model servers' models.
-	models, merr := hostModels(ctx, w.cfg)
+	models, merr := hostModels(ctx, w.a.cfg)
 	if merr == nil {
 		w.modelServer(ctx, models)
 	}
@@ -1324,7 +1324,7 @@ func (w *watcher) sample(ctx context.Context) {
 // with the top CPU consumers since the last sample; and READS SLOWED while
 // the machine is strained.
 func (w *watcher) sampleCPU(now time.Time, t *proc.Table) {
-	th := w.cfg.Watch
+	th := w.a.cfg.Watch
 	cores := runtime.NumCPU()
 	limit := th.LoadLimit(cores)
 	load, err := plat.Machine.Load()
@@ -1378,7 +1378,7 @@ const watchOwner = "beekeeper watch"
 // with an ENDED line when it ends.
 // prev is the process table the last sample read, span ago.
 func (w *watcher) sampleProcs(now time.Time, span time.Duration, prev, t *proc.Table) {
-	th := w.cfg.Watch
+	th := w.a.cfg.Watch
 	owners := map[int]string{}
 	if o := w.owners.Load(); o != nil {
 		maps.Copy(owners, *o)
@@ -1450,7 +1450,7 @@ func (w *watcher) pollSessions(ctx context.Context, since time.Time, t *proc.Tab
 		return
 	}
 	w.table = t
-	sessions := discover(w.cfg, t, w.now)
+	sessions := discover(w.a.cfg, t, w.a.now)
 	owners := make(map[int]string, len(sessions))
 	for _, s := range sessions {
 		owners[s.PID] = s.Name
@@ -1518,7 +1518,7 @@ func (w *watcher) twins(sessions []*claude.Session, t *proc.Table) {
 	found := map[string]bool{}
 	for _, id := range slices.Sorted(maps.Keys(byID)) {
 		cli := byID[id]
-		if len(cli) < 2 || slices.ContainsFunc(cli, func(p *proc.Process) bool { return w.now.Sub(p.Start) < twinGrace }) {
+		if len(cli) < 2 || slices.ContainsFunc(cli, func(p *proc.Process) bool { return w.a.now.Sub(p.Start) < twinGrace }) {
 			continue
 		}
 		slices.SortFunc(cli, func(a, b *proc.Process) int { return cmp.Compare(a.PID, b.PID) })
@@ -1539,10 +1539,10 @@ func (w *watcher) twins(sessions []*claude.Session, t *proc.Table) {
 // probe for one watch.interval at most.
 func (w *watcher) poll(ctx context.Context) {
 	w.polls.Add(1)
-	w.now = w.clk().Now()
+	w.a.now = w.clk().Now()
 	since := w.lastPoll
-	w.lastPoll = w.now
-	th := w.cfg.Watch
+	w.lastPoll = w.a.now
+	th := w.a.cfg.Watch
 
 	t, err := plat.Machine.Processes()
 	switch {
@@ -1561,7 +1561,7 @@ func (w *watcher) poll(ctx context.Context) {
 	w.staleMerges()
 	w.lostMerges(ctx)
 	w.owedOutcomes(ctx)
-	w.pollToolWindow(ctx, watchParty)
+	w.a.pollToolWindow(ctx, watchParty)
 	w.stalls()
 	w.slotHolds()
 	w.unbrokered()
@@ -1570,11 +1570,11 @@ func (w *watcher) poll(ctx context.Context) {
 		return
 	}
 	w.sink(ctx)
-	now := w.now
+	now := w.a.now
 	if now.Sub(w.lastSettle) >= w.readEvery(th.Interval.Duration) {
 		w.lastSettle = now
 		w.inFlight(w.readCtx(ctx), th.Interval.Duration, &w.settling, func(ctx context.Context) {
-			_ = w.checkPlaces(ctx, watchParty, now, "", "", 0, th.Interval.Duration)
+			_ = w.a.checkPlaces(ctx, watchParty, now, "", "", 0, th.Interval.Duration)
 			w.hungMerges(ctx, now)
 			w.settled(ctx, now)
 		})
@@ -1598,14 +1598,14 @@ func (w *watcher) poll(ctx context.Context) {
 		// A drain of a self-hosted model waits for its sessions: the watch
 		// runs the switch the constraint asked for once they are gone.
 		w.inFlight(ctx, th.Interval.Duration, &w.serving, func(ctx context.Context) {
-			_ = w.reconcileServeModes(ctx)
+			_ = w.a.reconcileServeModes(ctx)
 		})
 	}
-	if w.cfg.Central.Enabled() && now.Sub(w.lastCentral) >= w.readEvery(th.Interval.Duration) {
+	if w.a.cfg.Central.Enabled() && now.Sub(w.lastCentral) >= w.readEvery(th.Interval.Duration) {
 		w.lastCentral = now
 		w.inFlight(ctx, th.Interval.Duration, &w.centraling, w.syncRoster)
 	}
-	if now.Sub(w.lastSweep) >= w.readEvery(w.cfg.Outbound.SweepEvery.Duration) {
+	if now.Sub(w.lastSweep) >= w.readEvery(w.a.cfg.Outbound.SweepEvery.Duration) {
 		w.lastSweep = now
 		// The sweep takes a while on a big home directory: the poll does not wait.
 		w.inFlight(ctx, 0, &w.sweeping, func(context.Context) { w.exposures() })
@@ -1615,7 +1615,7 @@ func (w *watcher) poll(ctx context.Context) {
 	}
 	w.saveMark()
 	if w.notifier != nil {
-		w.notifier.Flush(ctx, w.now)
+		w.notifier.Flush(ctx, w.a.now)
 	}
 }
 
@@ -1623,7 +1623,7 @@ func (w *watcher) poll(ctx context.Context) {
 // one ENDED line when it ends: about to expire, expired, or its keeper's
 // renewal failed.
 func (w *watcher) teleport(ctx context.Context) {
-	v := w.readTeleport(ctx)
+	v := w.a.readTeleport(ctx)
 	if v == nil {
 		return
 	}
@@ -1658,7 +1658,7 @@ const (
 // and once it goes on its ENDED line, or a line that it timed out with the
 // vault still locked. Nothing asks the person.
 func (w *watcher) vaultWaits() {
-	if !w.cfg.Secret.Session {
+	if !w.a.cfg.Secret.Session {
 		return
 	}
 	statePath, err := secret.StatePath()
@@ -1714,8 +1714,8 @@ const exposedKey = "exposed "
 // EXPOSED line naming the file when it is found, never its content, and one
 // ENDED line once it is fixed.
 func (w *watcher) exposures() {
-	ctx := w.context()
-	o := w.cfg.Outbound
+	ctx := w.a.context()
+	o := w.a.cfg.Outbound
 	found := map[string]bool{}
 	for _, e := range guard.SweepContext(ctx, o.SweepRoots, o.SweepDepth) {
 		key := exposedKey + e.Path
@@ -1731,9 +1731,9 @@ func (w *watcher) exposures() {
 // budget probes the GitHub budget and says when it is under the floor and
 // when GitHub refuses GraphQL calls, with the callers drawing on it.
 func (w *watcher) budget(ctx context.Context, now time.Time) {
-	b, err := readBudget(w.app, ctx)
+	b, err := readBudget(w.a, ctx)
 	if ctx.Err() == nil {
-		held := err != nil || b.Remaining < w.cfg.GitHub.Floor || b.GraphQL == nil || b.GraphQL.Err != "" || b.GraphQL.Remaining < w.cfg.GitHub.Floor || b.GraphQL.Blocks(now)
+		held := err != nil || b.Remaining < w.a.cfg.GitHub.Floor || b.GraphQL == nil || b.GraphQL.Err != "" || b.GraphQL.Remaining < w.a.cfg.GitHub.Floor || b.GraphQL.Blocks(now)
 		w.publishBudget(held)
 	}
 	switch {
@@ -1744,11 +1744,11 @@ func (w *watcher) budget(ctx context.Context, now time.Time) {
 		}
 	default:
 		w.clear("budget-error")
-		if l := w.check("budget", b.Remaining < w.cfg.GitHub.Floor, "GITHUB BUDGET %d of %d: hold GitHub work until %s",
+		if l := w.check("budget", b.Remaining < w.a.cfg.GitHub.Floor, "GITHUB BUDGET %d of %d: hold GitHub work until %s",
 			b.Remaining, b.Limit, b.Reset.Local().Format("15:04")); l != "" {
 			w.notifyAt(ctx, now, notify.Budget, "", "beekeeper: GitHub budget under the floor", l+"\nbeekeeper budget")
 		}
-		graphqlLow := b.GraphQL != nil && !b.GraphQL.Blocks(now) && b.GraphQL.Remaining < w.cfg.GitHub.Floor
+		graphqlLow := b.GraphQL != nil && !b.GraphQL.Blocks(now) && b.GraphQL.Remaining < w.a.cfg.GitHub.Floor
 		var gqlRemaining, gqlLimit int
 		var gqlReset string
 		if b.GraphQL != nil {
@@ -1762,13 +1762,13 @@ func (w *watcher) budget(ctx context.Context, now time.Time) {
 		var callers string
 		if refused {
 			callers = w.callersText()
-			if recorded, err := githubWindowCallers(w.app, b.GraphQL); err != nil {
+			if recorded, err := githubWindowCallers(w.a, b.GraphQL); err != nil {
 				callers = "window callers unknown (" + err.Error() + "); live: " + callers
 			} else if len(recorded) > 0 {
 				callers = "window: " + githubCallersText(recorded) + "; live: " + callers
 			}
 		}
-		if l := w.check("graphql", refused, "%s; callers: %s", graphqlText(w.app, b.GraphQL), callers); l != "" {
+		if l := w.check("graphql", refused, "%s; callers: %s", graphqlText(w.a, b.GraphQL), callers); l != "" {
 			w.notifyAt(ctx, now, notify.Budget, "", "beekeeper: GitHub refuses GraphQL", l+"\nbeekeeper budget")
 		}
 	}
@@ -1777,11 +1777,11 @@ func (w *watcher) budget(ctx context.Context, now time.Time) {
 // callersText names the gh and devctl processes drawing on GitHub and the
 // sessions they run under, the longest-running first.
 func (w *watcher) callersText() string {
-	sessions, t, err := w.app.sessions()
+	sessions, t, err := w.a.sessions()
 	if err != nil {
 		return "unknown (" + err.Error() + ")"
 	}
-	ps := githubCallers(w.app, t, sessions)
+	ps := githubCallers(w.a, t, sessions)
 	if len(ps) == 0 {
 		return "no gh or devctl process now"
 	}
@@ -1798,16 +1798,16 @@ func (w *watcher) callersText() string {
 // stalls says each stalled lane, one LANE STALLED line per lane and waiting
 // merge when the stall starts and one ENDED line when it ends.
 func (w *watcher) stalls() {
-	st, err := w.readSnapshot()
+	st, err := w.a.readSnapshot()
 	if err != nil {
 		return
 	}
 	stalled := map[string]bool{}
-	for _, v := range w.laneViews(st) {
+	for _, v := range w.a.laneViews(st) {
 		if v.Stall != nil {
 			key := "stall:" + v.Name + ":" + v.Stall.Merge.Key()
 			stalled[key] = true
-			w.emit(key, "LANE STALLED %s: %s", v.Name, w.stallText(*v.Stall))
+			w.emit(key, "LANE STALLED %s: %s", v.Name, w.a.stallText(*v.Stall))
 		}
 	}
 	w.clearMissing("stall:", stalled)
@@ -1820,7 +1820,7 @@ func (w *watcher) stalls() {
 // next merge arrives, and until then the lane shows a merge running that no
 // process runs.
 func (w *watcher) lostMerges(ctx context.Context) {
-	recorded, cut, lost := w.recordGone(ctx)
+	recorded, cut, lost := w.a.recordGone(ctx)
 	for _, d := range cut {
 		w.emitNow("lanes", "MERGE CUT: %s", d)
 	}
@@ -1829,7 +1829,7 @@ func (w *watcher) lostMerges(ctx context.Context) {
 	}
 	for _, m := range lost {
 		w.emitNow("lanes", "MERGE LOST: %s in lane %s by %q: its gate (pid %d) and devctl are gone, whether it merged is unknown; the lane settles until %s, then frees once its HelmReleases are Ready",
-			m.Key(), m.Lane, m.By.Name, m.PID, clock(w.now, w.now.Add(w.cfg.Merge.Settle.Duration)))
+			m.Key(), m.Lane, m.By.Name, m.PID, clock(w.a.now, w.a.now.Add(w.a.cfg.Merge.Settle.Duration)))
 	}
 }
 
@@ -1842,21 +1842,21 @@ func (w *watcher) hungMerges(ctx context.Context, now time.Time) {
 	// The wall/monotonic difference detects suspend on platforms whose
 	// monotonic clock stops asleep; a long gap also covers other platforms
 	// and clocks without monotonic readings.
-	gap := max(5*time.Minute, 2*slowReads*w.cfg.Watch.Interval.Duration)
+	gap := max(5*time.Minute, 2*slowReads*w.a.cfg.Watch.Interval.Duration)
 	wallElapsed := now.Round(0).Sub(w.lastHungCheck.Round(0))
 	elapsed := now.Sub(w.lastHungCheck)
 	if w.lastHungCheck.IsZero() || wallElapsed-elapsed > time.Second || wallElapsed > gap || wallElapsed < 0 {
 		w.hungGrace = now
 	}
 	w.lastHungCheck = now
-	if now.Sub(w.hungGrace) <= w.cfg.Merge.HungAfter.Duration {
+	if now.Sub(w.hungGrace) <= w.a.cfg.Merge.HungAfter.Duration {
 		return
 	}
-	for _, h := range w.endHung(ctx, watchParty, now, w.cfg.Merge.HungAfter.Duration, func(m state.Merge) bool {
-		return now.Sub(m.Started) > w.cfg.Merge.HungAfter.Duration
+	for _, h := range w.a.endHung(ctx, watchParty, now, w.a.cfg.Merge.HungAfter.Duration, func(m state.Merge) bool {
+		return now.Sub(m.Started) > w.a.cfg.Merge.HungAfter.Duration
 	}) {
 		w.emitNow("lanes", "MERGE HUNG: %s in lane %s by %q: %s, its devctl (pid %d) still ran: ended, the lane records it next",
-			h.merge.Key(), h.merge.Lane, h.merge.By.Name, w.pullText(h.pull), h.merge.Child)
+			h.merge.Key(), h.merge.Lane, h.merge.By.Name, w.a.pullText(h.pull), h.merge.Child)
 	}
 }
 
@@ -1868,7 +1868,7 @@ func (w *watcher) hungMerges(ctx context.Context, now time.Time) {
 // merge.settleTimeout is one LANE STUCK line with what the lane waits for,
 // and one ENDED line once it settles or the lane is cleared.
 func (w *watcher) settled(ctx context.Context, now time.Time) {
-	st, err := w.readSnapshot()
+	st, err := w.a.readSnapshot()
 	if err != nil {
 		return
 	}
@@ -1883,14 +1883,14 @@ func (w *watcher) settled(ctx context.Context, now time.Time) {
 		if m.Phase != state.Settling {
 			continue
 		}
-		lane, ok := w.cfg.LaneNamed(m.Lane)
+		lane, ok := w.a.cfg.LaneNamed(m.Lane)
 		if !ok || lane.Installation == "" {
 			// A release its gate confirms settles with the verdict, one
 			// unknown by the settle rule: it may be cutting.
 			if merge.Confirming(m, proc.Alive) {
 				continue
 			}
-			if ready, _ := merge.Ready(lane, nil, &m, now, w.cfg.Merge.Settle.Duration); ready {
+			if ready, _ := merge.Ready(lane, nil, &m, now, w.a.cfg.Merge.Settle.Duration); ready {
 				done[m.Key()] = "no installation to roll"
 			}
 			continue
@@ -1903,7 +1903,7 @@ func (w *watcher) settled(ctx context.Context, now time.Time) {
 		why := ""
 		if r.err != nil {
 			why = fmt.Sprintf("the HelmReleases of %s cannot be read (%v)", lane.Installation, r.err)
-		} else if ready, wait := merge.Ready(lane, r.hrs, &m, now, w.cfg.Merge.Settle.Duration); ready {
+		} else if ready, wait := merge.Ready(lane, r.hrs, &m, now, w.a.cfg.Merge.Settle.Duration); ready {
 			done[m.Key()] = "rolled, HelmReleases of " + lane.Installation + " Ready"
 			if wait != "" {
 				done[m.Key()] = "settled without a roll, " + wait
@@ -1912,7 +1912,7 @@ func (w *watcher) settled(ctx context.Context, now time.Time) {
 		} else {
 			why = wait
 		}
-		if since := now.Sub(m.Finished); since > w.cfg.Merge.SettleTimeout.Duration {
+		if since := now.Sub(m.Finished); since > w.a.cfg.Merge.SettleTimeout.Duration {
 			key := "stuck:" + lane.Name + ":" + m.Key()
 			stuck[key] = true
 			if m.Release == "" && !m.ReleaseFailed {
@@ -1927,7 +1927,7 @@ func (w *watcher) settled(ctx context.Context, now time.Time) {
 		return
 	}
 	var settled []state.Merge
-	_ = w.store.Update(func(st *state.State) ([]state.Event, error) {
+	_ = w.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		var ev []state.Event
 		st.Merges = slices.DeleteFunc(st.Merges, func(m state.Merge) bool {
 			why, ok := done[m.Key()]
@@ -1941,7 +1941,7 @@ func (w *watcher) settled(ctx context.Context, now time.Time) {
 		return ev, nil
 	})
 	for _, m := range settled {
-		w.leaveCentral(ctx, []state.Merge{m}, done[m.Key()])
+		w.a.leaveCentral(ctx, []state.Merge{m}, done[m.Key()])
 	}
 }
 
@@ -1963,7 +1963,7 @@ func (w *watcher) kills(ctx context.Context, since time.Time, sessions []*claude
 	w.clear("journal")
 	var fresh []oomKill
 	var clusters []machine.Cluster
-	runs := &runIndex{store: w.store}
+	runs := &runIndex{store: w.a.store}
 	for _, k := range kills {
 		key := fmt.Sprintf("%d@%d", k.PID, k.At.Unix())
 		if w.seenKills[key] {
@@ -2030,7 +2030,7 @@ func (w *watcher) sessionChanges(sessions []*claude.Session) {
 			quiet = append(quiet, fmt.Sprintf("SESSIONS %s: %s (quiet: watch.quietSessions)", c.what, quoted(held)))
 		}
 	}
-	w.logQuiet(quiet...)
+	w.a.logQuiet(quiet...)
 	w.sessions = cur
 }
 
@@ -2048,7 +2048,7 @@ func quoted(names []string) string {
 // short-lived ones in watch.quietSessions.
 func (w *watcher) quietSessions(names []string) (loud, quiet []string) {
 	for _, n := range names {
-		if slices.ContainsFunc(w.cfg.Watch.QuietSessions, func(p string) bool { return alerts.Glob(p, n) }) {
+		if slices.ContainsFunc(w.a.cfg.Watch.QuietSessions, func(p string) bool { return alerts.Glob(p, n) }) {
 			quiet = append(quiet, n)
 		} else {
 			loud = append(loud, n)
@@ -2068,7 +2068,7 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 	if ctx.Err() != nil {
 		return
 	}
-	st, err := w.readSnapshot()
+	st, err := w.a.readSnapshot()
 	if err != nil {
 		w.fail("state-read", "cannot read the state: %v", err)
 		return
@@ -2137,7 +2137,7 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 		return
 	}
 	signedIn := probeLogins(ctx, st.Notes)
-	probed := probeHoldLifts(ctx, st.Holds, w.now)
+	probed := probeHoldLifts(ctx, st.Holds, w.a.now)
 	if ctx.Err() != nil {
 		return
 	}
@@ -2148,7 +2148,7 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 			return nil
 		}
 		if w.loopOwned {
-			if err := w.loopGitHub(ctx, "watch", readRefs); err != nil {
+			if err := w.a.loopGitHub(ctx, "watch", readRefs); err != nil {
 				over, kept = nil, nil
 			}
 		} else {
@@ -2166,12 +2166,12 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 		w.wouldOvertake(st, over, kept)
 		over, kept = nil, nil
 	}
-	githubHeld := loop.BoardBudgetLow(st.Budget, w.cfg.GitHub.Floor, w.now) || w.resetFirst(st)
+	githubHeld := loop.BoardBudgetLow(st.Budget, w.a.cfg.GitHub.Floor, w.a.now) || w.a.resetFirst(st)
 	var found map[int]checkResult
 	if w.loopOwned {
-		found = w.loopTimerChecks(ctx, st.Timers, w.now, githubHeld)
+		found = w.a.loopTimerChecks(ctx, st.Timers, w.a.now, githubHeld)
 	} else {
-		found = checkTimers(ctx, st.Timers, w.now, githubHeld)
+		found = checkTimers(ctx, st.Timers, w.a.now, githubHeld)
 	}
 	if ctx.Err() != nil {
 		return
@@ -2193,21 +2193,21 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 		lines, evs := closeProbed(st, signedIn)
 		hl, he := liftProbed(st, probed)
 		lines, evs = append(lines, hl...), append(evs, he...)
-		nl, ne, nd := closeDefaulted(st, w.cfg.Guide.Person, watchParty, w.now)
+		nl, ne, nd := closeDefaulted(st, w.a.cfg.Guide.Person, watchParty, w.a.now)
 		lines, evs, defaulted = append(lines, nl...), append(evs, ne...), nd
 		overtaken = heldAmong(st.Notes, over)
 		ol, oe := closeOvertaken(st, over, watchParty)
 		lines, evs = append(lines, ol...), append(evs, oe...)
 		ol, oe = keepOpen(st, kept, watchParty)
 		lines, evs = append(lines, ol...), append(evs, oe...)
-		kl, ke := markResumable(st, w.recheckLeaseParks(st, parks), w.cfg.Agents.AutoResume, w.now)
+		kl, ke := markResumable(st, w.a.recheckLeaseParks(st, parks), w.a.cfg.Agents.AutoResume, w.a.now)
 		lines, evs = append(lines, kl...), append(evs, ke...)
-		tl, te, tf, touched := settleTimersMatching(st, found, w.now, w.cfg.Watch.Interval.Duration, settles)
+		tl, te, tf, touched := settleTimersMatching(st, found, w.a.now, w.a.cfg.Watch.Interval.Duration, settles)
 		lines, evs, fires = append(lines, tl...), append(evs, te...), tf
 		seen := touched
-		pl, pe := firePending(st, sessions, w.now)
+		pl, pe := firePending(st, sessions, w.a.now)
 		lines, evs = append(lines, pl...), append(evs, pe...)
-		ppl, ppe := parkedNews(st, w.cfg.Guide.Person, w.now)
+		ppl, ppe := parkedNews(st, w.a.cfg.Guide.Person, w.a.now)
 		lines, evs = append(lines, ppl...), append(evs, ppe...)
 		return lines, evs, seen || len(lines) > 0 || len(evs) > 0
 	}
@@ -2217,7 +2217,7 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 	var lines []string
 	var due []dueItem
 	var verdicts []state.WorkerReport
-	err = w.store.Update(func(st *state.State) ([]state.Event, error) {
+	err = w.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		var evs []state.Event
 		verdicts = slices.DeleteFunc(slices.Clone(st.WorkerReports), func(r state.WorkerReport) bool { return r.TellTo == (state.Party{}) })
 		lines, evs, _ = fire(st)
@@ -2225,7 +2225,7 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 			evs = append(evs, event(watchParty, "watch.pending", "%s", l))
 		}
 		w.records = st.Records
-		due = firedNow(st, w.now)
+		due = firedNow(st, w.a.now)
 		return evs, nil
 	})
 	if err != nil {
@@ -2265,7 +2265,7 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 // emitReleased releases the board items the closed decision n held and
 // says so, one line each.
 func (w *watcher) emitReleased(ctx context.Context, n *state.Note, how string) {
-	for _, l := range w.release(ctx, watchParty, n, how) {
+	for _, l := range w.a.release(ctx, watchParty, n, how) {
 		w.emitNow("pending", "%s", l)
 	}
 }
@@ -2280,7 +2280,7 @@ func (w *watcher) noteAnswers(st *state.State) {
 	prev := w.openNotes
 	w.openNotes = open
 	if prev == nil {
-		w.answersSince = w.now
+		w.answersSince = w.a.now
 		return
 	}
 	closed := false
@@ -2291,7 +2291,7 @@ func (w *watcher) noteAnswers(st *state.State) {
 		return
 	}
 	since := w.answersSince
-	evs, err := w.store.Events(0, func(e state.Event) bool { return e.Verb == answerRecorded && e.At.After(since) })
+	evs, err := w.a.store.Events(0, func(e state.Event) bool { return e.Verb == answerRecorded && e.At.After(since) })
 	if err != nil {
 		return // the next close reads them again
 	}
@@ -2306,13 +2306,13 @@ func (w *watcher) noteAnswers(st *state.State) {
 // refusals reports upstream refusals and recovered hook panics since the
 // last reading. The first reading establishes a baseline and says none.
 func (w *watcher) refusals() {
-	evs, err := w.store.Follow("watch.refused", func(e state.Event) bool { return e.Verb == verbHookRefused || e.Verb == "hook.panic" })
+	evs, err := w.a.store.Follow("watch.refused", func(e state.Event) bool { return e.Verb == verbHookRefused || e.Verb == "hook.panic" })
 	if err != nil {
 		return // the next reading reads them again
 	}
 	since := w.refusedSince
 	if since.IsZero() {
-		w.refusedSince = w.now
+		w.refusedSince = w.a.now
 		return
 	}
 	for _, e := range evs {
@@ -2337,30 +2337,30 @@ func (w *watcher) stoppedAgents(st *state.State, sessions []*claude.Session) {
 		if st.Report.Running() && ag.Is(st.Report.Party) {
 			continue // the reporter's turn ended: tendReporter ends it, nobody resumes it
 		}
-		if keptBy(st, ag, w.now) != "" {
+		if keptBy(st, ag, w.a.now) != "" {
 			continue // parked on purpose: a person or its timer brings it back
 		}
 		k := cmp.Or(ag.Session, ag.Name)
-		last, gone := goneAgent(w.cfg, st, sessions, ag, w.cfg.Agents.StaleAfter.Duration, w.now)
+		last, gone := goneAgent(w.a.cfg, st, sessions, ag, w.a.cfg.Agents.StaleAfter.Duration, w.a.now)
 		if gone {
 			k += "/gone"
 		}
 		stopped[k] = true
 		if !w.stopped[k] {
 			hint := resumeHint(ag)
-			switch on := parkedOn(waitsOf(st.Records, ag), w.cfg.Guide.Person); {
+			switch on := parkedOn(waitsOf(st.Records, ag), w.a.cfg.Guide.Person); {
 			case ag.Undelivered != "":
 				hint = fmt.Sprintf("task not delivered: %s; beekeeper agents wake %q <message> delivers it", ag.Undelivered, ag.Name)
-			case ag.Import.Pending(w.now):
-				hint = importStatus(ag, w.now)
+			case ag.Import.Pending(w.a.now):
+				hint = importStatus(ag, w.a.now)
 			case on != "":
 				hint = fmt.Sprintf("parked on a person: %s; their answer resumes it", on)
 			case resumedForTask(ag):
-				hint = fmt.Sprintf("ended on a wait again after its resume at %s on %s: %s", clock(w.now, ag.ResumedWait), ag.ResumedOn, hint)
+				hint = fmt.Sprintf("ended on a wait again after its resume at %s on %s: %s", clock(w.a.now, ag.ResumedWait), ag.ResumedOn, hint)
 			}
 			if gone {
 				hint = goneActivityPrefix + last.UTC().Format(time.RFC3339) + "; doctor retires it; " + hint
-				if qerr := agyQuotaError(w.cfg, ag); qerr != nil {
+				if qerr := agyQuotaError(w.a.cfg, ag); qerr != nil {
 					hint = qerr.Error() + "; slot freed; doctor retires it and supervisor re-queues its task"
 				}
 			}
@@ -2381,13 +2381,13 @@ func (w *watcher) importWaits(st *state.State) {
 	waits := map[string]time.Time{}
 	var now []string
 	for _, ag := range st.Agents {
-		if !ag.Import.Pending(w.now) {
+		if !ag.Import.Pending(w.a.now) {
 			continue
 		}
 		k := cmp.Or(ag.Session, ag.Name)
 		waits[k] = ag.Import.Since
 		if !w.waits[k].Equal(ag.Import.Since) {
-			now = append(now, fmt.Sprintf("%q (%s)", ag.Name, importStatus(ag, w.now)))
+			now = append(now, fmt.Sprintf("%q (%s)", ag.Name, importStatus(ag, w.a.now)))
 		}
 	}
 	w.waits = waits
@@ -2449,9 +2449,9 @@ const loopRestartEvery = time.Minute
 // ever started or relayed for it.
 func (w *watcher) checkLoop(ctx context.Context, st *state.State) bool {
 	if w.standby {
-		w.rearmRecovery()
+		w.a.rearmRecovery()
 	}
-	if line, err := w.checkDeliveries(w.now); err != nil {
+	if line, err := w.a.checkDeliveries(w.a.now); err != nil {
 		w.fail("delivery", "cannot read delivery health")
 	} else {
 		w.clear("delivery")
@@ -2459,7 +2459,7 @@ func (w *watcher) checkLoop(ctx context.Context, st *state.State) bool {
 			w.emitNow("delivery", "%s", line)
 		}
 	}
-	if line, err := w.checkThroughput(w.now, false); err != nil {
+	if line, err := w.a.checkThroughput(w.a.now, false); err != nil {
 		w.fail(watchThroughputKey, "release throughput unknown: cannot read durable health")
 	} else {
 		w.clear(watchThroughputKey)
@@ -2469,7 +2469,7 @@ func (w *watcher) checkLoop(ctx context.Context, st *state.State) bool {
 	}
 	if w.loopRunning() {
 		if w.stand.loopDown {
-			w.emitNow("supervisor", "SUPERVISOR LOOP BACK: the supervisor loop runs again (down since %s)", clock(w.now, w.stand.loopSince))
+			w.emitNow("supervisor", "SUPERVISOR LOOP BACK: the supervisor loop runs again (down since %s)", clock(w.a.now, w.stand.loopSince))
 		}
 		w.stand.loopDown, w.stand.loopSince = false, time.Time{}
 		return true
@@ -2480,18 +2480,18 @@ func (w *watcher) checkLoop(ctx context.Context, st *state.State) bool {
 		return false
 	}
 	if w.stand.loopSince.IsZero() {
-		w.stand.loopSince = w.now
+		w.stand.loopSince = w.a.now
 	}
 	restart := ""
 	if w.standby {
 		restart = w.restartLoop(ctx)
 	}
-	if w.now.Sub(w.stand.loopSince) < loopDownGrace {
+	if w.a.now.Sub(w.stand.loopSince) < loopDownGrace {
 		return false
 	}
 	key := "loop@" + w.stand.loopSince.UTC().Format(time.RFC3339)
 	l := fmt.Sprintf("SUPERVISOR LOOP DOWN: the supervisor loop does not run since %s; no pull request is reviewed or merged on its go and no worker starts until it runs (%s)%s",
-		clock(w.now, w.stand.loopSince), loopServiceHint(), restart)
+		clock(w.a.now, w.stand.loopSince), loopServiceHint(), restart)
 	if !w.stand.loopDown {
 		w.stand.loopDown = true
 		w.emitNow("supervisor", "%s", l)
@@ -2516,10 +2516,10 @@ func (w *watcher) restartLoop(ctx context.Context) string {
 	if unitComingUp(unit.state(ctx)) {
 		return "; its service is starting"
 	}
-	if !w.stand.loopRestart.IsZero() && w.now.Sub(w.stand.loopRestart) < loopRestartEvery {
-		return fmt.Sprintf("; the standby watch restarted its service at %s", clock(w.now, w.stand.loopRestart))
+	if !w.stand.loopRestart.IsZero() && w.a.now.Sub(w.stand.loopRestart) < loopRestartEvery {
+		return fmt.Sprintf("; the standby watch restarted its service at %s", clock(w.a.now, w.stand.loopRestart))
 	}
-	w.stand.loopRestart = w.now
+	w.stand.loopRestart = w.a.now
 	if err := unit.start(ctx); err != nil {
 		w.emitNow("supervisor-restart", "SUPERVISOR LOOP RESTART FAILED: %s: %v (beekeeper install installs it)", loopUnit, err)
 		return fmt.Sprintf("; restarting its service failed: %v", err)
@@ -2606,7 +2606,7 @@ func (w *watcher) tellReviewVerdicts(ctx context.Context, reports []state.Worker
 	for _, r := range reports {
 		to := cmp.Or(r.TellTo.Session, r.TellTo.HostSession, r.TellTo.Name)
 		msg := fmt.Sprintf("The desk review %q reports:\n%s", r.By.Name, r.Text)
-		if err := w.wakeAgent(ctx, watchParty, to, msg, ""); err != nil {
+		if err := w.a.wakeAgent(ctx, watchParty, to, msg, ""); err != nil {
 			w.emitNow("pending", "REVIEW VERDICT NOT DELIVERED to %q from %q: %v", r.TellTo.Name, r.By.Name, err)
 		}
 	}
@@ -2719,10 +2719,10 @@ func leaseQueueText(st *state.State, party state.Party, res string) string {
 // metrics.runaway, once per watch: a GitHub budget drain, the same failing
 // tool call repeating, a context near its window.
 func (w *watcher) runaways(sessions []*claude.Session, t *proc.Table) {
-	holders, _ := lease.Dir(w.cfg.LeaseDir).List()
-	_, ms := w.sessionMetrics(sessions, t, holders)
+	holders, _ := lease.Dir(w.a.cfg.LeaseDir).List()
+	_, ms := w.a.sessionMetrics(sessions, t, holders)
 	for i, s := range sessions {
-		lines := w.runaway(s, ms[i])
+		lines := w.a.runaway(s, ms[i])
 		for _, figure := range slices.Sorted(maps.Keys(lines)) {
 			key := "runaway " + s.Key() + " " + figure
 			if !w.reported[key] {
@@ -2737,26 +2737,26 @@ func (w *watcher) runaways(sessions []*claude.Session, t *proc.Table) {
 // memcap.holdBound: one SLOT HELD LONG line naming the slot, its holder and
 // the command when it starts, one ENDED line when the slot is free again.
 func (w *watcher) slotHolds() {
-	bound := w.cfg.Memcap.HoldBound.Duration
+	bound := w.a.cfg.Memcap.HoldBound.Duration
 	if bound <= 0 {
 		return
 	}
 	found := map[string]bool{}
-	for _, s := range machine.ReadSlots(w.slotView()) {
+	for _, s := range machine.ReadSlots(w.a.slotView()) {
 		h, ok := guard.ParseHolder(s.Holder)
-		if s.Free || !ok || h.Since.IsZero() || w.now.Sub(h.Since) < bound {
+		if s.Free || !ok || h.Since.IsZero() || w.a.now.Sub(h.Since) < bound {
 			continue
 		}
 		key := fmt.Sprintf("slothold:%d:%d:%s", s.N, h.PID, h.Since.UTC().Format(time.RFC3339))
 		found[key] = true
 		w.emit(key, "SLOT HELD LONG: slot %d past memcap.holdBound (%s), held by %s — a benchmark or a lab proof runs with beekeeper run --class benchmark|lab, which takes no slot",
-			s.N, dur(bound), guard.HolderText(s.Holder, w.now))
+			s.N, dur(bound), guard.HolderText(s.Holder, w.a.now))
 	}
 	w.clearMissing("slothold:", found)
 }
 
 func (w *watcher) staleLeases(ctx context.Context, sessions []*claude.Session) {
-	holders, err := lease.Dir(w.cfg.LeaseDir).List()
+	holders, err := lease.Dir(w.a.cfg.LeaseDir).List()
 	if err != nil {
 		return
 	}
@@ -2767,11 +2767,11 @@ func (w *watcher) staleLeases(ctx context.Context, sessions []*claude.Session) {
 			w.emit("lease-damaged:"+h.Env, "DAMAGED LEASE: %s's holder record cannot be read (%s): it stays held until beekeeper lease release %s --force", h.Env, h.Damaged, h.Env)
 			continue
 		}
-		v := w.leaseView(sessions, h)
+		v := w.a.leaseView(sessions, h)
 		key := h.Env + "@" + h.Since
-		if overrun := w.leaseOverrun(h); overrun != "" {
+		if overrun := w.a.leaseOverrun(h); overrun != "" {
 			found["lease-round:"+key] = true
-			w.emit("lease-round:"+key, "LEASE HELD PAST ROUND: %s held by %q since %s: %s%s", h.Env, v.Name, clock(w.now, h.SinceTime()), oneLine(h.Purpose), overrun)
+			w.emit("lease-round:"+key, "LEASE HELD PAST ROUND: %s held by %q since %s: %s%s", h.Env, v.Name, clock(w.a.now, h.SinceTime()), oneLine(h.Purpose), overrun)
 		}
 		if v.State == holderGone && !w.reported["lease "+key] {
 			w.reported["lease "+key], w.dirty = true, true

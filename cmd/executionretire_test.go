@@ -51,7 +51,7 @@ func retireFixture(t *testing.T, change func(*state.State, *state.ExecutionRecor
 	}); err != nil {
 		t.Fatal(err)
 	}
-	return a, &watcher{app: a}, fake, r.Ref
+	return a, &watcher{a: a}, fake, r.Ref
 }
 
 func retirementOf(t *testing.T, a *app, ref execution.Ref) *state.ExecutionRetirement {
@@ -159,7 +159,7 @@ func TestExecutionRetirementSurvivesAnUnreachableHost(t *testing.T) {
 	fake.fail = &execution.UnreachableError{Operation: "retire", Cause: errors.New("connection refused")}
 	tick(t, a, w)
 	x := retirementOf(t, a, ref)
-	if x.RevokedAt.IsZero() || !x.RetiredAt.IsZero() || x.HostError == "" || x.Attempts != 1 || !x.NextAttempt.After(w.now) || x.Finished() {
+	if x.RevokedAt.IsZero() || !x.RetiredAt.IsZero() || x.HostError == "" || x.Attempts != 1 || !x.NextAttempt.After(w.a.now) || x.Finished() {
 		t.Fatalf("retirement = %+v", x)
 	}
 	tick(t, a, w)
@@ -167,7 +167,7 @@ func TestExecutionRetirementSurvivesAnUnreachableHost(t *testing.T) {
 		t.Fatalf("a retry ignored its backoff: %d", len(fake.requests))
 	}
 	fake.fail = nil
-	w.now = x.NextAttempt.Add(time.Second)
+	w.a.now = x.NextAttempt.Add(time.Second)
 	tick(t, a, w)
 	done := retirementOf(t, a, ref)
 	if !done.Finished() || done.ID != x.ID || done.HostError != "" || !done.RevokedAt.Equal(x.RevokedAt) {
@@ -197,7 +197,7 @@ func TestExecutionRevocationRetriesWithoutFalseSuccess(t *testing.T) {
 	if err := os.WriteFile(ledger, []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	w.now = x.NextAttempt.Add(time.Second)
+	w.a.now = x.NextAttempt.Add(time.Second)
 	tick(t, a, w)
 	done := retirementOf(t, a, ref)
 	if !done.Finished() || done.RevokeError != "" || len(fake.requests) != 1 {
@@ -279,7 +279,7 @@ func TestExecutionRetirementWaitsForAnOlderHost(t *testing.T) {
 	fake.fail = execution.ErrUnsupported
 	tick(t, a, w)
 	x := retirementOf(t, a, ref)
-	if !x.RetiredAt.IsZero() || x.HostError == "" || !x.NextAttempt.After(w.now) {
+	if !x.RetiredAt.IsZero() || x.HostError == "" || !x.NextAttempt.After(w.a.now) {
 		t.Fatalf("retirement = %+v", x)
 	}
 	if w.isActive(executionRetireEmitKey) {

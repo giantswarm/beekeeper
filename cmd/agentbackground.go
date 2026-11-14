@@ -734,10 +734,10 @@ func (w *watcher) stopParked(ctx context.Context, st *state.State, sessions []*c
 	if err != nil {
 		return // no turn is known to have ended
 	}
-	for _, p := range parkedResident(st, sessions, t, w.now) {
+	for _, p := range parkedResident(st, sessions, t, w.a.now) {
 		key := "park-stop-" + p.Session
 		short := p.Session[:min(8, len(p.Session))]
-		stopped, err := w.stopParkedSession(ctx, st, p)
+		stopped, err := w.a.stopParkedSession(ctx, st, p)
 		if err != nil {
 			w.fail(key, "PARKED SESSION STAYS %q: its background session %s keeps its memory: %v", p.Name, short, err)
 			continue
@@ -746,7 +746,7 @@ func (w *watcher) stopParked(ctx context.Context, st *state.State, sessions []*c
 		if !stopped {
 			continue
 		}
-		_ = w.store.Record(event(watchParty, parkStoppedEvent, "%s: stopped its background session %s while it is parked; its wake resumes it", p.Name, p.Session))
+		_ = w.a.store.Record(event(watchParty, parkStoppedEvent, "%s: stopped its background session %s while it is parked; its wake resumes it", p.Name, p.Session))
 		w.emitNow("park-stop", "PARKED SESSION STOPPED %q: background session %s frees its memory while parked; its wake resumes it (claude attach %s)", p.Name, short, short)
 	}
 	for _, ag := range st.Agents {
@@ -757,7 +757,7 @@ func (w *watcher) stopParked(ctx context.Context, st *state.State, sessions []*c
 		if !ok {
 			continue
 		}
-		if _, busy := turnRunning(sessions, t, ag.Party, w.now); busy {
+		if _, busy := turnRunning(sessions, t, ag.Party, w.a.now); busy {
 			continue
 		}
 		unit := h.Unit(id)
@@ -770,7 +770,7 @@ func (w *watcher) stopParked(ctx context.Context, st *state.State, sessions []*c
 			continue
 		}
 		w.clear(key)
-		_ = w.store.Record(event(watchParty, parkStoppedEvent, "%s: stopped its %s unit %s while it is parked; its wake resumes it", ag.Name, h.Name(), unit))
+		_ = w.a.store.Record(event(watchParty, parkStoppedEvent, "%s: stopped its %s unit %s while it is parked; its wake resumes it", ag.Name, h.Name(), unit))
 		w.emitNow("park-stop", "PARKED SESSION STOPPED %q: %s unit %s frees its memory while parked; its wake resumes it", ag.Name, h.Name(), unit)
 	}
 }

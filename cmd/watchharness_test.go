@@ -58,7 +58,7 @@ func TestWatchTracksEveryHarnessRunner(t *testing.T) {
 			dir := t.TempDir()
 			w, _, out := notifyingWatch(t, dir, false)
 			party := fake.session.Party()
-			if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+			if err := w.a.store.Update(func(st *state.State) ([]state.Event, error) {
 				st.Agents = []state.Agent{{Party: party, Task: "finish task", Harness: name}}
 				st.Records = []state.Record{{Session: party, Issue: "https://github.com/example/project/issues/1"}}
 				return nil, nil

@@ -97,10 +97,10 @@ func TestProbeThatCannotRunIsOneGuideProblem(t *testing.T) {
 	}
 
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
-	if err := w.store.Update(func(s *state.State) ([]state.Event, error) { s.Timers = st.Timers; return nil, nil }); err != nil {
+	if err := w.a.store.Update(func(s *state.State) ([]state.Event, error) { s.Timers = st.Timers; return nil, nil }); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.timerList(false); err != nil {
+	if err := w.a.timerList(false); err != nil {
 		t.Fatal(err)
 	}
 	if want := "\n    checked 02:20: could not run since 02:00: " + sshUnresolvedSays + "\n"; !strings.Contains(out.String(), want) {
@@ -177,10 +177,10 @@ func TestProbeThatHoldsAfterFailingIsNotListedAsFailing(t *testing.T) {
 		t.Fatalf("re-armed after the probe held: %+v", st.Timers)
 	}
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
-	if err := w.store.Update(func(s *state.State) ([]state.Event, error) { s.Timers = st.Timers; return nil, nil }); err != nil {
+	if err := w.a.store.Update(func(s *state.State) ([]state.Event, error) { s.Timers = st.Timers; return nil, nil }); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.timerList(false); err != nil {
+	if err := w.a.timerList(false); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(out.String(), "could not run") {

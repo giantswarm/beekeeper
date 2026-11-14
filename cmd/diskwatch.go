@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/machine"
 	"github.com/giantswarm/beekeeper/internal/proc"
 )
@@ -68,14 +69,14 @@ func (w *watcher) sampleDisk(now time.Time, d machine.Disk, t *proc.Table, owner
 	if w.disk.pathsAt.IsZero() || now.Sub(w.disk.pathsAt) >= minDiskSpan {
 		read := w.disk.readPaths
 		if read == nil {
-			read = func(ctx context.Context) []diskPath { return readDiskPaths(ctx, w.diskPathRoots()) }
+			read = func(ctx context.Context) []diskPath { return readDiskPaths(ctx, w.a.diskPathRoots()) }
 		}
-		paths := read(w.context())
+		paths := read(w.a.context())
 		diskPathGrowth(paths, w.disk.paths)
 		w.disk.paths = paths
 		w.disk.pathsAt = now
 	}
-	th := w.cfg.Watch
+	th := w.a.cfg.Watch
 	low := d.FreeMiB < th.DiskMin(d.TotalMiB)
 	w.check("disk", low, "LOW DISK: / %d GiB free", d.FreeMiB/1024)
 	w.check("diskfull", d.FreeMiB < th.DiskCritical(d.TotalMiB), "DISK NEARLY FULL: / %d GiB free of %d GiB", d.FreeMiB/1024, d.TotalMiB/1024)
@@ -89,7 +90,7 @@ func (w *watcher) sampleDisk(now time.Time, d machine.Disk, t *proc.Table, owner
 			perMin/1024, d.FreeMiB/1024, int(float64(d.FreeMiB)/perMin), w.disk.writersLine(now, d.FreeMiB, t, owners))
 	}
 	w.check("diskfill", filling, "%s", line)
-	w.publishDisk(watchDiskReading{Low: low, Filling: filling, Writers: w.disk.writersLine(now, d.FreeMiB, t, owners), FreeMiB: d.FreeMiB, MinMiB: th.DiskMin(d.TotalMiB)})
+	w.publishDisk(capacity.WatchDiskReading{Low: low, Filling: filling, Writers: w.disk.writersLine(now, d.FreeMiB, t, owners), FreeMiB: d.FreeMiB, MinMiB: th.DiskMin(d.TotalMiB)})
 	w.diskPrune(now, low || filling)
 }
 

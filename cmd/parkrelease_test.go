@@ -34,7 +34,7 @@ func TestParkReleaseAvailability(t *testing.T) {
 	if ag.Park == nil || ag.Park.On != target || ag.Park.ReviewHead != "" {
 		t.Fatalf("park %+v", ag.Park)
 	}
-	if got := parkedText(ag.Park, w.now); !strings.Contains(got, target) {
+	if got := parkedText(ag.Park, w.a.now); !strings.Contains(got, target) {
 		t.Fatal(got)
 	}
 	old := readParkRelease
@@ -59,14 +59,14 @@ func TestParkReleaseAvailability(t *testing.T) {
 				}
 				return []byte(tc.raw), tc.err
 			}
-			st, _ := w.store.Read()
+			st, _ := w.a.store.Read()
 			st.Parks = append(st.Parks, state.Park{By: state.Party{Name: "off roster", Session: "release-session"}, On: target})
 			settled := w.settledParks(context.Background(), st)
 			if len(settled) != tc.want || calls != 1 {
 				t.Fatalf("settled %+v, calls %d", settled, calls)
 			}
 			if tc.want > 0 {
-				lines, _ := markResumable(st, settled, true, w.now)
+				lines, _ := markResumable(st, settled, true, w.a.now)
 				if len(lines) != 2 || !strings.Contains(lines[0], "is available") {
 					t.Fatalf("wake lines %v", lines)
 				}
@@ -92,7 +92,7 @@ func TestServeReleaseTarget(t *testing.T) {
 
 func TestReleaseParkWakesOnce(t *testing.T) {
 	w := parkingWatch(t, nil)
-	w.cfg.Agents.AutoResume = true
+	w.a.cfg.Agents.AutoResume = true
 	woke := stubWakes(t)
 	const target = "example/tool@v1.2.3"
 	if err := park(t, w, "--on", target, "release to promote"); err != nil {

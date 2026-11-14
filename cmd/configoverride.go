@@ -319,11 +319,11 @@ func (a *app) settleOverrides(ctx context.Context, by state.Party, check func([]
 // overrides settles the overrides whose end arrived, a GitHub check held
 // while githubHeld, and says what it did.
 func (w *watcher) overrides(ctx context.Context, githubHeld bool) {
-	lines, err := w.settleOverrides(ctx, watchParty, func(ts []state.Timer) map[int]checkResult {
+	lines, err := w.a.settleOverrides(ctx, watchParty, func(ts []state.Timer) map[int]checkResult {
 		if w.loopOwned {
-			return w.loopTimerChecks(ctx, ts, w.now, githubHeld)
+			return w.a.loopTimerChecks(ctx, ts, w.a.now, githubHeld)
 		}
-		return checkTimers(ctx, ts, w.now, githubHeld)
+		return checkTimers(ctx, ts, w.a.now, githubHeld)
 	})
 	for _, l := range lines {
 		w.emitNow("pending", "%s", l)
@@ -343,7 +343,7 @@ func loopSettleOverrides(l *loop.Loop, ctx context.Context, st *state.State) {
 		return a.loopTimerChecks(ctx, ts, a.now, held)
 	})
 	snapshot := *a
-	w := &watcher{app: &snapshot}
+	w := &watcher{a: &snapshot}
 	for _, line := range lines {
 		w.emitNow("timer", "%s", line)
 	}

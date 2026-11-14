@@ -155,8 +155,8 @@ func (w *watcher) guideGone(ctx context.Context, st *state.State, sessions []*cl
 		// The guide's own watch, which records its CLI, went with it: the
 		// standby records since when it is gone, or the grace would start
 		// anew on every poll and no successor would ever start.
-		err := w.store.UpdateWithin(time.Second, func(st *state.State) ([]state.Event, error) {
-			_, evs := guideRole.observeCLI(st, sessions, w.now)
+		err := w.a.store.UpdateWithin(time.Second, func(st *state.State) ([]state.Event, error) {
+			_, evs := guideRole.observeCLI(st, sessions, w.a.now)
 			r = guideRole.get(st)
 			return evs, nil
 		})
@@ -166,8 +166,8 @@ func (w *watcher) guideGone(ctx context.Context, st *state.State, sessions []*cl
 		}
 		w.clear("guide-observe")
 	}
-	sv := readHolder(r, sessions, w.now, w.cfg.Guide.RestartGrace.Duration)
-	if !sv.down() || relayPending(st, r, w.now) || w.firstTurn(ctx, st, r.Holder.Party) {
+	sv := readHolder(r, sessions, w.a.now, w.a.cfg.Guide.RestartGrace.Duration)
+	if !sv.down() || relayPending(st, r, w.a.now) || w.firstTurn(ctx, st, r.Holder.Party) {
 		if sv.live {
 			w.stand.guideGap = ""
 			w.upAgain(guideRole, r.Holder.Party)
@@ -178,7 +178,7 @@ func (w *watcher) guideGone(ctx context.Context, st *state.State, sessions []*cl
 	successor := w.standIn(ctx, guideRole, st, r.Holder.Party, key)
 	if w.stand.guideGap != key {
 		w.stand.guideGap = key
-		w.emitNow("guide", "GUIDE GONE: %q (guiding since %s) is gone since %s%s", r.Holder.Name, clock(w.now, r.Holder.Since), clock(w.now, sv.gone), successor)
+		w.emitNow("guide", "GUIDE GONE: %q (guiding since %s) is gone since %s%s", r.Holder.Name, clock(w.a.now, r.Holder.Since), clock(w.a.now, sv.gone), successor)
 	}
 }
 
@@ -255,19 +255,19 @@ func (w *watcher) standIn(ctx context.Context, rl role, st *state.State, holder 
 	if started(st, holder) {
 		if c.revived != key && w.stand.revive != nil {
 			c.revived = key
-			return w.reviveGone(ctx, rl, holder, w.backgroundAgent(ctx, st, holder))
+			return w.reviveGone(ctx, rl, holder, w.a.backgroundAgent(ctx, st, holder))
 		}
 		if c.failed != key {
 			c.failed, c.failures = key, c.failures+1
-			c.next = w.now.Add(successorBackoff << (c.failures - 1))
+			c.next = w.a.now.Add(successorBackoff << (c.failures - 1))
 			if c.failures == 1 {
 				c.note = w.noteFailedSuccessor(rl, holder)
 			}
-			w.emitNow(rl.name+"-successor", "%sSUCCESSOR DOWN: %q did not come up%s", rl.tag, holder.Name, c.outlook(w.now))
+			w.emitNow(rl.name+"-successor", "%sSUCCESSOR DOWN: %q did not come up%s", rl.tag, holder.Name, c.outlook(w.a.now))
 		}
 	}
-	if c.failures >= maxFailedSuccessors || w.now.Before(c.next) {
-		return c.outlook(w.now)
+	if c.failures >= maxFailedSuccessors || w.a.now.Before(c.next) {
+		return c.outlook(w.a.now)
 	}
 	return w.succeedGone(ctx, rl, holder)
 }
@@ -415,7 +415,7 @@ func sendRequest(host, msg string) string {
 // noteFailedSuccessor files the one note for the person on rl's first
 // successor that did not come up, and returns its number (0: none filed).
 func (w *watcher) noteFailedSuccessor(rl role, holder state.Party) int {
-	person := w.cfg.Guide.Person
+	person := w.a.cfg.Guide.Person
 	if person == "" {
 		return 0
 	}
@@ -427,10 +427,10 @@ func (w *watcher) noteFailedSuccessor(rl role, holder state.Party) int {
 		Options:   []string{"take over: the running session holds the role and arms its watch", "leave it: the standby watch retries"},
 	}
 	var id int
-	_ = w.store.Update(func(st *state.State) ([]state.Event, error) {
+	_ = w.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.NextNote++
 		id = st.NextNote
-		n := state.Note{ID: id, For: person, Text: d.text(), By: watchParty, At: w.now.UTC(), Kind: noteDecision,
+		n := state.Note{ID: id, For: person, Text: d.text(), By: watchParty, At: w.a.now.UTC(), Kind: noteDecision,
 			Default: fmt.Sprintf("the standby watch starts at most %d successors, %s apart and doubling", maxFailedSuccessors, dur(successorBackoff))}
 		st.Notes = append(st.Notes, n)
 		return []state.Event{event(watchParty, "note.add", "#%d %s", n.ID, n.Text)}, nil
@@ -481,8 +481,8 @@ func (w *watcher) succeedAsync(ctx context.Context, rl role, holder state.Party,
 // The hand-over is no one's decision; a start that did not begin or failed
 // is tried again after successorBackoff.
 func (w *watcher) relayOverdue(ctx context.Context, rl role, st *state.State, sessions []*claude.Session) {
-	cfg, r := rl.cfg(w.cfg), rl.get(st)
-	if st.Stop != nil || !pastRelayGrace(r, cfg, w.now) || w.now.Before(w.stand.overdueNext[rl.name]) {
+	cfg, r := rl.cfg(w.a.cfg), rl.get(st)
+	if st.Stop != nil || !pastRelayGrace(r, cfg, w.a.now) || w.a.now.Before(w.stand.overdueNext[rl.name]) {
 		return
 	}
 	c := sessionContext(sessions, r.Holder.Party)
@@ -492,8 +492,8 @@ func (w *watcher) relayOverdue(ctx context.Context, rl role, st *state.State, se
 	if w.stand.overdueNext == nil {
 		w.stand.overdueNext = map[string]time.Time{}
 	}
-	w.stand.overdueNext[rl.name] = w.now.Add(successorBackoff)
-	holder, since := r.Holder.Party, clock(w.now, r.RelayDue.Reported)
+	w.stand.overdueNext[rl.name] = w.a.now.Add(successorBackoff)
+	holder, since := r.Holder.Party, clock(w.a.now, r.RelayDue.Reported)
 	w.succeedAsync(ctx, rl, holder, func(to state.Party, err error) {
 		if err != nil {
 			w.emitNow(rl.name+"-relayed", "%sRELAY FAILED: %q is at %s tokens of context, over %s since its relay due at %s, and its successor did not start: %v",
@@ -528,8 +528,8 @@ func (w *watcher) resumeRestarted(ctx context.Context, rl role, st *state.State,
 	}
 	var restarted []state.Event
 	var sup *state.Supervisor
-	err := w.store.Update(func(st *state.State) ([]state.Event, error) {
-		_, evs := rl.observeCLI(st, sessions, w.now)
+	err := w.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		_, evs := rl.observeCLI(st, sessions, w.a.now)
 		restarted, sup = slices.DeleteFunc(slices.Clone(evs), func(e state.Event) bool { return e.Verb != rl.name+".restart" }), rl.get(st).Holder
 		return evs, nil
 	})

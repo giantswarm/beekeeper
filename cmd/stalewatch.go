@@ -179,8 +179,8 @@ func (w *watcher) checkInstalledGate(ctx context.Context, file string) {
 		gctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 		args := budgetGateArgs
-		if w.cfgPath != "" {
-			args = append([]string{"--" + configFlag, w.cfgPath}, args...)
+		if w.a.cfgPath != "" {
+			args = append([]string{"--" + configFlag, w.a.cfgPath}, args...)
 		}
 		out, runErr := proc.Command(gctx, file, args...).CombinedOutput()
 		if runErr != nil {

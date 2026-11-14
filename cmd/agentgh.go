@@ -41,11 +41,11 @@ const ghKey = "gh "
 // GH UNBROKERED line each, and its ENDED line once the agent's gh is its own
 // or it left the roster.
 func (w *watcher) unbrokered() {
-	path := w.cfg.Agents.Shell.Path
+	path := w.a.cfg.Agents.Shell.Path
 	if len(path) == 0 {
 		return
 	}
-	st, err := w.store.Peek()
+	st, err := w.a.store.Peek()
 	if err != nil {
 		return
 	}
@@ -57,7 +57,7 @@ func (w *watcher) unbrokered() {
 		key := ghKey + ag.Name
 		found[key] = true
 		w.emit(key, "GH UNBROKERED %q: its shell resolves gh to %s (read %s), not the agent's own in %s (agents.shell.path): its gh acts without the App's token",
-			ag.Name, ag.GH, clock(w.now, ag.GHAt), strings.Join(path, ", "))
+			ag.Name, ag.GH, clock(w.a.now, ag.GHAt), strings.Join(path, ", "))
 	}
 	w.clearMissing(ghKey, found)
 }

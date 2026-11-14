@@ -566,7 +566,7 @@ func (w *watcher) syncExecutions(ctx context.Context, st *state.State) *state.St
 	for _, s := range st.Starts {
 		if r := s.Execution; r != nil {
 			startsByHost[r.Selector]++
-			if !r.HostJournalMissing && (executionNeedsSync(st, r) || executionTranscriptPending(r) || w.hasUnrecoveredPublication(r)) {
+			if !r.HostJournalMissing && (executionNeedsSync(st, r) || executionTranscriptPending(r) || w.a.hasUnrecoveredPublication(r)) {
 				if !slices.Contains(selectors, r.Selector) {
 					selectors = append(selectors, r.Selector)
 				}
@@ -578,16 +578,16 @@ func (w *watcher) syncExecutions(ctx context.Context, st *state.State) *state.St
 	// A host may retain a journal after the last coordinator record goes.
 	// Inventory runs once for each used, pinned host when Starts contains no
 	// active executions on it.
-	if execution.ValidIdentity(w.cfg.Identity.Host) {
-		for selector := range w.cfg.Agents.Hosts {
+	if execution.ValidIdentity(w.a.cfg.Identity.Host) {
+		for selector := range w.a.cfg.Agents.Hosts {
 			if needsSync[selector] {
 				continue
 			}
-			h, err := w.executionHost(selector)
+			h, err := w.a.executionHost(selector)
 			if err != nil || !hostUsed(st, selector, h.Identity) {
 				continue
 			}
-			if _, ok := w.executionClient(h).(execution.InventoryReader); !ok {
+			if _, ok := w.a.executionClient(h).(execution.InventoryReader); !ok {
 				continue
 			}
 			w.mu.Lock()
@@ -605,7 +605,7 @@ func (w *watcher) syncExecutions(ctx context.Context, st *state.State) *state.St
 		return st
 	}
 	slices.Sort(selectors)
-	now := w.now
+	now := w.a.now
 	if now.IsZero() {
 		now = time.Now()
 	}
@@ -636,7 +636,7 @@ func (w *watcher) syncExecutions(ctx context.Context, st *state.State) *state.St
 		w.last[key] = now
 		w.mu.Unlock()
 		ran = true
-		if err := w.syncExecutionHost(ctx, selector); err != nil {
+		if err := w.a.syncExecutionHost(ctx, selector); err != nil {
 			w.mu.Lock()
 			w.executionSyncFailures[selector]++
 			w.mu.Unlock()
@@ -652,7 +652,7 @@ func (w *watcher) syncExecutions(ctx context.Context, st *state.State) *state.St
 	if !ran {
 		return st
 	}
-	updated, err := w.store.Read()
+	updated, err := w.a.store.Read()
 	if err != nil {
 		return st
 	}

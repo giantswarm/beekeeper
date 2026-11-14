@@ -154,7 +154,7 @@ func TestSampleProcsSaysAStormAndAStackOnce(t *testing.T) {
 	cfg.Watch.Repeat.Duration = 10 * time.Minute
 	cfg.Watch.ForkRateMax, cfg.Watch.StackMax = 50, 3
 	var forks uint64 = 1000
-	w := &watcher{app: &app{out: &out, cfg: cfg}, last: map[string]time.Time{}, self: outsideTable}
+	w := &watcher{a: &app{out: &out, cfg: cfg}, last: map[string]time.Time{}, self: outsideTable}
 	w.readForks = func() (uint64, error) { return forks, nil }
 
 	now := time.Now()
@@ -213,7 +213,7 @@ func TestSampleProcsSaysLoadOnce(t *testing.T) {
 	cfg.Watch.Repeat.Duration = 10 * time.Minute
 	cfg.Watch.ForkRateMax, cfg.Watch.StackMax, cfg.Watch.ToolProcsMax = -1, -1, 1000
 	cfg.Watch.Tools = []string{"tsh", "helm"}
-	w := &watcher{app: &app{out: &out, cfg: cfg}, last: map[string]time.Time{}, self: outsideTable}
+	w := &watcher{a: &app{out: &out, cfg: cfg}, last: map[string]time.Time{}, self: outsideTable}
 	w.readForks = func() (uint64, error) { return 0, nil }
 	owners := map[int]string{1: agentOne, 2: agentFour}
 	w.owners.Store(&owners)
@@ -264,7 +264,7 @@ func TestSampleProcsNamesTheWatchsOwnReads(t *testing.T) {
 	cfg.Watch.Repeat.Duration = 10 * time.Minute
 	cfg.Watch.ForkRateMax = 50
 	var forks uint64 = 1000
-	w := &watcher{app: &app{out: &out, cfg: cfg}, last: map[string]time.Time{}, self: 11}
+	w := &watcher{a: &app{out: &out, cfg: cfg}, last: map[string]time.Time{}, self: 11}
 	w.readForks = func() (uint64, error) { return forks, nil }
 	w.owners.Store(&map[int]string{10: "Run 7"})
 	prev := named(table(

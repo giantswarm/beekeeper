@@ -147,7 +147,7 @@ func TestStateHoldersWatchSaysEligibleSpaceOnce(t *testing.T) {
 	t.Cleanup(func() { liveHolders = saved })
 	calls := 0
 	liveHolders = func(*app) (holderMachine, error) { calls++; return m, nil }
-	w := &watcher{app: a, holdersOn: true, last: map[string]time.Time{}}
+	w := &watcher{a: a, holdersOn: true, last: map[string]time.Time{}}
 	w.stateHolders(a.now)
 	w.bg.Wait()
 	if calls != 1 || !w.isActive("stateholders") {
@@ -159,7 +159,7 @@ func TestStateHoldersWatchSaysEligibleSpaceOnce(t *testing.T) {
 	}
 	// Another watch within the interval says the shared listing, walking
 	// nothing.
-	other := &watcher{app: a, holdersOn: true, last: map[string]time.Time{}}
+	other := &watcher{a: a, holdersOn: true, last: map[string]time.Time{}}
 	other.stateHolders(a.now.Add(time.Minute))
 	other.bg.Wait()
 	if calls != 1 || !other.isActive("stateholders") {
@@ -183,7 +183,7 @@ func TestStateHoldersWatchSaysEligibleSpaceOnce(t *testing.T) {
 	if _, err := a.store.ReadFile(stateHoldersFile, &mark); err != nil || !mark.On || !strings.HasPrefix(mark.Line, "STATE HOLDERS unknown:") || !strings.Contains(mark.Line, "permission denied") {
 		t.Fatalf("unknown mark=%+v err=%v", mark, err)
 	}
-	third := &watcher{app: a, holdersOn: true, last: map[string]time.Time{}}
+	third := &watcher{a: a, holdersOn: true, last: map[string]time.Time{}}
 	third.stateHolders(a.now.Add(14*time.Hour + time.Minute))
 	third.bg.Wait()
 	if calls != 3 || !third.isActive("stateholders") {

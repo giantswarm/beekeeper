@@ -33,7 +33,7 @@ func TestTopCPUGroupsTheSpanByCommand(t *testing.T) {
 		&proc.Process{PID: 5, Comm: "bash", StartTicks: 9, CPU: 3 * time.Second},
 	)
 	got := topCPU(prev, cur, 30*time.Second, 2)
-	if len(got) != 2 || got[0] != (cpuUse{"go", 2, 2}) || got[1] != (cpuUse{"cc1", 0.5, 1}) {
+	if len(got) != 2 || got[0] != (cpuUse{Comm: "go", Cores: 2, Processes: 2}) || got[1] != (cpuUse{Comm: "cc1", Cores: 0.5, Processes: 1}) {
 		t.Fatalf("topCPU = %+v", got)
 	}
 	line := topCPULine(got, 30*time.Second)
@@ -74,7 +74,7 @@ func TestWatchSaysCPUPressureOnTheSecondSample(t *testing.T) {
 	if !strings.Contains(out.String(), "CPU PRESSURE: some avg10") {
 		t.Fatalf("no CPU PRESSURE with its consumers on the second sample:\n%s", out)
 	}
-	w.cfg.Watch.CPUPSIMax = 1000
+	w.a.cfg.Watch.CPUPSIMax = 1000
 	w.sampleCPU(now.Add(2*time.Second), nil)
 	if !strings.Contains(out.String(), "ENDED CPU PRESSURE") {
 		t.Errorf("no ENDED CPU PRESSURE:\n%s", out)
