@@ -184,10 +184,14 @@ func progressWorker(st *state.State, ag state.Agent, ref string, pulls []string)
 	if strings.EqualFold(loop.LoopServes(st, ag), ref) || strings.EqualFold(loop.LoopTaskServes(ag, ""), ref) {
 		return true
 	}
-	if ag.Park != nil && slices.Contains(pulls, loop.LoopParkOn(ag.Park)) {
+	// namedRefs lower-cases; pull refs keep the case GitHub gives the repository.
+	inPulls := func(r string) bool {
+		return slices.ContainsFunc(pulls, func(p string) bool { return strings.EqualFold(p, r) })
+	}
+	if ag.Park != nil && inPulls(loop.LoopParkOn(ag.Park)) {
 		return true
 	}
-	return slices.ContainsFunc(namedRefs(ag.Task, ""), func(r string) bool { return slices.Contains(pulls, r) })
+	return slices.ContainsFunc(namedRefs(ag.Task, ""), inPulls)
 }
 
 // Keep only tool metadata, never transcript text or tool arguments, in the
@@ -392,6 +396,11 @@ func (a *app) recoverBoardProgress(ctx context.Context, l *loop.Loop, st *state.
 		return true, "started fixer for stalled red head", l.Record(act, "started stalled-head fixer")
 	}
 	if len(workers) == 0 && len(pulls) == 0 {
+		// Normal intake never offers an item that board next names an owner
+		// for; the pace exception must not start a second worker there either.
+		if owner := a.progressOwner(st, sessions, c); owner != "" {
+			return false, "served by " + owner + "; no automatic start", nil
+		}
 		if other, err := a.OtherDeskClaim(ctx, c.Ref); err != nil || other != "" {
 			return false, "item claim is unread or held by another desk", err
 		}
@@ -403,6 +412,22 @@ func (a *app) recoverBoardProgress(ctx context.Context, l *loop.Loop, st *state.
 		return true, "started stalled item (pace exception for this item only)", l.Record(act, what)
 	}
 	return false, "no known automatic repair", nil
+}
+
+// progressOwner is who board next names as the owner of c (boardOwners,
+// titleOwners): a live session's serve record, a busy or parked agent, a task
+// naming the item anywhere, or a running session that works on it. The
+// progress signal follows only the workers progressWorker finds, so one of
+// these can be busy on an item whose signal stands still.
+func (a *app) progressOwner(st *state.State, sessions []*claude.Session, c board.Candidate) string {
+	alive := func(p state.Party) bool {
+		return slices.ContainsFunc(sessions, func(s *claude.Session) bool { return s.Party().Is(p) })
+	}
+	sc := pickScope{me: loop.LoopParty, alive: alive, listed: a.now, owner: a.cfg.Board.Owner,
+		gone:  func(ag state.Agent) bool { return agyQuotaError(a.cfg, ag) != nil },
+		works: servingWork(st, sessions, a.sessionWorks(sessions), a.now.Add(-a.cfg.Overlaps.ActiveWithin.Duration))}
+	owners := coverTitled(boardOwners(st, sc), titleOwners(st, sc), []board.Candidate{c})
+	return owners[strings.ToLower(c.Ref)]
 }
 
 func (a *app) validateProgressItem() error {
@@ -420,7 +445,8 @@ func (a *app) validateProgressItem() error {
 }
 
 func (a *app) validateProgressTask(brief string) error {
-	if a.progressItem != "" && !slices.Contains(namedRefs(brief, ""), a.progressItem) {
+	// namedRefs lower-cases; a board ref keeps the case GitHub gives the repository.
+	if a.progressItem != "" && !slices.ContainsFunc(namedRefs(brief, ""), func(r string) bool { return strings.EqualFold(r, a.progressItem) }) {
 		return refused("progress pace exception applies only to the named item's task")
 	}
 	return nil

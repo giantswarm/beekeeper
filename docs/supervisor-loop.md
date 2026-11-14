@@ -14,8 +14,10 @@ refreshed every minute; unread board, PR or process observations never authorize
 After 30 minutes without a changed signal, the next pass uses the existing recovery paths: a
 fresh continuation for a dead worker, a fixer for a red head without a live fixer, or the missing
 assignment of a supervisor-started SSH reviewer at its pinned head. An unstaffed item can start
-despite subscription pace. That pace exception applies only to commands for that item, expires
-with its observation, and never changes the provider's global settings. Weekly and session caps,
+despite subscription pace, unless `board next` names an owner for it (a session's serve record, a
+task naming it or a running session working on it): such an item is reported, never doubled. The
+pace exception applies only to commands for that item, expires with its observation, and never
+changes the provider's global settings. Weekly and session caps,
 machine limits, WIP admission, repository holds, explicit waits and the person's stop still apply.
 A live but quiet process is reported rather than replaced. Only unresolved causes reach the guide;
 successful actions are recorded as `supervisor.board-progress`. Up Next work keeps normal admission.
