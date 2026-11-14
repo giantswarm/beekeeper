@@ -62,6 +62,13 @@ func (l *Loop) MergePull(ctx context.Context, _ *state.State, act superloop.Acti
 	// the go, entering the gate or starting failure backoff. Every wait
 	// names what it waits on: the stall alarm reads it (checkFlowWaits).
 	waitKey := act.Key + " hold"
+	// supervisor.ownership.never stops goes as it stops starts and reviews:
+	// whatever decision reaches the executor, the desk merges nothing in a
+	// repository it does no work on, nor outside its organisations.
+	if why := l.unreadRepo(act.Ref); why != "" {
+		l.SayOnce(waitKey, "SUPERVISOR WAIT %s: %s", act.URL, why)
+		return "", MergeHeld(WaitUnread, "%s", why)
+	}
 	if h, held := merge.BlockingFor(st, a.TimeNow(), LoopParty.Name, ref.Repo, ref.N, a.Cfg().LaneOf(ref.Repo)); held {
 		l.SayOnce(waitKey, "SUPERVISOR WAIT %s on hold:%s", act.URL, h.Target)
 		return "", MergeHeld(WaitHold, "it is held by hold:%s (beekeeper hold lists it); the merge starts once the hold is lifted", h.Target)

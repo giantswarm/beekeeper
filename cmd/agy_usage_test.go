@@ -12,9 +12,11 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/agy"
 	"github.com/giantswarm/beekeeper/internal/capacity"
+	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/loop"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -328,6 +330,10 @@ func (f quotaFixture) loop(t *testing.T, out *bytes.Buffer, run func(args []stri
 	origRun := loop.BeekeeperRun
 	loop.BeekeeperRun = func(_ context.Context, args ...string) (string, int, error) { return run(slices.Clone(args)) }
 	t.Cleanup(func() { loop.BeekeeperRun = origRun })
+	origSessions, origInTurn := loopSessions, loopInTurn
+	loopSessions = func(*app) ([]*claude.Session, *proc.Table, error) { return nil, &proc.Table{}, nil }
+	loopInTurn = func(*app, state.Party) bool { return false }
+	t.Cleanup(func() { loopSessions, loopInTurn = origSessions, origInTurn })
 	origRefs := refStates
 	refStates = func(_ context.Context, refs []github.PR) (map[github.PR]github.RefState, error) {
 		states := map[github.PR]github.RefState{}
@@ -430,6 +436,9 @@ func TestAgyQuotaRequeueKeepsTaskUntilStarted(t *testing.T) {
 			})
 			l.StartsHeld = tc.held
 			if err := l.RecoverQuota(context.Background(), st); err != nil {
+				t.Fatal(err)
+			}
+			if err := loopRoster(l, context.Background(), nil); err != nil {
 				t.Fatal(err)
 			}
 			if tc.held != (len(runCalls) == 0) {

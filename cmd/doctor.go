@@ -179,6 +179,17 @@ func keepReporting(chores []chore, messages []state.ReportMessage, receipts map[
 	return chores
 }
 
+// loopKeepsQuotaGone reports whether the supervisor loop still owns a
+// quota-stopped agy task holder: RecoverQuota keeps it on the roster while its
+// replacement waits (room, starts held, a repository hold) until staleAfter.
+func (a *app) loopKeepsQuotaGone(st *state.State, c chore, now time.Time) bool {
+	if c.kind != choreRemove || !c.gone || agyQuotaError(a.cfg, c.agent) == nil {
+		return false
+	}
+	last := agentActivity(a.cfg, st, c.agent)
+	return a.cfg.Agents.StaleAfter.Duration <= 0 || last.IsZero() || now.Sub(last) < a.cfg.Agents.StaleAfter.Duration
+}
+
 // faultFinding is what the doctor found of one known fault: whether its
 // probe passed, whether it ran the remedy and whether that fixed it.
 type faultFinding struct {
@@ -373,11 +384,7 @@ func (a *app) doctor(ctx context.Context, r doctorRun) (doctorReport, error) {
 	chores := planChores(st, sessions, record, busy, a.cfg.Agents.StaleAfter.Duration, a.now, a.cfg)
 	if r.loopOwned {
 		chores = slices.DeleteFunc(chores, func(c chore) bool {
-			if c.kind != choreRemove || agyQuotaError(a.cfg, c.agent) == nil {
-				return false
-			}
-			last := agentActivity(a.cfg, st, c.agent)
-			return a.cfg.Agents.StaleAfter.Duration <= 0 || last.IsZero() || a.now.Sub(last) < a.cfg.Agents.StaleAfter.Duration
+			return a.loopKeepsQuotaGone(st, c, a.now)
 		})
 	}
 	messages, inboxErr := state.PendingReports(a.store)

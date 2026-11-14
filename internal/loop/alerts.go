@@ -3,6 +3,7 @@ package loop
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -25,6 +26,9 @@ const LoopAlertVerb = "supervisor." + LoopAlertKind
 type alertReplacement struct {
 	Key, Name, Brief string
 	Original         state.Party
+	// Ref is the item the replaced worker served, "" for none or an intent
+	// an older loop wrote: a hold on its repository holds the replacement.
+	Ref string `json:",omitempty"`
 }
 
 func (l *Loop) watchAlerts(ctx context.Context) error {
@@ -243,6 +247,14 @@ func (l *Loop) replaceAlertWorker(ctx context.Context, r alertReplacement, evs [
 		})
 	}
 	if !started {
+		// A repository hold stops the replacement as it stops every start
+		// there. The intent and the old roster entry wait for its lift.
+		if err := l.RepositoryStart(r.Ref); err != nil {
+			if errors.Is(err, ErrLoopLater) {
+				return nil
+			}
+			return err
+		}
 		st, err := l.Host.Store().Read()
 		if err != nil {
 			return err
@@ -281,21 +293,27 @@ func (l *Loop) wakeAlertWorker(ctx context.Context, st *state.State, ag state.Ag
 		return l.SettleAlertWake(act, ag)
 	}
 	if !Cmd.LoopResumable(a, st, ag) {
+		// A replacement is a fresh start: none for a repository the desk
+		// does no work on (supervisor.ownership.never, outside its orgs).
+		item := AgentRef(st, ag.Name)
+		if why := l.agentUnreadRepo(st, ag, item); why != "" {
+			return fmt.Errorf("no replacement starts: %s", why)
+		}
 		// Write the complete replacement brief before retiring the old
 		// roster entry: a restart can finish staffing exactly this task.
 		task := ag.Task
-		if ref := AgentRef(st, ag.Name); ref != "" {
-			task += "\nWork the original item " + ref + "; read its acceptance criteria and finish it in full."
+		if item != "" {
+			task += "\nWork the original item " + item + "; read its acceptance criteria and finish it in full."
 		}
 		data := BriefData{Task: task + "\n\n" + act.Message, Worker: ag.Name}
-		if ref, ok := Cmd.ParseRef(AgentRef(st, ag.Name)); ok {
+		if ref, ok := Cmd.ParseRef(item); ok {
 			data.Repo, data.Number, data.URL = ref.Repo, ref.N, fmt.Sprintf("https://github.com/%s/issues/%d", ref.Repo, ref.N)
 		}
 		brief, err := l.Brief(a.Cfg().Supervisor.WorkerBrief, "{{.Task}}", key, data)
 		if err != nil {
 			return err
 		}
-		r := alertReplacement{Key: key, Name: ag.Name, Brief: brief, Original: ag.Party}
+		r := alertReplacement{Key: key, Name: ag.Name, Brief: brief, Original: ag.Party, Ref: item}
 		raw, err := json.Marshal(r)
 		if err != nil {
 			return err

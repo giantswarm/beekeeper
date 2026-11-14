@@ -20,7 +20,9 @@ func (a *app) holdCmd() *cobra.Command {
 		Short: "Stop merges into a repository or a lane, or all GitHub work, until lifted",
 		Long: `A hold stops work on a target until it is lifted or its time passes:
 "owner/repo" stops merges and new supervisor workers, reviewers and fixers
-in that repository; board next skips its items until the hold lifts.
+in that repository; board next skips its items until the hold lifts, and
+the loop's replacement of a gone, quota-stopped or alert-woken worker
+there waits for the lift with its task kept.
 "lane:<name>" (--lane) stops the merges of one lane (a proving
 window, such as a model load on an installation's GPU pool, stops the lane
 whose components it exercises and not the others), "merges" every merge,

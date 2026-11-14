@@ -1,0 +1,133 @@
+name: quota-replacement-waits-for-the-repository-hold
+description: >
+  A hold on a repository stops every start the loop makes there, its
+  recovery restarts too. The refill starts the item of example/app on agy,
+  and a woken second turn ends on the account's quota after the start
+  returned. The repository is then held: the next pass frees the slot but
+  starts no replacement, keeps the task on the roster and says which hold it
+  waits for. Once the hold is lifted, the next pass restarts the task on
+  Claude. Live, the loop kept starting workers in a repository held so that
+  nobody works there.
+issue: https://github.com/giantswarm/beekeeper/issues/3364
+flow: regression
+tags: [regression, refill, hold, agy, quota]
+timeout: 120s
+
+given:
+  desk:
+    config:
+      # The budget probe reads a repository the scenario's GitHub has.
+      github: {probeRepo: example/app}
+      # agy takes no session effort: a desk with an agy choice sets no
+      # supervisor.effort. The scenario's desk has no agy hooks installed;
+      # its guard is off.
+      supervisor: {effort: ""}
+      hooks: {guards: false}
+      capacity:
+        ceiling: 2
+        providers:
+          claude: {ceiling: 2}
+          agy: {ceiling: 2}
+        choices:
+          - {harness: claude, model: sonnet}
+          - {harness: agy, model: gemini-3-pro}
+  github:
+    repositories:
+      - name: example/app
+        issues:
+          - {number: 1, title: An item of the repository to be held, board: Ready}
+  harness:
+    # Gemini's week is far behind its pace, Claude's is not: capacity picks
+    # agy first. Once agy's quota is spent, the replacement runs on Claude.
+    usage:
+      claude: {session: 10, week: 40}
+      agy: {session: 10, week: 5}
+    workers:
+      - name: app 1
+        harness: agy
+        turns:
+          # The first turn finishes cleanly so agents start accepts the agy
+          # session instead of falling back inside the start gate; the second
+          # turn spends the quota and leaves recovery to the loop.
+          - outcome: finish
+          - outcome: budget
+      - name: app 1
+        harness: claude
+        turns:
+          - outcome: hang
+  calls:
+    # What the watch reads beside GitHub: no GitHub App login beside the gh
+    # login, and empty journals of the kernel and of systemd-oomd.
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    - program: journalctl
+      args: ['-k']
+      respond: {stdout: ""}
+    - program: journalctl
+      args: ['-u', systemd-oomd]
+      respond: {stdout: ""}
+
+when:
+  # The watch's reading admits starts: the budget and the machine are fine.
+  - name: watch
+    run: {args: [watch, --once]}
+    expect:
+      - exit: 0
+  - name: fill
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - events: {contains: [agents.start]}
+  - wait_for:
+      timeout: 30s
+      expect:
+        - worker: {name: app 1, harness: agy, turns: 1, outcome: finish, running: true}
+  - name: spend
+    run: {args: [--as, scenario, agents, wake, app 1, continue]}
+    expect:
+      - exit: 0
+  # agy-run writes the quota marker before it ends the CLI: once no agy CLI
+  # of the worker runs, the loop reads the quota.
+  - wait_for:
+      timeout: 30s
+      expect:
+        - worker: {name: app 1, harness: agy, turns: 2, outcome: budget, running: false}
+  - name: hold
+    run: {args: [--as, scenario, hold, set, example/app, --reason, the repository is being migrated]}
+    expect:
+      - exit: 0
+  - name: held
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - output:
+          matches: 'SUPERVISOR QUOTA app 1: .*slot freed, held: repository example/app: the repository is being migrated: \S+ waits for its re-queue'
+      - output:
+          contains: ['SUPERVISOR START WAITS']
+          not_contains: [re-queuing]
+  - name: kept
+    run: {args: [agents, --json]}
+    expect:
+      - exit: 0
+      - json_path: {path: ., len: 1}
+      - json_path: {path: '[0].name', equals: app 1}
+      - worker: {name: app 1, harness: claude, turns: 0}
+  - name: lift
+    run: {args: [--as, scenario, hold, lift, example/app]}
+    expect:
+      - exit: 0
+  - name: requeue
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - output: {contains: ['SUPERVISOR QUOTA app 1:', re-queuing]}
+  - wait_for:
+      timeout: 30s
+      expect:
+        - worker: {name: app 1, harness: claude, turns: 1}
+
+then:
+  - worker: {name: app 1, harness: agy, turns: 2, outcome: budget}
+  - worker: {name: app 1, harness: claude, turns: 1}
+  - events: {contains: [hold.set, supervisor.quota, agents.start]}

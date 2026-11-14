@@ -70,7 +70,9 @@ func (l *Loop) RecoverQuota(ctx context.Context, st *state.State) error {
 				return err
 			}
 			if errors.Is(err, ErrLoopLater) {
-				l.SayOnce("quota later "+startID, "SUPERVISOR QUOTA %s: %s; slot freed, no room for its replacement yet: %s waits for its re-queue", ag.Name, qerr.Error(), target)
+				// A repository hold names itself; any other wait is room.
+				why := cmp.Or(laterCause(err), "no room for its replacement yet")
+				l.SayOnce("quota later "+startID+" "+why, "SUPERVISOR QUOTA %s: %s; slot freed, %s: %s waits for its re-queue", ag.Name, qerr.Error(), why, target)
 				continue
 			}
 			l.SayOnce("quota failed "+startID, "SUPERVISOR QUOTA FAILED %s: %s; %s stays on the roster: %v", ag.Name, qerr.Error(), target, err)
@@ -196,6 +198,11 @@ func (l *Loop) restartQuota(ctx context.Context, st *state.State, ag state.Agent
 	}
 	if l.agentUnreadRepo(st, ag, ref) != "" {
 		return ErrLoopLater
+	}
+	// A repository hold stops the replacement as it stops every start
+	// there: the entry and its quota marker wait for the hold's lift.
+	if err := l.RepositoryStart(ref); err != nil {
+		return err
 	}
 	if (review != nil || superloop.IsPull(ref) && ag.Park != nil && ag.Park.RefKind == github.RefPullRequest || strings.Contains(strings.ToLower(ref), "/pull/")) && !l.liveOpen(ctx, ref) {
 		return ErrLoopLater
@@ -350,6 +357,14 @@ func (l *Loop) RestartPark(ctx context.Context, ag state.Agent, ref string) erro
 	pullPark := ag.Park != nil && ag.Park.RefKind == github.RefPullRequest
 	if pullPark {
 		ref = ag.Park.On
+	}
+	// A repository hold stops a fresh start there. The park stays as it is,
+	// so the pass after the hold's lift restarts it and no task is lost.
+	if err := l.RepositoryStart(ref); err != nil {
+		if errors.Is(err, ErrLoopLater) {
+			return nil
+		}
+		return err
 	}
 	r, ok := Cmd.ParseRef(ref)
 	var startErr error
