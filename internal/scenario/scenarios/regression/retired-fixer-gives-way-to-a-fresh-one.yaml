@@ -3,7 +3,8 @@ description: >
   A worker started on an SSH execution host publishes its pull request and
   parks on it; the loop ends the execution for the desk review and keeps
   its review park. A red check gets a fresh fixer under the worker's name,
-  whose execution crashes and is retired: the entry stays on the roster, and
+  who accepts the task and inherits the review record before crashing on
+  its next turn. Its execution is retired: the entry stays on the roster, and
   no message reaches its execution any more. When the next check turns red,
   the loop gives that entry's work to a fresh fixer on the pull request's
   branch instead of waking the retired one. Live, agents wake refused the
@@ -47,7 +48,9 @@ given:
               - write: {path: .beekeeper-scratch/body.md, content: "Closes https://github.com/example/app/issues/1\n"}
               - beekeeper: [agents, publish, --title, "feat: the worker's change", --body-file, '${dir}/.beekeeper-scratch/body.md']
               - beekeeper: [agents, park, --on, 'example/app#2', --post-merge, '', desk review]
-          # The fixer of the first red check crashes without a word.
+          # Let startup finish transferring the review record before the
+          # fixer crashes. A crash during startup can skip that handoff.
+          - reply: accepting the red check
           - outcome: crash
           # The fixer of the next red check.
           - reply: fixing the red check
@@ -104,7 +107,7 @@ when:
       - exit: 0
       - events: {contains: [agents.park, agents.remove]}
   # A red check: the worker is off the roster, so a fresh fixer takes the
-  # name: the pass reserves its execution on the host, which crashes.
+  # name: the pass starts its execution and transfers the review record.
   - advance: 2s
   - name: build-red
     github: {check: {repo: example/app, pull: 2, name: build, state: red}}
@@ -116,7 +119,22 @@ when:
   - wait_for:
       timeout: 30s
       expect:
-        - worker: {name: app 1, host: builder, turns: 2, outcome: crash}
+        - worker: {name: app 1, host: builder, turns: 2, outcome: finish}
+  - name: inherited-review
+    run: {args: [log, --verb, agents.continuation, --json]}
+    expect:
+      - exit: 0
+      - output: {contains: ["takes its task after the desk review of example/app#2"]}
+  # The fixer has accepted the task but has not reported or parked its
+  # round. Its next turn crashes with the inherited review record intact.
+  - name: crash-fixer
+    run: {args: [--as, supervisor loop, agents, wake, app 1, "Continue fixing https://github.com/example/app/pull/2"]}
+    expect:
+      - exit: 0
+  - wait_for:
+      timeout: 30s
+      expect:
+        - worker: {name: app 1, host: builder, turns: 3, outcome: crash, running: false}
   # The watch sees the execution ended and retires it; its entry stays on
   # the roster with its task.
   - advance: 2s
@@ -139,7 +157,7 @@ when:
   - wait_for:
       timeout: 30s
       expect:
-        - worker: {name: app 1, host: builder, turns: 3, outcome: finish}
+        - worker: {name: app 1, host: builder, turns: 4, outcome: finish}
   - name: removed
     run: {args: [log, --verb, agents.remove, --json]}
     expect:
@@ -147,6 +165,6 @@ when:
       - output: {contains: ["a fresh fixer takes over https://github.com/example/app/pull/2"]}
 
 then:
-  - worker: {name: app 1, host: builder, harness: claude, turns: 3, outcome: finish}
+  - worker: {name: app 1, host: builder, harness: claude, turns: 4, outcome: finish}
   # The fixes go to the task's one pull request.
   - github: {issue: {repo: example/app, number: 1, open_pulls: 1}}

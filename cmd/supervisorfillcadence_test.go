@@ -69,8 +69,9 @@ func TestRefillCadenceWhileObservationIsBlocked(t *testing.T) {
 	}
 }
 
-// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
-// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
+// Each held tick names its admission reason, even after the watch's first
+// diagnostic. Once admission recovers, the tick fills all free slots and
+// must not also report zero starts.
 func TestRefillCadenceHonoursHoldAndRecovers(t *testing.T) {
 	r, busy := fillRig(t)
 	l, err := r.a.newSupervisorLoop(false)
@@ -79,18 +80,30 @@ func TestRefillCadenceHonoursHoldAndRecovers(t *testing.T) {
 	}
 	w := r.a.newWatcher(false, false)
 	w.PublishBudget(true)
-	if err := l.RefillTick(t.Context()); err != nil {
-		t.Fatal(err)
+	for range 2 {
+		if err := l.RefillTick(t.Context()); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if *busy != 0 {
 		t.Fatal("started through a hold")
 	}
+	if got := strings.Count(r.out.String(), refillZeroLine+"watch budget held=true stale=false"); got != 2 {
+		t.Fatalf("want one budget explanation per tick, got %d: %s", got, r.out)
+	}
+	if got := strings.Count(r.out.String(), "SUPERVISOR STARTS HELD:"); got != 1 {
+		t.Fatalf("watch transition diagnostic repeated %d times: %s", got, r.out)
+	}
+	r.out.Reset()
 	w.PublishBudget(false)
 	if err := l.RefillTick(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	if *busy != 3 {
 		t.Fatalf("did not recover: %d workers", *busy)
+	}
+	if strings.Contains(r.out.String(), refillZeroLine) {
+		t.Fatalf("reported zero after starting workers: %s", r.out)
 	}
 }
 

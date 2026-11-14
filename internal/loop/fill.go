@@ -19,6 +19,7 @@ const (
 	LoopFillKey             = "next capacity "
 	LoopFillStream          = "stream:workers"
 	RefillZeroFormat        = "SUPERVISOR REFILL started 0: %s\n"
+	refillStoppingReason    = "loop stopping or waiting to re-exec"
 	deliveryReservationsKey = "delivery reservations "
 	// OpenPullRefusal is how agents start refuses an item whose pull
 	// request is open: its delivery is in flight.
@@ -440,7 +441,7 @@ func (l *Loop) Fill(ctx context.Context, st *state.State, claims map[string]Loop
 		return l.PreviewFill(ctx)
 	}
 	if l.PauseForReexec() || ctx.Err() != nil {
-		why = "loop stopping or waiting to re-exec"
+		why = refillStoppingReason
 		return nil
 	}
 	attempts := map[string]int{}
@@ -452,7 +453,7 @@ func (l *Loop) Fill(ctx context.Context, st *state.State, claims map[string]Loop
 	}
 	l.FillRan()
 	defer l.SetFillPhase("")
-	why = "loop stopping or waiting to re-exec"
+	why = refillStoppingReason
 	startedHere := map[string]bool{}
 	attemptedHere := map[string]bool{}
 	for key, c := range claims {

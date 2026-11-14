@@ -723,6 +723,8 @@ A final report, a stop, a failed start and a crash all enter it; the watch
 advances it, each execution on its own backoff, and records it under the
 execution's `retirement`. A parked worker, an open desk review or a finished
 round of an unfinished task does not enter it: the worktree and thread stay.
+A fixer inherits the review record for continuity, but that record alone does not keep its
+execution after an unreported crash. The crashed fixer retires so a later repair can replace it.
 
 Only the newest publication transfer can hold retirement; earlier pushes are
 superseded. A successful publication marks its transfer recovered. When host

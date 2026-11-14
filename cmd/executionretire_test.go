@@ -74,8 +74,8 @@ func tick(t *testing.T, a *app, w *watch.Watcher) {
 	w.RetireEndedExecutions(context.Background(), st)
 }
 
-// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
-// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
+// An inherited review record keeps a completed round, but must not prevent
+// an unreported fixer crash from retiring its execution.
 func TestExecutionRetirementTriggers(t *testing.T) {
 	park := &state.Park{On: retireFixturePark}
 	for _, tc := range []struct {
@@ -85,6 +85,11 @@ func TestExecutionRetirementTriggers(t *testing.T) {
 	}{
 		{name: "running worker", change: func(_ *state.State, r *state.ExecutionRecord) { r.Observation.ProcessState = execution.Running }},
 		{name: "crash", want: execution.RetireTriggerCrash},
+		{name: "crashed fixer inherited a review record", want: execution.RetireTriggerCrash, change: func(st *state.State, r *state.ExecutionRecord) {
+			ref := r.Handle.Ref
+			r.Observation.ProcessState = execution.Failed
+			st.ReviewParks = []state.ReviewPark{{On: retireFixturePark, Execution: &ref}}
+		}},
 		{name: "never accepted its task", want: execution.RetireTriggerFailedStart, change: func(_ *state.State, r *state.ExecutionRecord) { r.Observation.Ready = false }},
 		{name: "released reservation", want: execution.RetireTriggerFailedStart, change: func(st *state.State, r *state.ExecutionRecord) {
 			st.Agents = nil

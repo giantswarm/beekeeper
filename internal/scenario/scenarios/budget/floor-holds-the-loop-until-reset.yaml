@@ -8,8 +8,9 @@ description: >
   passes later nothing has changed and the loop has spent nothing but its
   rate-limit readings. Once the window has reset, a fresh reading lifts the
   hold on its own: the gate opens, the loop reads the board and starts the
-  worker of the Ready item.
-issue: https://github.com/giantswarm/beekeeper/issues/3794
+  worker of the Ready item. A held refill names the watch's budget hold;
+  it cannot return silently before reaching the worker start path.
+issue: https://github.com/giantswarm/beekeeper/issues/3550
 flow: budget
 tags: [budget, github, loop, floor]
 timeout: 120s
@@ -54,6 +55,7 @@ when:
       timeout: 30s
       expect:
         - log: {name: loop, contains: ["GITHUB GRAPHQL BUDGET", "SUPERVISOR GITHUB HELD: GraphQL budget unknown or under github.floor"]}
+        - log: {name: loop, contains: ["SUPERVISOR REFILL started 0: watch budget held=true"]}
   - name: gate-held
     run: {args: [budget, --gate, --json]}
     expect:

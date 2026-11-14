@@ -8,8 +8,9 @@ description: >
   reading releases it and the loop starts the item's worker. The load is
   the loop's own reading (BEEKEEPER_LOADAVG), so the scenario changes it by
   running the loop again under the new load: that loop starts out held by
-  the condition the first one recorded.
-issue: https://github.com/giantswarm/beekeeper/issues/3794
+  the condition the first one recorded. The refill's zero-start summary
+  names the active machine condition even before it can read capacity.
+issue: https://github.com/giantswarm/beekeeper/issues/3550
 flow: guards
 tags: [guards, load, loop, capacity]
 timeout: 120s
@@ -66,7 +67,8 @@ when:
     expect:
       - exit: 3
       - stderr: {contains: ["1m load 50 over 8"]}
-  # Ten minutes of refill ticks under the load.
+  # Ten minutes of refill ticks under the load. The watch has published
+  # the condition before these ticks, so refills can name it.
   - name: held
     advance:
       by: 10m
@@ -76,6 +78,9 @@ when:
       - events: {not_contains: [agents.start]}
       - worker: {name: app 1, turns: 0}
       - log: {name: busy, contains: ["no start: 1m load 50 over 8"], not_contains: ["ENDED HIGH LOAD"]}
+      - log:
+          name: busy
+          matches: 'SUPERVISOR REFILL started 0: watch budget held=\w+ stale=\w+; machine conditions map\[load:HIGH LOAD\]'
       - process: {name: busy, running: true}
   - stop: busy
   # The load is back under the guard: the scenario's own 0.10. The loop

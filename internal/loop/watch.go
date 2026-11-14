@@ -52,15 +52,18 @@ func (l *Loop) WatchConditions(ctx context.Context) error {
 	if l.IndependentFill {
 		return nil // the refill stream owns admission while observations may block
 	}
-	return l.refreshStartConditions(ctx)
+	_, err := l.refreshStartConditions(ctx)
+	return err
 }
 
 // refreshStartConditions belongs to the refill stream in continuous mode and
 // the main pass in once mode. It must not refresh the observation heartbeat.
-func (l *Loop) refreshStartConditions(ctx context.Context) error {
+// Its reason lets every held refill explain why it cannot start a worker,
+// even when the watch's transition-only diagnostic has already been printed.
+func (l *Loop) refreshStartConditions(ctx context.Context) (string, error) {
 	evs, err := state.FollowSnapshot(l.Host.Store(), "supervisor-watch-conditions", "v2", watchConditionEvent)
 	if err != nil {
-		return err
+		return "", err
 	}
 	active := map[string]string{}
 	var budgetAt, machineAt time.Time
@@ -83,7 +86,7 @@ func (l *Loop) refreshStartConditions(ctx context.Context) error {
 			lastPrune = e.At
 		case WatchDiskStateVerb:
 			if err := json.Unmarshal([]byte(e.Detail), &disk); err != nil {
-				return err
+				return "", err
 			}
 			diskAt = e.At
 			if !disk.Low {
@@ -117,7 +120,7 @@ func (l *Loop) refreshStartConditions(ctx context.Context) error {
 			machineAt = e.At
 			active = map[string]string{}
 			if err := json.Unmarshal([]byte(e.Detail), &active); err != nil {
-				return err
+				return "", err
 			}
 		case "watch.clear":
 			machineAt = e.At
@@ -132,19 +135,19 @@ func (l *Loop) refreshStartConditions(ctx context.Context) error {
 	// Prefer fresh levels without replaying identical samples into events.jsonl.
 	var freshBudget bool
 	if at, err := l.Host.ReadWatchLevel("budget-state", &freshBudget); err != nil {
-		return err
+		return "", err
 	} else if at.After(budgetAt) {
 		budgetAt, budgetHeld = at, freshBudget
 	}
 	var freshMachine map[string]string
 	if at, err := l.Host.ReadWatchLevel("machine-state", &freshMachine); err != nil {
-		return err
+		return "", err
 	} else if at.After(machineAt) {
 		active = freshMachine
 	}
 	var freshDisk capacity.WatchDiskReading
 	if at, err := l.Host.ReadWatchLevel("disk-state", &freshDisk); err != nil {
-		return err
+		return "", err
 	} else if at.After(diskAt) {
 		diskAt, disk = at, freshDisk
 	}
@@ -159,7 +162,7 @@ func (l *Loop) refreshStartConditions(ctx context.Context) error {
 			claim, claimed := claims[diskKey]
 			if !claimed || lastPrune.Before(claim) {
 				if err := l.claim(act, "disk prune"); err != nil {
-					return err
+					return "", err
 				}
 				if _, err := l.Run(ctx, LoopDiskKind, "prune", "--apply"); err != nil {
 					l.SayOnce(diskKey+" prune", "SUPERVISOR DISK prune failed; starts remain held: %v", err)
@@ -167,7 +170,7 @@ func (l *Loop) refreshStartConditions(ctx context.Context) error {
 				}
 			}
 			if err := l.Record(act, outcome); err != nil {
-				return err
+				return "", err
 			}
 		} else if diskAt.After(at) && !filed[diskKey] {
 			// The prune freed nothing the desk can reclaim: what remains
@@ -197,11 +200,12 @@ func (l *Loop) refreshStartConditions(ctx context.Context) error {
 	stale := budgetAt.IsZero() || l.Host.TimeNow().Sub(budgetAt) > max(3*l.Host.Cfg().Watch.Interval.Duration, loopBudgetStale)
 	l.HoldStarts(budgetHeld || stale || len(active) > 0)
 	if l.HoldingStarts() {
-		l.SayOnce("watch-hold", "SUPERVISOR STARTS HELD: watch budget held=%t stale=%t; machine conditions %v", budgetHeld, stale, active)
-	} else {
-		l.ClearSaid("watch-hold")
+		reason := fmt.Sprintf("watch budget held=%t stale=%t; machine conditions %v", budgetHeld, stale, active)
+		l.SayOnce("watch-hold", "SUPERVISOR STARTS HELD: %s", reason)
+		return reason, nil
 	}
-	return nil
+	l.ClearSaid("watch-hold")
+	return "", nil
 }
 
 // loopBudgetStale is the least age at which the watch's budget reading

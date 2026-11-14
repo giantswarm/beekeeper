@@ -35,6 +35,9 @@ a failed binary replacement restarts its cadence. Configuration reload waits for
 Completed start claims are not replayed on later ticks. Background refills never refresh the
 observation pass's health heartbeat. Start holds and capacity, budget and delivery gates still apply. The stall alarm names the active
 refill action (for example, capacity, board next or a worker start). `--once` refills within its pass.
+Every tick that starts no worker prints `SUPERVISOR REFILL started 0` with its reason, including
+watch budget holds, stale watch readings and machine conditions that stop admission before capacity
+is read. The watch's separate hold diagnostic still prints once per hold episode.
 Legacy done-triggered next actions settle as bookkeeping. An empty or failed board
 read waits `supervisor.fillRetryEvery` (5m by default) before retrying, doubled for each further
 empty or failed read in a row up to four times the interval (5m, 10m, 20m, 20m, …) until a start or
