@@ -53,7 +53,8 @@ given:
         turns:
           - steps:
               - beekeeper: [agents, review]
-                exit: 3
+                # The SSH callback carries the refusal as a plain error.
+                exit: 1
             outcome: hang
   calls:
     - program: gh

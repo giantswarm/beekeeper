@@ -15,6 +15,9 @@ given:
     config:
       github: {probeRepo: example/app}
       supervisor: {hosts: [builder]}
+      # Observe the author's new usage before retirement lets refill run.
+      # The default five-minute cache would still admit another author.
+      capacity: {providers: {claude: {usage: {every: 50ms}}}}
       board:
         order: [{name: progress, status: [In Progress]}]
   hosts:
@@ -68,10 +71,16 @@ when:
         - github: {pull: {repo: example/app, number: 2, state: open}}
   - advance: 2s
   - run: {args: [watch, --once]}
+  - run: {args: [capacity, pick, --json]}
+    expect:
+      - exit: 0
+      - json_path: {path: pick, equals: none}
+      - output: {contains: [ahead of pace]}
   - run: {args: [supervisor, loop, --once]}
     expect:
       - exit: 0
       - events: {contains: [agents.remove]}
+      - worker: {name: app 1, host: builder, turns: 1}
   - github: {check: {repo: example/app, pull: 2, name: build, state: red}}
   - github: {check: {repo: example/app, pull: 2, name: lint, state: pending}}
   - advance: 2s
@@ -101,6 +110,7 @@ when:
         - worker: {name: 'Fix stalled example app#2', host: builder, turns: 1, outcome: finish}
 
 then:
+  - worker: {name: app 1, host: builder, turns: 1}
   - github: {pull: {repo: example/app, number: 2, state: open}}
   - github: {calls: {operation: createPullRequest, min: 1, max: 1}}
   - events: {not_contains: [execution.publish-denied, capacity.pace.off]}
