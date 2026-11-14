@@ -22,6 +22,14 @@ empty or failed read in a row up to four times the interval (5m, 10m, 20m, 20m, 
 one of the changes below, unless `capacity.ceiling` changes or an agent is done or leaves the roster
 first; a park, a resume, a wait or a new task, and the busy count and room they move, do not end it.
 
+A repository hold (`beekeeper hold set owner/repo`) stops every start the loop makes in that
+repository: the refill skips its items (`SUPERVISOR NEXT SKIPS <item>: held: repository …`), and
+a reviewer, a fixer, a continuation and the replacement of a gone, quota-stopped or alert-woken
+worker wait (`SUPERVISOR START WAITS <item>: held: …`). A waiting replacement keeps its task, park
+and quota marker and starts at the first pass after the lift. A repository in
+`supervisor.ownership.never` gets none of these starts, no review and no go: the merge executor
+merges nothing there, nor outside `github.allowedOrgs`, whatever decision reaches it.
+
 An empty or failed read answers the rest of that refill. `board next` exiting 3 with no pick
 (nothing free) is an empty read and is never retried as a failed start. No board read runs while
 the GitHub budget is under `github.floor` (REST until its reset, or the last GraphQL reading
