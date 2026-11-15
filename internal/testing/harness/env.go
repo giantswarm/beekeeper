@@ -39,13 +39,15 @@ type Env struct {
 	// dataDir is this test binary's k8senv directory (instances and CRD cache), removed at the end;
 	// cacheDir keeps the CRD caches across runs.
 	dataDir, cacheDir string
+	// mu guards every apiServer's load: picking the least loaded server compares the loads of
+	// several servers, so one lock covers the comparison and the increment.
+	mu sync.Mutex
 }
 
 type apiServer struct {
 	cfg  *rest.Config
 	kube client.Client
-	mu   sync.Mutex
-	load int
+	load int // guarded by Env.mu
 }
 
 // EnvOptions configure the shared environment.
@@ -188,21 +190,19 @@ func newestAPIServer(deps string) (string, error) {
 // its rest config, the harness's client and a release func. Namespaces are never deleted (a deleted
 // namespace stays Terminating on a bare API server); the pool goes with the test binary.
 func (e *Env) Namespace(ctx context.Context, scenario string) (string, *rest.Config, client.Client, func(), error) {
+	e.mu.Lock()
 	var api *apiServer
 	for _, a := range e.apis {
-		a.mu.Lock()
 		if api == nil || a.load < api.load {
 			api = a
 		}
-		a.mu.Unlock()
 	}
-	api.mu.Lock()
 	api.load++
-	api.mu.Unlock()
+	e.mu.Unlock()
 	release := func() {
-		api.mu.Lock()
+		e.mu.Lock()
 		api.load--
-		api.mu.Unlock()
+		e.mu.Unlock()
 	}
 	name := strings.Trim(fmt.Sprintf("%.50s", scenario), "-")
 	ns := fmt.Sprintf("%s-%d", name, e.ns.Add(1))

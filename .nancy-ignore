@@ -1,3 +1,4 @@
 CVE-2026-108859 until=2026-11-12 # mcp-go through v1.2.1, no fixed release; /mcp bodies bounded in serve: https://github.com/giantswarm/beekeeper/issues/999
 CVE-2026-84445 until=2026-11-28 # google.golang.org/grpc@v1.84.0 already contains the v1.83.2 authority check in internal/xds/server/routing.go; xds.NewGRPCServer is not used
 CVE-2021-43668 until=2026-11-27 # github.com/syndtr/goleveldb@v1.0.1-0.20220721030215-126854af5e6d since=2026-10-28
+CVE-2026-119591 until=2026-12-15 # modernc.org/sqlite@v1.62.0 (the latest) bundles SQLite 3.54.1 (SQLITE_VERSION in lib/sqlite.go) and the CVE is fixed in 3.54.0; only the test harness reaches it, through k8senv, not the binary
