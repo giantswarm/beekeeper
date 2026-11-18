@@ -5,7 +5,7 @@ go 1.26.7
 toolchain go1.27.4
 
 require (
-	charm.land/bubbletea/v2 v2.1.1
+	charm.land/bubbletea/v2 v2.1.2
 	charm.land/lipgloss/v2 v2.1.1
 	filippo.io/age v1.3.2
 	github.com/Masterminds/semver/v3 v3.5.0
