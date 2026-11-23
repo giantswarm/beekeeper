@@ -13,7 +13,7 @@ require (
 	github.com/coreos/go-oidc/v3 v3.21.0
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/giantswarm/go-selfupdate v1.7.7
-	github.com/giantswarm/mcp-toolkit v0.5.5
+	github.com/giantswarm/mcp-toolkit v0.7.0
 	github.com/giantswarm/selfupdate-cosign v0.3.30
 	github.com/go-jose/go-jose/v4 v4.1.9
 	github.com/go-logr/logr v1.4.4
@@ -101,7 +101,7 @@ require (
 	github.com/google/gnostic-models v0.7.0 // indirect
 	github.com/google/go-containerregistry v0.22.1 // indirect
 	github.com/google/go-querystring v1.2.0 // indirect
-	github.com/google/jsonschema-go v0.4.2 // indirect
+	github.com/google/jsonschema-go v0.4.3 // indirect
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.33.0 // indirect
 	github.com/hashicorp/go-cleanhttp v0.5.2 // indirect
