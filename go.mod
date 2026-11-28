@@ -5,15 +5,15 @@ go 1.27.0
 toolchain go1.27.4
 
 require (
-	charm.land/bubbletea/v2 v2.1.3
+	charm.land/bubbletea/v2 v2.2.0
 	charm.land/lipgloss/v2 v2.1.1
 	filippo.io/age v1.3.2
 	github.com/Masterminds/semver/v3 v3.5.0
-	github.com/charmbracelet/x/ansi v0.11.10
+	github.com/charmbracelet/x/ansi v0.12.0
 	github.com/coreos/go-oidc/v3 v3.21.0
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/giantswarm/go-selfupdate v1.7.7
-	github.com/giantswarm/mcp-toolkit v0.7.0
+	github.com/giantswarm/mcp-toolkit v0.11.0
 	github.com/giantswarm/selfupdate-cosign v0.3.30
 	github.com/go-jose/go-jose/v4 v4.1.9
 	github.com/go-logr/logr v1.4.4
